@@ -34,6 +34,9 @@ Design: [`docs/superpowers/specs/2026-11-03-noslop-design.md`](docs/superpowers/
 - Contain any analytics, crash reporter, tracker or third-party package. Apple frameworks only. The only servers it
   talks to are YouTube and Google (for the videos, and for your account when you sign in), plus SponsorBlock and
   DeArrow, which are asked about a short hash of a video ID, never the ID itself.
+- Store or send cookies in its requests to YouTube's and Google's APIs (browsing, stream addresses, suggestions,
+  captions, feeds, your account); thumbnails, avatars and lock-screen artwork, the video stream, downloads and
+  Google's sign-in page are not API requests, and are left to the system's default cookie handling.
 - Do live chat, post comments, upload, YouTube Music, Kids, notifications or Chromecast.
 - Show YouTube's personalised home feed: Google does not offer it to third-party apps.
 - Play age-restricted or "made for kids" videos: YouTube does not hand those out to this kind of client. The app

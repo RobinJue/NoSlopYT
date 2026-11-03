@@ -329,6 +329,16 @@ enum ZooFixture {
         )
     }
 
+    /// A 360p rendition (itag 134) next to the 144p one (itag 160). The bytes behind it are the zoo video again: the
+    /// muxer only cares that they are a real H.264 MP4, not what the format claims about their size.
+    static func video360(at url: URL) -> StreamFormat {
+        StreamFormat(
+            itag: 134, url: url, mimeType: "video/mp4; codecs=\"avc1.4D401E\"", bitrate: 120_000,
+            width: 256, height: 360, fps: 15, qualityLabel: "360p",
+            contentLength: videoBytes, approxDurationMs: 18_933
+        )
+    }
+
     static func audio(at url: URL, contentLength: Int64? = audioBytes) -> StreamFormat {
         StreamFormat(
             itag: 140, url: url, mimeType: "audio/mp4; codecs=\"mp4a.40.2\"", bitrate: 49_000,
@@ -377,6 +387,25 @@ struct DownloadHarness {
         let server = DownloadStubServer()
         try ZooFixture.serveFixtures(on: server)
         let resolver = DownloadStubResolver(provider ?? { _, _ in ZooFixture.streamInfo(server: server) })
+        return DownloadHarness(directory: directory, server: server, resolver: resolver, tuning: tuning)
+    }
+
+    /// Like `zoo`, but the video has two renditions: 144p (itag 160, `/video.mp4`) and 360p (itag 134,
+    /// `/video-360.mp4`), next to the audio. A 144p request and a 360p request pick different streams here, so they are
+    /// different downloads. On the plain `zoo` video, which stops at 144p, both pick the 144p rendition and are one
+    /// (see `DownloadDedupeTests`).
+    static func zooWithTwoRenditions(tuning: DownloadTuning = .testing) throws -> DownloadHarness {
+        let directory = try DownloadTestDirectory.make()
+        let server = DownloadStubServer()
+        try ZooFixture.serveFixtures(on: server)
+        server.serve("/video-360.mp4", data: try Fixture.data("zoo_video_144p.mp4"))
+        let resolver = DownloadStubResolver { _, _ in
+            ZooFixture.streamInfo(formats: [
+                ZooFixture.video(at: server.url("/video.mp4")),
+                ZooFixture.video360(at: server.url("/video-360.mp4")),
+                ZooFixture.audio(at: server.url("/audio.m4a")),
+            ])
+        }
         return DownloadHarness(directory: directory, server: server, resolver: resolver, tuning: tuning)
     }
 
@@ -558,7 +587,9 @@ func mediaDurationAndTracks(of url: URL) async throws -> (seconds: Double, video
     }
 
     @Test func qualitiesOfOneVideoGetTheirOwnFiles() async throws {
-        let harness = try DownloadHarness.zoo()
+        // Two renditions that really differ: qualities that resolve to the same streams are one download, and the plain
+        // zoo video has only the 144p rendition, so there both would be.
+        let harness = try DownloadHarness.zooWithTwoRenditions()
         defer { harness.cleanUp() }
         harness.manager.enqueue(video: ZooFixture.summary, quality: .video(maxHeight: 144))
         harness.manager.enqueue(video: ZooFixture.summary, quality: .video(maxHeight: 360))

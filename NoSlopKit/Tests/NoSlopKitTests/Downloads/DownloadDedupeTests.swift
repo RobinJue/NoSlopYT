@@ -6,42 +6,14 @@ import Testing
 // These tests drive `DownloadManager` against the fake googlevideo of `DownloadManagerTests` (same harness, same zoo
 // fixtures) and check that one set of streams is downloaded once, however it was asked for.
 
-/// A 360p rendition (itag 134) next to the 144p one (itag 160). The bytes behind it are the zoo video again: the
-/// muxer only cares that they are a real H.264 MP4, not what the format claims about their size.
-private enum DedupeFormats {
-    static func video360(at url: URL) -> StreamFormat {
-        StreamFormat(
-            itag: 134, url: url, mimeType: "video/mp4; codecs=\"avc1.4D401E\"", bitrate: 120_000,
-            width: 256, height: 360, fps: 15, qualityLabel: "360p",
-            contentLength: ZooFixture.videoBytes, approxDurationMs: 18_933
-        )
-    }
-}
-
 private let secondVideo = VideoSummary(
     id: "bbbbbbbbbbb", title: "Another zoo", channel: ChannelRef(id: "UC4QobU6STFB0P71PMvOGN5A", name: "jawed"), durationSeconds: 19
 )
 
 @MainActor
-@Suite struct DownloadDedupeTests {
+@Suite(.limitsMediaExports) struct DownloadDedupeTests {
     private let id720 = "jNQXAC9IVRw-720"
     private let id144 = "jNQXAC9IVRw-144"
-
-    /// A harness whose video has a 144p and a 360p rendition (and audio), all served from the zoo fixtures.
-    private func twoRenditionHarness() throws -> DownloadHarness {
-        let directory = try DownloadTestDirectory.make()
-        let server = DownloadStubServer()
-        try ZooFixture.serveFixtures(on: server)
-        server.serve("/video-360.mp4", data: try Fixture.data("zoo_video_144p.mp4"))
-        let resolver = DownloadStubResolver { _, _ in
-            ZooFixture.streamInfo(formats: [
-                ZooFixture.video(at: server.url("/video.mp4")),
-                DedupeFormats.video360(at: server.url("/video-360.mp4")),
-                ZooFixture.audio(at: server.url("/audio.m4a")),
-            ])
-        }
-        return DownloadHarness(directory: directory, server: server, resolver: resolver, tuning: .testing)
-    }
 
     /// Waits until every item is settled and the resolver has been asked `calls` times, then a little longer, so a
     /// download that should not have happened has had the time to show itself.
@@ -150,7 +122,7 @@ private let secondVideo = VideoSummary(
     // MARK: What is not the same
 
     @Test func differentRenditionsOfOneVideoAreDifferentDownloads() async throws {
-        let harness = try twoRenditionHarness()
+        let harness = try DownloadHarness.zooWithTwoRenditions()
         defer { harness.cleanUp() }
         let manager = harness.manager
 
@@ -168,7 +140,7 @@ private let secondVideo = VideoSummary(
     }
 
     @Test func qualitiesThatPickTheSameRenditionAreOneDownloadAmongOthers() async throws {
-        let harness = try twoRenditionHarness()
+        let harness = try DownloadHarness.zooWithTwoRenditions()
         defer { harness.cleanUp() }
         let manager = harness.manager
 
