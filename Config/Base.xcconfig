@@ -1,0 +1,13 @@
+// Build settings shared by every configuration of the NoSlop app target.
+//
+// Signing lives here (and in Local.xcconfig) on purpose, not in project.yml: build settings in project.yml would
+// override anything the git-ignored Local.xcconfig sets.
+//
+// To run on a device, copy Config/Local.xcconfig.example to Config/Local.xcconfig and set your team there.
+
+CODE_SIGN_STYLE = Automatic
+DEVELOPMENT_TEAM =
+
+// Must stay last: values in the git-ignored Local.xcconfig override the defaults above. The "?" makes the file
+// optional, so a fresh checkout builds for the simulator without it.
+#include? "Local.xcconfig"

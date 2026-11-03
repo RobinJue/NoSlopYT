@@ -1,0 +1,8 @@
+// Copy this file to Config/Local.xcconfig (git-ignored) and fill in your values.
+//
+//   cp Config/Local.xcconfig.example Config/Local.xcconfig
+//
+// Your Apple Developer Team ID: Xcode > Settings > Accounts > select your team (a free Apple ID works too), or
+// developer.apple.com > Membership details. It is ten characters, e.g. A1B2C3D4E5.
+// Only needed to run on a physical iPhone/iPad; the simulator builds without it.
+DEVELOPMENT_TEAM = YOURTEAMID
