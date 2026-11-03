@@ -852,7 +852,7 @@ Design-system basics must work with real data: `RemoteImage` loads through `URLS
 @Test func searchInitialPage() throws {
     let p = SearchParser.parse(try Fixture.json("search_blender_tutorial.json"))
     let videos = p.items.compactMap(\.video)
-    #expect(videos.filter { !$0.isShort }.count == 17); #expect(videos.filter(\.isShort).count == 5)
+    #expect(videos.filter { !$0.isShort }.count == 16); #expect(videos.filter(\.isShort).count == 6)   // erratum: 17 + 5 was wrong; the fixture has 17 videoRenderers + 5 shortsLockupViewModels, and one of the videoRenderers (qAJZC5kOpOE) is a Short
     #expect(p.items.filter { if case .channel = $0 { true } else { false } }.count == 1)
     #expect(p.items.filter { if case .playlist = $0 { true } else { false } }.count == 1)
     #expect(p.items.count == 24); #expect(p.continuation != nil)
