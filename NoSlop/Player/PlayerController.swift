@@ -1,14 +1,24 @@
 import AVFoundation
 import Foundation
+import Network
 import NoSlopKit
 import Observation
+import OSLog
+import UIKit
 
 /// Owns the one `AVPlayer`, what is playing, and how the player is presented (hidden, full screen over the tabs,
 /// or the mini player above the tab bar).
 ///
-/// STUB (Task 1B, presentation only). Task 10 owns this file and implements playback; the API below is final.
-/// Until then `open` records the video and expands the overlay, `expand`/`minimize`/`close` change `presentation`,
-/// and the transport functions only move the published numbers. Nothing is loaded into `avPlayer`.
+/// What it does, in the order a video goes through it:
+/// - `open` saves the progress of the previous video, resolves the stream (a finished download wins over streaming),
+///   builds the `AVPlayerItem` with the quality cap for the current connection, resumes where the viewer left off and
+///   starts playing.
+/// - A 0.5 s time observer drives `currentTime`, the buffered range, the caption line, SponsorBlock auto-skip and the
+///   progress saved to the library (every 5 s, and on pause, close, background and end).
+/// - A failure is mapped to a `PlaybackFailure`; `PlaybackRecovery` decides between re-resolving fresh URLs,
+///   waiting for the connection, and the error screen (only after a second failure).
+/// - In the background it keeps playing (video detached from its layers) or pauses, depending on the setting, unless
+///   Picture in Picture has taken over. Lock screen controls come from `NowPlayingCenter`.
 @MainActor
 @Observable
 final class PlayerController {
@@ -26,14 +36,129 @@ final class PlayerController {
         var segment: SponsorSegment
     }
 
+    // MARK: Collaborators
+
     private let streams: any StreamResolving
     private let sponsorBlock: any SponsorBlockProviding
     private let captions: any CaptionsProviding
     private let library: LibraryStore
     private let settingsStore: SettingsStore
     private let downloads: DownloadManager
-    /// What the watch page offered as "Up next" (autoplay candidates). Task 10 uses it for autoplay.
+
+    /// Picture in Picture and the registry of video layers; `VideoSurfaceView` registers with it.
+    let pictureInPicture: PictureInPictureController
+    @ObservationIgnored private let audioSession = AudioSessionController()
+    @ObservationIgnored private let nowPlaying = NowPlayingCenter()
+    @ObservationIgnored private let network = PlaybackNetworkMonitor()
+
+    /// The single player instance; the video surface and Picture in Picture both attach to it.
+    let avPlayer = AVPlayer()
+
+    // MARK: Published state
+
+    private(set) var presentation: Presentation = .hidden
+    private(set) var currentVideo: VideoSummary?
+    private(set) var streamInfo: StreamInfo?
+    private(set) var state: State = .idle {
+        didSet {
+            if oldValue != state {
+                Self.log.debug("state \(String(describing: oldValue), privacy: .public) -> \(String(describing: self.state), privacy: .public)")
+            }
+        }
+    }
+    private(set) var currentTime: Double = 0
+    private(set) var duration: Double = 0
+    private(set) var bufferedTime: Double = 0
+    /// The SponsorBlock segments to draw in the seek bar (what `SegmentSkipPlanner` says is visible).
+    private(set) var segments: [SponsorSegment] = []
+    private(set) var chapters: [Chapter] = []
+    private(set) var skipNotice: SkipNotice?
+    private(set) var captionText: String?
+    private(set) var isPlayingOffline = false
+    private(set) var isPictureInPictureActive = false
+    /// Videos that play after the current one, in order.
+    private(set) var queue: [VideoSummary] = []
+
+    /// Picture in Picture could start right now.
+    private(set) var isPictureInPicturePossible = false
+    /// Playing a downloaded audio-only file: there is no picture, the thumbnail stays up.
+    private(set) var isAudioOnlyPlayback = false
+    /// A live stream: no duration, no scrubbing.
+    private(set) var isLive = false
+    /// The first frame has played at least once for this video (until then the thumbnail is shown as a poster).
+    private(set) var hasStartedPlayback = false
+    /// Recovery is waiting for the device to come back online.
+    private(set) var isWaitingForConnection = false
+
+    var isFullscreen = false
+
+    /// Playback speed. Setting it applies it at once.
+    var rate: Float {
+        didSet { rateDidChange() }
+    }
+
+    /// The resolution cap. Starts at the Wi-Fi or cellular preference of each video; picking one overrides it for
+    /// this video.
+    var quality: QualityPreference {
+        didSet { qualityDidChange() }
+    }
+
+    /// The caption track shown, nil for off. Setting it loads the cues.
+    var selectedCaption: CaptionTrack? {
+        didSet { selectedCaptionDidChange() }
+    }
+
+    // MARK: Bookkeeping (not observed)
+
+    @ObservationIgnored private var generation = 0
+    @ObservationIgnored private var loadTask: Task<Void, Never>?
+    @ObservationIgnored private var recoveryTask: Task<Void, Never>?
+    @ObservationIgnored private var segmentsTask: Task<Void, Never>?
+    @ObservationIgnored private var captionTask: Task<Void, Never>?
+    @ObservationIgnored private var skipNoticeTask: Task<Void, Never>?
+    @ObservationIgnored private var stallTask: Task<Void, Never>?
+    @ObservationIgnored private var timeObserver: Any?
+    @ObservationIgnored private var playerObservations: [NSKeyValueObservation] = []
+    @ObservationIgnored private var itemObservations: [NSKeyValueObservation] = []
+    @ObservationIgnored private var itemNotifications: [any NSObjectProtocol] = []
+    @ObservationIgnored private var lifecycleNotifications: [any NSObjectProtocol] = []
+
+    /// The viewer's intent: open and play set it, pause clears it. It decides whether the item starts once it is ready
+    /// (and the play/pause button while loading), so it is observed.
+    private var shouldPlayWhenReady = true
+    @ObservationIgnored private var isItemReady = false
+    @ObservationIgnored private var awaitingInitialStart = false
+    @ObservationIgnored private var pendingStart: Double = 0
+    @ObservationIgnored private var isSeeking = false
+    @ObservationIgnored private var seekToken = 0
+    @ObservationIgnored private var resumeAfterSeek = false
+
+    @ObservationIgnored private var recoveryAttempts = 0
+    @ObservationIgnored private var recoveryBaseline: Double = 0
+    @ObservationIgnored private var isRecovering = false
+    @ObservationIgnored private var forceStreaming = false
+
     @ObservationIgnored private var upNext: [VideoSummary] = []
+    @ObservationIgnored private var lastProgressSave = Date.distantPast
+    @ObservationIgnored private var wasPlayingBeforeInterruption = false
+    @ObservationIgnored private var didDetachSurfaces = false
+    @ObservationIgnored private var qualityIsManual = false
+    @ObservationIgnored private var isApplyingDefaultQuality = false
+
+    @ObservationIgnored private var rawSegments: [SponsorSegment] = []
+    @ObservationIgnored private var planner: SegmentSkipPlanner?
+    @ObservationIgnored private var plannerEnabled = true
+    @ObservationIgnored private var plannerBehaviors: [SponsorCategory: SegmentBehavior] = [:]
+    @ObservationIgnored private var segmentsRequestedFor: String?
+    @ObservationIgnored private var declinedSkips: Set<String> = []
+    @ObservationIgnored private var lastSkip: (id: String, at: Date)?
+
+    @ObservationIgnored private var cueTimeline = CueTimeline(cues: [])
+    @ObservationIgnored private var lastLoggedSize = CGSize.zero
+
+    private static let log = Logger(subsystem: "com.robinjungerich.noslopyt", category: "player")
+
+    // MARK: Init
 
     init(
         streams: any StreamResolving,
@@ -50,52 +175,74 @@ final class PlayerController {
         self.settingsStore = settingsStore
         self.downloads = downloads
         self.quality = settingsStore.settings.wifiQuality
-        self.rate = Float(settingsStore.settings.defaultPlaybackRate)
+        self.rate = Self.clampedRate(settingsStore.settings.defaultPlaybackRate)
+        self.pictureInPicture = PictureInPictureController(player: avPlayer)
+
+        avPlayer.allowsExternalPlayback = true
+        avPlayer.automaticallyWaitsToMinimizeStalling = true
+        avPlayer.actionAtItemEnd = .pause
+        avPlayer.defaultRate = rate
+
+        wireCollaborators()
+        installPlayerObservers()
     }
 
-    /// The single player instance; the video surface and Picture in Picture both attach to it.
-    let avPlayer = AVPlayer()
+    // MARK: Derived state for the views
 
-    // MARK: Published state
+    /// The viewer wants (or has) playback running: the pause button shows instead of the play button.
+    var isPlaybackActive: Bool {
+        switch state {
+        case .playing, .buffering: return true
+        case .loading: return shouldPlayWhenReady
+        case .idle, .paused, .ended, .failed: return false
+        }
+    }
 
-    private(set) var presentation: Presentation = .hidden
-    private(set) var currentVideo: VideoSummary?
-    private(set) var streamInfo: StreamInfo?
-    private(set) var state: State = .idle
-    private(set) var currentTime: Double = 0
-    private(set) var duration: Double = 0
-    private(set) var bufferedTime: Double = 0
-    private(set) var segments: [SponsorSegment] = []
-    private(set) var chapters: [Chapter] = []
-    private(set) var skipNotice: SkipNotice?
-    private(set) var captionText: String?
-    private(set) var isPlayingOffline = false
-    private(set) var isPictureInPictureActive = false
-    /// Videos that play after the current one, in order.
-    private(set) var queue: [VideoSummary] = []
+    /// The caption tracks the video offers.
+    var captionTracks: [CaptionTrack] {
+        streamInfo?.captions ?? []
+    }
 
-    var isFullscreen = false
-    var rate: Float
-    var quality: QualityPreference
-    var selectedCaption: CaptionTrack?
+    /// Whether `playNext` has a queued video to start.
+    var canPlayNext: Bool {
+        !queue.isEmpty
+    }
+
+    /// The thumbnail covers the picture: nothing has played yet, or the file has no picture.
+    var showsPoster: Bool {
+        !hasStartedPlayback || isAudioOnlyPlayback
+    }
+
+    /// The message of the failed state, if any.
+    var failureMessage: String? {
+        if case .failed(let message) = state { return message }
+        return nil
+    }
 
     // MARK: Loading
 
     /// Starts `video` (resuming at `startAt` or the saved position) and expands the player. `queue` plays afterwards.
+    /// Opening the video that is already loaded only expands the player (and seeks when `startAt` is given).
     func open(_ video: VideoSummary, startAt: Double?, queue: [VideoSummary]) {
-        currentVideo = video
-        self.queue = queue
-        streamInfo = nil
-        state = .idle
-        currentTime = max(0, startAt ?? 0)
-        duration = Double(video.durationSeconds ?? 0)
-        bufferedTime = 0
-        segments = []
-        chapters = []
-        skipNotice = nil
-        captionText = nil
-        isPlayingOffline = false
-        presentation = .expanded
+        if let current = currentVideo, current.id == video.id, canReuseCurrentPlayback {
+            self.queue = queue
+            presentation = .expanded
+            if let startAt {
+                seek(to: startAt)
+            } else if state == .ended {
+                seek(to: 0)
+            }
+            updateNowPlaying()
+            return
+        }
+        start(video, startAt: startAt, queue: queue, expand: true)
+    }
+
+    private var canReuseCurrentPlayback: Bool {
+        switch state {
+        case .idle, .failed: return false
+        default: return true
+        }
     }
 
     /// The chapters of the current video (from the watch page); the seek bar draws them.
@@ -108,44 +255,566 @@ final class PlayerController {
         upNext = videos
     }
 
+    private func start(_ video: VideoSummary, startAt: Double?, queue: [VideoSummary], expand: Bool) {
+        saveProgress(force: true)
+        tearDownItem()
+        cancelWork()
+
+        generation += 1
+        let token = generation
+
+        currentVideo = video
+        self.queue = queue
+        upNext = []
+        streamInfo = nil
+        currentTime = max(0, startAt ?? 0)
+        duration = Double(video.durationSeconds ?? 0)
+        bufferedTime = 0
+        segments = []
+        chapters = []
+        skipNotice = nil
+        captionText = nil
+        isPlayingOffline = false
+        isAudioOnlyPlayback = false
+        isLive = video.isLive
+        hasStartedPlayback = false
+        isWaitingForConnection = false
+        isRecovering = false
+        forceStreaming = false
+        recoveryAttempts = 0
+        declinedSkips = []
+        lastSkip = nil
+        rawSegments = []
+        planner = nil
+        segmentsRequestedFor = nil
+        cueTimeline = CueTimeline(cues: [])
+        selectedCaption = nil
+        shouldPlayWhenReady = true
+        resumeAfterSeek = false
+        pendingStart = 0
+        qualityIsManual = false
+        applyDefaultQuality()
+        rate = Self.clampedRate(settings.defaultPlaybackRate)
+
+        if expand {
+            presentation = .expanded
+        }
+        state = .loading
+        audioSession.activate()
+        updateNowPlaying()
+        Self.log.info("open \(video.id, privacy: .public)")
+
+        loadTask = Task { [weak self] in
+            await self?.load(video, startAt: startAt, token: token)
+        }
+    }
+
+    private func load(_ video: VideoSummary, startAt: Double?, token: Int) async {
+        let start = startAt ?? resumePosition(for: video.id)
+        pendingStart = start
+        currentTime = start
+        ensureSegments(for: video.id)
+
+        if let local = localSource(for: video.id) {
+            isPlayingOffline = true
+            isAudioOnlyPlayback = local.isAudioOnly
+            Self.log.info("playing the download of \(video.id, privacy: .public)")
+            attach(AVPlayerItem(url: local.url))
+            loadStreamInfoForOfflinePlayback(of: video.id, token: token)
+            return
+        }
+
+        do {
+            let info = try await streams.streamInfo(videoID: video.id)
+            guard token == generation else { return }
+            accept(info)
+            guard let url = playbackURL(for: info) else {
+                fail(message: "This video can't be played in this app. Try opening it on YouTube.")
+                return
+            }
+            attach(AVPlayerItem(url: url))
+            selectDefaultCaption(from: info)
+        } catch {
+            guard token == generation, !Task.isCancelled else { return }
+            fail(with: error)
+        }
+    }
+
+    /// While a download plays there is no stream info, but captions and chapters want its caption tracks. Best effort:
+    /// offline this simply fails.
+    private func loadStreamInfoForOfflinePlayback(of videoID: String, token: Int) {
+        Task { [weak self] in
+            guard let self else { return }
+            guard let info = try? await self.streams.streamInfo(videoID: videoID), token == self.generation else { return }
+            self.accept(info)
+            self.selectDefaultCaption(from: info)
+        }
+    }
+
+    /// The finished download of the video whose file is still there: the sharpest video download first, an audio-only
+    /// one when that is all there is.
+    private func localSource(for videoID: String) -> (url: URL, isAudioOnly: Bool)? {
+        guard !forceStreaming else { return nil }
+        var candidates = downloads.items.filter { $0.video.id == videoID && $0.state == .completed }
+        if candidates.isEmpty, let single = downloads.completedItem(videoID: videoID) {
+            candidates = [single]
+        }
+        candidates.sort { Self.sharpness(of: $0.quality) > Self.sharpness(of: $1.quality) }
+        for item in candidates {
+            if let url = downloads.fileURL(for: item), FileManager.default.fileExists(atPath: url.path) {
+                return (url, item.quality == .audioOnly)
+            }
+        }
+        return nil
+    }
+
+    private static func sharpness(of quality: DownloadQuality) -> Int {
+        switch quality {
+        case .video(let maxHeight): return maxHeight
+        case .audioOnly: return -1
+        }
+    }
+
+    /// The HLS manifest, else the best progressive MP4 AVFoundation can play within the quality cap (the lowest one
+    /// when every rendition is above it).
+    private func playbackURL(for info: StreamInfo) -> URL? {
+        if let hls = info.hlsURL {
+            return hls
+        }
+        let progressive = info.formats
+            .filter { $0.isProgressive && $0.isAVFoundationCompatible && !$0.isAudioOnly }
+            .sorted { ($0.height ?? 0) < ($1.height ?? 0) }
+        if let cap = quality.maxHeight {
+            return (progressive.last { ($0.height ?? 0) <= cap } ?? progressive.first)?.url
+        }
+        return progressive.last?.url
+    }
+
+    /// Takes over the facts of the resolved stream: expiry, length, live, and the title and channel when the video
+    /// was opened from a bare link.
+    private func accept(_ info: StreamInfo) {
+        streamInfo = info
+        if info.isLive {
+            isLive = true
+            pendingStart = 0
+        }
+        if duration <= 0, info.lengthSeconds > 0 {
+            duration = Double(info.lengthSeconds)
+        }
+        guard var video = currentVideo, video.id == info.videoID else { return }
+        var changed = false
+        if video.title.isEmpty, !info.title.isEmpty {
+            video.title = info.title
+            changed = true
+        }
+        if (video.channel?.name ?? "").isEmpty, !info.author.isEmpty {
+            video.channel = ChannelRef(id: info.channelID, name: info.author)
+            changed = true
+        }
+        if video.thumbnails.isEmpty, !info.thumbnails.isEmpty {
+            video.thumbnails = info.thumbnails
+            changed = true
+        }
+        if video.durationSeconds == nil, info.lengthSeconds > 0 {
+            video.durationSeconds = info.lengthSeconds
+            changed = true
+        }
+        if changed {
+            currentVideo = video
+            updateNowPlaying()
+        }
+    }
+
+    private func resumePosition(for videoID: String) -> Double {
+        guard let entry = library.progress(for: videoID), entry.progressSeconds > 10, !entry.isFinished else { return 0 }
+        return entry.progressSeconds
+    }
+
+    // MARK: Item
+
+    /// Makes `item` the current item and watches it. Playback starts once it reports ready.
+    private func attach(_ item: AVPlayerItem) {
+        isItemReady = false
+        awaitingInitialStart = false
+        isRecovering = false
+        isSeeking = false
+        applyQuality(to: item)
+        observe(item)
+        avPlayer.replaceCurrentItem(with: item)
+        applyAutomaticPictureInPicture()
+    }
+
+    private func observe(_ item: AVPlayerItem) {
+        itemObservations = [
+            item.observe(\.status, options: [.new]) { [weak self] _, _ in
+                Task { @MainActor in self?.itemStatusChanged() }
+            },
+        ]
+        let center = NotificationCenter.default
+        itemNotifications = [
+            center.addObserver(forName: AVPlayerItem.didPlayToEndTimeNotification, object: item, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.itemDidPlayToEnd() }
+            },
+            center.addObserver(forName: AVPlayerItem.failedToPlayToEndTimeNotification, object: item, queue: .main) { [weak self] note in
+                let error = note.userInfo?[AVPlayerItemFailedToPlayToEndTimeErrorKey] as? NSError
+                MainActor.assumeIsolated { self?.itemFailedToPlayToEnd(error: error) }
+            },
+        ]
+    }
+
+    private func tearDownItem() {
+        itemObservations.removeAll()
+        let center = NotificationCenter.default
+        for token in itemNotifications {
+            center.removeObserver(token)
+        }
+        itemNotifications.removeAll()
+        stallTask?.cancel()
+        stallTask = nil
+        isItemReady = false
+        awaitingInitialStart = false
+        isSeeking = false
+        resumeAfterSeek = false
+        // A seek still in flight belongs to the item that is going away.
+        seekToken += 1
+        if avPlayer.currentItem != nil {
+            avPlayer.pause()
+            avPlayer.replaceCurrentItem(with: nil)
+        }
+    }
+
+    private func cancelWork() {
+        loadTask?.cancel()
+        recoveryTask?.cancel()
+        segmentsTask?.cancel()
+        captionTask?.cancel()
+        skipNoticeTask?.cancel()
+        loadTask = nil
+        recoveryTask = nil
+        segmentsTask = nil
+        captionTask = nil
+        skipNoticeTask = nil
+    }
+
+    private func itemStatusChanged() {
+        guard let item = avPlayer.currentItem else { return }
+        switch item.status {
+        case .readyToPlay:
+            guard !isItemReady else { return }
+            isItemReady = true
+            refreshDuration()
+            beginPlayback()
+        case .failed:
+            handleFailure(error: item.error, item: item)
+        case .unknown:
+            break
+        @unknown default:
+            break
+        }
+    }
+
+    /// The item is ready: jump to the start position, then play if the viewer wants playback.
+    private func beginPlayback() {
+        var target = pendingStart
+        pendingStart = 0
+        if duration > 0, target > duration - 2 {
+            target = 0
+        }
+        awaitingInitialStart = true
+        if target > 0.5 {
+            seekPlayer(to: target)
+        } else {
+            startPlaybackIfRequested()
+        }
+        updateNowPlaying()
+    }
+
+    private func startPlaybackIfRequested() {
+        awaitingInitialStart = false
+        if shouldPlayWhenReady {
+            audioSession.activate()
+            avPlayer.play()
+        } else {
+            state = .paused
+        }
+        updateNowPlaying()
+    }
+
+    private func itemDidPlayToEnd() {
+        guard let video = currentVideo else { return }
+        stallTask?.cancel()
+        state = .ended
+        if duration > 0, !isLive {
+            currentTime = duration
+        }
+        if hasStartedPlayback, !isLive {
+            let length = duration > 0 ? duration : Double(video.durationSeconds ?? 0)
+            library.recordProgress(video: video, seconds: length, duration: length > 0 ? length : nil)
+            Task { await library.flush() }
+        }
+        updateNowPlaying()
+        Self.log.info("ended \(video.id, privacy: .public)")
+
+        if playNext() { return }
+        if settings.autoplayNext, let next = autoplayCandidate() {
+            start(next, startAt: nil, queue: [], expand: false)
+        }
+    }
+
+    /// The first up-next suggestion the viewer has not watched.
+    private func autoplayCandidate() -> VideoSummary? {
+        upNext.first { video in
+            video.id != currentVideo?.id && !video.isShort && !video.isLive && !video.isUpcoming
+                && (library.progress(for: video.id)?.progressSeconds ?? 0) < 10
+        }
+    }
+
+    // MARK: Failures and recovery
+
+    private func itemFailedToPlayToEnd(error: NSError?) {
+        guard let item = avPlayer.currentItem else { return }
+        handleFailure(error: error ?? item.error, item: item)
+    }
+
+    private func handleFailure(error: (any Error)?, item: AVPlayerItem?) {
+        guard currentVideo != nil, !isRecovering else { return }
+        let failure = Self.classify(error: error, item: item)
+        Self.log.error("playback error: \(String(describing: error), privacy: .public)")
+        recover(from: failure, position: currentPositionForRecovery())
+    }
+
+    private func recover(from failure: PlaybackFailure, position: Double) {
+        let action = PlaybackRecovery.action(
+            for: failure,
+            position: position,
+            streamExpiresAt: isPlayingOffline ? nil : streamInfo?.expiresAt,
+            now: Date(),
+            attempt: recoveryAttempts
+        )
+        Self.log.info("failure \(String(describing: failure), privacy: .public) -> \(String(describing: action), privacy: .public)")
+
+        switch action {
+        case .reresolveAndResume(let at):
+            recoveryAttempts += 1
+            beginReload(at: at, waitForConnection: false)
+        case .waitForNetworkThenRetry(let at):
+            recoveryAttempts += 1
+            beginReload(at: at, waitForConnection: true)
+        case .showError:
+            fail(message: failure.message)
+        }
+    }
+
+    /// Rebuilds the item from freshly resolved stream URLs and resumes at `position`.
+    private func beginReload(at position: Double, waitForConnection: Bool) {
+        guard let video = currentVideo else { return }
+        Self.log.info("reload \(video.id, privacy: .public) at \(position), waiting for connection: \(waitForConnection)")
+        generation += 1
+        let token = generation
+        loadTask?.cancel()
+        recoveryTask?.cancel()
+        tearDownItem()
+
+        // A download that cannot be played falls back to streaming.
+        if isPlayingOffline {
+            forceStreaming = true
+            isPlayingOffline = false
+            isAudioOnlyPlayback = false
+        }
+        isRecovering = true
+        recoveryBaseline = position
+        pendingStart = position
+        currentTime = position
+        state = hasStartedPlayback ? .buffering : .loading
+
+        recoveryTask = Task { [weak self] in
+            guard let self else { return }
+            if waitForConnection {
+                self.isWaitingForConnection = true
+                await self.network.waitUntilOnline()
+                self.isWaitingForConnection = false
+                guard !Task.isCancelled, token == self.generation else { return }
+            }
+            await self.load(video, startAt: position, token: token)
+        }
+    }
+
+    private func fail(with error: any Error) {
+        let message = (error as? LocalizedError)?.errorDescription ?? Self.classify(error: error, item: nil).message
+        fail(message: message)
+    }
+
+    private func fail(message: String) {
+        Self.log.error("failed: \(message, privacy: .public)")
+        stallTask?.cancel()
+        isRecovering = false
+        isWaitingForConnection = false
+        state = .failed(message)
+        shouldPlayWhenReady = false
+        saveProgress(force: true)
+        updateNowPlaying()
+    }
+
+    /// Tries again from the error screen: fresh URLs, same position, and a clean slate for the failure counter.
+    func retry() {
+        guard currentVideo != nil else { return }
+        recoveryAttempts = 0
+        shouldPlayWhenReady = true
+        beginReload(at: currentTime, waitForConnection: false)
+    }
+
+    private func currentPositionForRecovery() -> Double {
+        let time = avPlayer.currentTime()
+        if time.isValid, time.isNumeric, time.seconds.isFinite, time.seconds > 0 {
+            return time.seconds
+        }
+        return currentTime
+    }
+
+    /// Reduces an `AVPlayerItem` failure to what `PlaybackRecovery` understands, using the error chain and the HTTP
+    /// status of the last entry of the item's error log.
+    private static func classify(error: (any Error)?, item: AVPlayerItem?) -> PlaybackFailure {
+        var chain: [PlaybackFailure.ErrorLink] = []
+        var next = error.map { $0 as NSError }
+        while let current = next, chain.count < 6 {
+            chain.append(PlaybackFailure.ErrorLink(domain: current.domain, code: current.code))
+            next = current.userInfo[NSUnderlyingErrorKey] as? NSError
+        }
+        let status = item?.errorLog()?.events.last?.errorStatusCode
+        return PlaybackFailure.classify(chain: chain, httpStatus: status)
+    }
+
+    /// The video buffers for a long time: nothing is coming. Offline, wait for the connection; online, try fresh URLs.
+    private func watchForStall() {
+        stallTask?.cancel()
+        let token = generation
+        stallTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(12))
+            guard let self, !Task.isCancelled, token == self.generation, self.state == .buffering else { return }
+            if !self.network.isOnline {
+                self.recover(from: .network, position: self.currentPositionForRecovery())
+                return
+            }
+            try? await Task.sleep(for: .seconds(33))
+            guard !Task.isCancelled, token == self.generation, self.state == .buffering else { return }
+            self.recover(from: .unknown, position: self.currentPositionForRecovery())
+        }
+    }
+
     // MARK: Transport
 
     func play() {
         guard currentVideo != nil else { return }
-        state = .playing
+        Self.log.debug("play (state \(String(describing: self.state), privacy: .public))")
+        shouldPlayWhenReady = true
+        if case .failed = state {
+            retry()
+            return
+        }
+        if state == .ended {
+            // Replay from the start.
+            resumeAfterSeek = true
+            currentTime = 0
+            seekPlayer(to: 0)
+            return
+        }
+        // Paused for hours: the stream URLs are gone. Get new ones before they fail.
+        if !isPlayingOffline, let info = streamInfo, info.isExpired(), avPlayer.currentItem != nil {
+            beginReload(at: currentPositionForRecovery(), waitForConnection: false)
+            return
+        }
+        guard avPlayer.currentItem != nil, isItemReady else { return }
+        audioSession.activate()
+        applyAutomaticPictureInPicture()
+        avPlayer.play()
     }
 
     func pause() {
         guard currentVideo != nil else { return }
-        state = .paused
+        Self.log.debug("pause (state \(String(describing: self.state), privacy: .public))")
+        shouldPlayWhenReady = false
+        avPlayer.pause()
+        if state == .loading, isItemReady {
+            state = .paused
+        }
+        saveProgress(force: true)
     }
 
     func togglePlayPause() {
-        if state == .playing { pause() } else { play() }
+        if isPlaybackActive {
+            pause()
+        } else {
+            play()
+        }
     }
 
     func seek(to seconds: Double) {
-        currentTime = max(0, seconds)
+        guard seconds.isFinite else { return }
+        let target = clampedToDuration(seconds)
+        Self.log.debug("seek to \(target)")
+        currentTime = target
+        guard avPlayer.currentItem != nil, isItemReady else {
+            // Still loading: start there instead.
+            pendingStart = target
+            return
+        }
+        if state == .ended {
+            resumeAfterSeek = true
+        }
+        seekPlayer(to: target)
     }
 
     func skip(by seconds: Double) {
         seek(to: currentTime + seconds)
     }
 
-    /// Jumps back to the start of the SponsorBlock segment that was just skipped.
+    /// Jumps back to the start of the SponsorBlock segment that was just skipped and does not skip it again.
     func undoSkip() {
-        if let notice = skipNotice {
-            seek(to: notice.segment.start)
-        }
+        guard let notice = skipNotice else { return }
+        declinedSkips.insert(notice.segment.id)
         skipNotice = nil
+        skipNoticeTask?.cancel()
+        seek(to: notice.segment.start)
     }
 
     /// Starts the next queued video; returns false when the queue is empty.
     @discardableResult
     func playNext() -> Bool {
         guard let next = queue.first else { return false }
-        open(next, startAt: nil, queue: Array(queue.dropFirst()))
+        start(next, startAt: nil, queue: Array(queue.dropFirst()), expand: false)
         return true
+    }
+
+    private func seekPlayer(to seconds: Double) {
+        isSeeking = true
+        seekToken += 1
+        let token = seekToken
+        let time = CMTime(seconds: seconds, preferredTimescale: 600)
+        Task { [weak self] in
+            guard let self else { return }
+            _ = await self.avPlayer.seek(to: time, toleranceBefore: .zero, toleranceAfter: .zero)
+            // A newer seek supersedes this one.
+            guard token == self.seekToken else { return }
+            self.isSeeking = false
+            self.syncTimeFromPlayer()
+            if self.awaitingInitialStart {
+                self.startPlaybackIfRequested()
+            } else if self.resumeAfterSeek {
+                self.resumeAfterSeek = false
+                self.shouldPlayWhenReady = true
+                self.state = .buffering
+                self.avPlayer.play()
+            }
+            self.updateNowPlaying()
+        }
+    }
+
+    private func clampedToDuration(_ seconds: Double) -> Double {
+        var value = max(0, seconds)
+        if duration > 0, !isLive {
+            value = min(value, duration)
+        }
+        return value
     }
 
     // MARK: Presentation
@@ -159,12 +828,25 @@ final class PlayerController {
     /// Shrinks the expanded player to the mini player. Does nothing unless the player is expanded.
     func minimize() {
         guard presentation == .expanded else { return }
-        isFullscreen = false
+        if isFullscreen {
+            isFullscreen = false
+            requestOrientation(landscape: false)
+        }
         presentation = .minimized
     }
 
     /// Stops playback and hides the player.
     func close() {
+        saveProgress(force: true)
+        Task { await library.flush() }
+        generation += 1
+        cancelWork()
+        pictureInPicture.stop()
+        tearDownItem()
+        audioSession.deactivate()
+        nowPlaying.clear()
+
+        let wasFullscreen = isFullscreen
         currentVideo = nil
         streamInfo = nil
         state = .idle
@@ -178,13 +860,588 @@ final class PlayerController {
         duration = 0
         bufferedTime = 0
         isPlayingOffline = false
+        isAudioOnlyPlayback = false
+        isLive = false
+        hasStartedPlayback = false
+        isWaitingForConnection = false
+        isRecovering = false
+        rawSegments = []
+        planner = nil
+        segmentsRequestedFor = nil
+        cueTimeline = CueTimeline(cues: [])
+        selectedCaption = nil
         isFullscreen = false
         presentation = .hidden
+        if wasFullscreen {
+            requestOrientation(landscape: false)
+        }
     }
 
     func toggleFullscreen() {
         isFullscreen.toggle()
+        Self.log.info("fullscreen \(self.isFullscreen)")
+        requestOrientation(landscape: isFullscreen)
     }
 
-    func startPictureInPicture() {}
+    func startPictureInPicture() {
+        pictureInPicture.start()
+    }
+
+    func togglePictureInPicture() {
+        if isPictureInPictureActive {
+            pictureInPicture.stop()
+        } else {
+            pictureInPicture.start()
+        }
+    }
+
+    /// iPhone only: rotates to landscape for full screen and back. (On iPad full screen is only a layout.)
+    private func requestOrientation(landscape: Bool) {
+        guard UIDevice.current.userInterfaceIdiom == .phone else { return }
+        let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+        guard let scene = scenes.first(where: { $0.activationState == .foregroundActive }) ?? scenes.first else { return }
+        scene.requestGeometryUpdate(.iOS(interfaceOrientations: landscape ? .landscape : .portrait)) { error in
+            Logger(subsystem: "com.robinjungerich.noslopyt", category: "player")
+                .error("orientation request failed: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    // MARK: Observers
+
+    private func wireCollaborators() {
+        audioSession.onInterruptionBegan = { [weak self] in self?.audioInterruptionBegan() }
+        audioSession.onInterruptionEnded = { [weak self] shouldResume in self?.audioInterruptionEnded(shouldResume: shouldResume) }
+        audioSession.onOutputDeviceUnavailable = { [weak self] in self?.pause() }
+
+        nowPlaying.onPlay = { [weak self] in self?.play() }
+        nowPlaying.onPause = { [weak self] in self?.pause() }
+        nowPlaying.onTogglePlayPause = { [weak self] in self?.togglePlayPause() }
+        nowPlaying.onSkip = { [weak self] seconds in self?.skip(by: seconds) }
+        nowPlaying.onSeek = { [weak self] seconds in self?.seek(to: seconds) }
+        nowPlaying.onNext = { [weak self] in _ = self?.playNext() }
+
+        pictureInPicture.onActiveChange = { [weak self] active in self?.pictureInPictureActiveChanged(active) }
+        pictureInPicture.onPossibleChange = { [weak self] possible in self?.isPictureInPicturePossible = possible }
+        pictureInPicture.onRestoreUserInterface = { [weak self] in self?.expand() }
+
+        network.onChange = { [weak self] in self?.networkChanged() }
+    }
+
+    private func installPlayerObservers() {
+        timeObserver = avPlayer.addPeriodicTimeObserver(
+            forInterval: CMTime(seconds: 0.5, preferredTimescale: 600),
+            queue: .main
+        ) { [weak self] time in
+            MainActor.assumeIsolated { self?.tick(time) }
+        }
+
+        playerObservations = [
+            avPlayer.observe(\.timeControlStatus, options: [.new]) { [weak self] _, _ in
+                Task { @MainActor in self?.timeControlStatusChanged() }
+            },
+        ]
+
+        let center = NotificationCenter.default
+        lifecycleNotifications = [
+            center.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.appDidEnterBackground() }
+            },
+            center.addObserver(forName: UIApplication.willEnterForegroundNotification, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.appWillEnterForeground() }
+            },
+            center.addObserver(forName: UIApplication.willTerminateNotification, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.saveProgress(force: true) }
+            },
+        ]
+    }
+
+    private func timeControlStatusChanged() {
+        guard currentVideo != nil, avPlayer.currentItem != nil, isItemReady, !isRecovering else { return }
+        if case .failed = state { return }
+        switch avPlayer.timeControlStatus {
+        case .playing:
+            stallTask?.cancel()
+            if !hasStartedPlayback {
+                hasStartedPlayback = true
+                saveProgress(force: true)
+            }
+            state = .playing
+        case .waitingToPlayAtSpecifiedRate:
+            // A seek or a stall; a deliberate pause never lands here.
+            if state != .buffering {
+                state = .buffering
+                watchForStall()
+            }
+        case .paused:
+            stallTask?.cancel()
+            if state != .ended, !awaitingInitialStart {
+                state = .paused
+                saveProgress(force: true)
+            }
+        @unknown default:
+            break
+        }
+        updateNowPlaying()
+    }
+
+    // MARK: Time observer
+
+    private func tick(_ time: CMTime) {
+        guard currentVideo != nil, avPlayer.currentItem != nil, isItemReady, !isRecovering else { return }
+        if !isSeeking, time.isValid, time.isNumeric, time.seconds.isFinite {
+            setCurrentTime(max(0, time.seconds))
+        }
+        refreshDuration()
+        refreshBufferedTime()
+        if let item = avPlayer.currentItem { logPresentationSizeChange(of: item) }
+        refreshCaption()
+        syncPlannerWithSettings()
+        autoSkipSegmentIfNeeded()
+        saveProgress(force: false)
+        resetRecoveryCounterWhenHealthy()
+        applyAutomaticPictureInPicture()
+    }
+
+    private func setCurrentTime(_ seconds: Double) {
+        if abs(seconds - currentTime) > 0.05 {
+            currentTime = seconds
+        }
+    }
+
+    private func syncTimeFromPlayer() {
+        let time = avPlayer.currentTime()
+        if time.isValid, time.isNumeric, time.seconds.isFinite {
+            currentTime = max(0, time.seconds)
+        }
+    }
+
+    private func refreshDuration() {
+        guard let item = avPlayer.currentItem else { return }
+        let reported = item.duration
+        guard reported.isValid, reported.isNumeric, reported.seconds.isFinite, reported.seconds > 0 else {
+            if reported.isIndefinite, !isLive, streamInfo?.isLive == true {
+                isLive = true
+            }
+            return
+        }
+        var value = reported.seconds
+        // Some fragmented MP4 sources report twice their real length; the length YouTube gave is the truth then.
+        // (Offline there is no stream info, but the video's own length from the list it was opened from.)
+        if let length = streamInfo?.lengthSeconds ?? currentVideo?.durationSeconds, length > 0 {
+            let ratio = value / Double(length)
+            if ratio > 1.8, ratio < 2.2 {
+                value = Double(length)
+            }
+        }
+        if abs(value - duration) > 0.25 {
+            duration = value
+            updateNowPlaying()
+        }
+    }
+
+    private func logPresentationSizeChange(of item: AVPlayerItem) {
+        let size = item.presentationSize
+        guard size != lastLoggedSize else { return }
+        lastLoggedSize = size
+        Self.log.debug("video \(Int(size.width))x\(Int(size.height)), quality cap \(self.quality.label, privacy: .public)")
+    }
+
+    private func refreshBufferedTime() {
+        guard let item = avPlayer.currentItem else { return }
+        let now = currentTime
+        var buffered = now
+        for value in item.loadedTimeRanges {
+            let range = value.timeRangeValue
+            let start = range.start.seconds
+            let end = range.end.seconds
+            guard start.isFinite, end.isFinite else { continue }
+            if start <= now + 0.5, end > buffered {
+                buffered = end
+            }
+        }
+        if abs(buffered - bufferedTime) > 0.5 {
+            bufferedTime = buffered
+        }
+    }
+
+    private func resetRecoveryCounterWhenHealthy() {
+        if recoveryAttempts > 0, state == .playing, currentTime >= recoveryBaseline + 3 {
+            recoveryAttempts = 0
+        }
+    }
+
+    // MARK: Progress
+
+    private func saveProgress(force: Bool) {
+        guard let video = currentVideo, hasStartedPlayback, !isLive else { return }
+        let now = Date()
+        guard force || now.timeIntervalSince(lastProgressSave) >= 5 else { return }
+        lastProgressSave = now
+        let length = duration > 0 ? duration : video.durationSeconds.map(Double.init)
+        library.recordProgress(video: video, seconds: currentTime, duration: length)
+    }
+
+    // MARK: SponsorBlock
+
+    private var settings: AppSettings {
+        settingsStore.settings
+    }
+
+    /// Fetches the segments once per video, when SponsorBlock is on.
+    private func ensureSegments(for videoID: String) {
+        guard settings.sponsorBlockEnabled, segmentsRequestedFor != videoID else { return }
+        segmentsRequestedFor = videoID
+        segmentsTask?.cancel()
+        segmentsTask = Task { [weak self] in
+            guard let self else { return }
+            let loaded = (try? await self.sponsorBlock.segments(videoID: videoID)) ?? []
+            guard !Task.isCancelled, self.currentVideo?.id == videoID else { return }
+            self.rawSegments = loaded
+            self.rebuildPlanner()
+        }
+    }
+
+    private func rebuildPlanner() {
+        let current = settings
+        plannerEnabled = current.sponsorBlockEnabled
+        plannerBehaviors = current.segmentBehaviors
+        guard current.sponsorBlockEnabled, !rawSegments.isEmpty else {
+            planner = nil
+            if !segments.isEmpty { segments = [] }
+            return
+        }
+        let built = SegmentSkipPlanner(segments: rawSegments, behaviors: current.segmentBehaviors)
+        planner = built
+        let visible = built.visibleSegments
+        if visible != segments { segments = visible }
+    }
+
+    /// The viewer changed the SponsorBlock settings while a video plays.
+    private func syncPlannerWithSettings() {
+        let current = settings
+        guard current.sponsorBlockEnabled != plannerEnabled || current.segmentBehaviors != plannerBehaviors else { return }
+        if current.sponsorBlockEnabled, let id = currentVideo?.id {
+            ensureSegments(for: id)
+        }
+        rebuildPlanner()
+    }
+
+    private func autoSkipSegmentIfNeeded() {
+        guard state == .playing, !isSeeking, let planner,
+              let segment = planner.segmentToSkip(at: currentTime, alreadySkipped: declinedSkips) else { return }
+        // A skip that just happened is still settling.
+        if let lastSkip, lastSkip.id == segment.id, Date().timeIntervalSince(lastSkip.at) < 1.5 { return }
+        lastSkip = (segment.id, Date())
+        Self.log.info("skip \(segment.category.rawValue, privacy: .public) \(segment.start)-\(segment.end)")
+        seek(to: segment.end)
+        showSkipNotice(for: segment)
+    }
+
+    private func showSkipNotice(for segment: SponsorSegment) {
+        skipNotice = SkipNotice(id: segment.id, segment: segment)
+        skipNoticeTask?.cancel()
+        let id = segment.id
+        skipNoticeTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(4))
+            guard !Task.isCancelled, let self, self.skipNotice?.id == id else { return }
+            self.skipNotice = nil
+        }
+    }
+
+    // MARK: Captions
+
+    func toggleCaptions() {
+        if selectedCaption != nil {
+            selectedCaption = nil
+        } else {
+            selectedCaption = Self.preferredTrack(in: captionTracks, language: settings.preferredCaptionLanguage)
+        }
+    }
+
+    /// Shows the preferred caption language right away when the viewer set one and the video has it.
+    private func selectDefaultCaption(from info: StreamInfo) {
+        guard selectedCaption == nil,
+              let language = settings.preferredCaptionLanguage, !language.isEmpty,
+              let track = Self.matchingTrack(in: info.captions, language: language) else { return }
+        selectedCaption = track
+    }
+
+    private static func preferredTrack(in tracks: [CaptionTrack], language: String?) -> CaptionTrack? {
+        let device = Locale.current.language.languageCode?.identifier
+        for candidate in [language, device, "en"] {
+            if let candidate, !candidate.isEmpty, let track = matchingTrack(in: tracks, language: candidate) {
+                return track
+            }
+        }
+        return tracks.first(where: { !$0.isAutoGenerated }) ?? tracks.first
+    }
+
+    /// A track in `language` ("en" also matches "en-US"); written captions before auto-generated ones.
+    private static func matchingTrack(in tracks: [CaptionTrack], language: String) -> CaptionTrack? {
+        let wanted = baseLanguage(language)
+        let matches = tracks.filter { baseLanguage($0.languageCode) == wanted }
+        return matches.first(where: { !$0.isAutoGenerated }) ?? matches.first
+    }
+
+    private static func baseLanguage(_ code: String) -> String {
+        code.lowercased().split(whereSeparator: { $0 == "-" || $0 == "_" }).first.map(String.init) ?? code.lowercased()
+    }
+
+    private func selectedCaptionDidChange() {
+        captionTask?.cancel()
+        cueTimeline = CueTimeline(cues: [])
+        captionText = nil
+        guard let track = selectedCaption else { return }
+        captionTask = Task { [weak self] in
+            guard let self else { return }
+            do {
+                let cues = try await self.captions.cues(for: track)
+                guard !Task.isCancelled, self.selectedCaption == track else { return }
+                self.cueTimeline = CueTimeline(cues: cues)
+                self.refreshCaption()
+            } catch {
+                guard !Task.isCancelled, self.selectedCaption == track else { return }
+                // Captions that cannot be loaded are shown as off rather than as "on" with nothing to read.
+                self.selectedCaption = nil
+            }
+        }
+    }
+
+    private func refreshCaption() {
+        let text = selectedCaption == nil ? nil : cueTimeline.text(at: currentTime)
+        if text != captionText {
+            captionText = text
+        }
+    }
+
+    // MARK: Rate and quality
+
+    private func rateDidChange() {
+        let clamped = Self.clampedRate(Double(rate))
+        if clamped != rate {
+            rate = clamped
+        }
+        avPlayer.defaultRate = clamped
+        if avPlayer.rate != 0 {
+            avPlayer.rate = clamped
+        }
+        updateNowPlaying()
+    }
+
+    private static func clampedRate(_ value: Double) -> Float {
+        guard value.isFinite, value > 0 else { return 1 }
+        return Float(min(max(value, 0.25), 4))
+    }
+
+    private func qualityDidChange() {
+        if !isApplyingDefaultQuality {
+            qualityIsManual = true
+        }
+        if let item = avPlayer.currentItem {
+            applyQuality(to: item)
+        }
+    }
+
+    private func applyDefaultQuality() {
+        isApplyingDefaultQuality = true
+        quality = network.isExpensive ? settings.cellularQuality : settings.wifiQuality
+        isApplyingDefaultQuality = false
+    }
+
+    /// `preferredMaximumResolution` is a box. The long edge of a 16:9 picture of height `h` is `h * 16 / 9`, so a square
+    /// box of that side lets 16:9 (and 4:3, and portrait) video up to the chosen label through and nothing bigger.
+    private func applyQuality(to item: AVPlayerItem) {
+        guard let height = quality.maxHeight else {
+            item.preferredMaximumResolution = .zero
+            item.preferredPeakBitRate = 0
+            return
+        }
+        let side = (Double(height) * 16.0 / 9.0).rounded()
+        item.preferredMaximumResolution = CGSize(width: side, height: side)
+        item.preferredPeakBitRate = Self.peakBitRate(forHeight: height)
+    }
+
+    /// Bits per second, comfortably above YouTube's H.264 renditions of that height so it never forces a lower one.
+    private static func peakBitRate(forHeight height: Int) -> Double {
+        switch height {
+        case ...360: return 1_500_000
+        case ...480: return 2_500_000
+        case ...720: return 5_000_000
+        default: return 10_000_000
+        }
+    }
+
+    private func networkChanged() {
+        if !qualityIsManual {
+            applyDefaultQuality()
+        }
+    }
+
+    // MARK: Audio interruptions
+
+    private func audioInterruptionBegan() {
+        wasPlayingBeforeInterruption = isPlaybackActive
+    }
+
+    private func audioInterruptionEnded(shouldResume: Bool) {
+        defer { wasPlayingBeforeInterruption = false }
+        guard shouldResume, wasPlayingBeforeInterruption, currentVideo != nil else { return }
+        play()
+    }
+
+    // MARK: Background and Picture in Picture
+
+    private func pictureInPictureActiveChanged(_ active: Bool) {
+        isPictureInPictureActive = active
+    }
+
+    /// Auto-PiP has to be armed before the app leaves the foreground, so the setting is applied while playing.
+    private func applyAutomaticPictureInPicture() {
+        let wanted = settings.autoPictureInPicture
+        if pictureInPicture.startsAutomaticallyFromInline != wanted {
+            pictureInPicture.startsAutomaticallyFromInline = wanted
+        }
+    }
+
+    private func appDidEnterBackground() {
+        saveProgress(force: true)
+        Task { await library.flush() }
+        guard currentVideo != nil else { return }
+
+        if pictureInPicture.isActive || pictureInPicture.isStarting {
+            return
+        }
+        // With automatic PiP on, the system starts it around now; look again once it had its say.
+        let mayStartPictureInPicture = settings.autoPictureInPicture && pictureInPicture.isPossible && state == .playing
+        if mayStartPictureInPicture {
+            Task { [weak self] in
+                try? await Task.sleep(for: .milliseconds(600))
+                self?.settleBackgroundPlayback()
+            }
+        } else {
+            settleBackgroundPlayback()
+        }
+    }
+
+    /// Background without Picture in Picture: keep the audio going (video detached from its layers) or pause.
+    private func settleBackgroundPlayback() {
+        guard currentVideo != nil, UIApplication.shared.applicationState != .active else { return }
+        if pictureInPicture.isActive || pictureInPicture.isStarting { return }
+        if settings.backgroundPlayback {
+            Self.log.info("background: video detached, audio continues")
+            pictureInPicture.setSurfacesAttached(false)
+            didDetachSurfaces = true
+            // Entering the background with a rendering layer may have paused the player; the viewer did not ask for that.
+            if shouldPlayWhenReady, isItemReady, avPlayer.rate == 0, state != .ended, state != .paused {
+                avPlayer.play()
+            }
+        } else {
+            Self.log.info("background: paused (background playback is off)")
+            pause()
+        }
+    }
+
+    private func appWillEnterForeground() {
+        if didDetachSurfaces {
+            pictureInPicture.setSurfacesAttached(true)
+            didDetachSurfaces = false
+        }
+        syncTimeFromPlayer()
+    }
+
+    // MARK: Now Playing
+
+    private func updateNowPlaying() {
+        guard let video = currentVideo else { return }
+        let playing = state == .playing
+        nowPlaying.update(
+            video: video,
+            duration: duration,
+            elapsed: currentTime,
+            rate: playing ? Double(avPlayer.rate) : 0,
+            isLive: isLive,
+            canPlayNext: canPlayNext
+        )
+    }
+}
+
+// MARK: - Captions
+
+/// Caption cues ordered by start time, with a binary search for the cue showing at a time.
+private struct CueTimeline {
+    private let cues: [CaptionCue]
+
+    init(cues: [CaptionCue]) {
+        self.cues = cues.sorted { $0.start < $1.start }
+    }
+
+    /// The text of the latest-starting cue that covers `time`. Auto-generated captions overlap, so a few earlier cues
+    /// are considered too.
+    func text(at time: Double) -> String? {
+        guard !cues.isEmpty else { return nil }
+        // Index of the first cue that starts after `time`.
+        var low = 0
+        var high = cues.count
+        while low < high {
+            let middle = (low + high) / 2
+            if cues[middle].start <= time {
+                low = middle + 1
+            } else {
+                high = middle
+            }
+        }
+        var index = low - 1
+        var checked = 0
+        while index >= 0, checked < 4 {
+            let cue = cues[index]
+            if time < cue.end {
+                let text = cue.text.trimmingCharacters(in: .whitespacesAndNewlines)
+                return text.isEmpty ? nil : text
+            }
+            index -= 1
+            checked += 1
+        }
+        return nil
+    }
+}
+
+// MARK: - Connectivity
+
+/// Online/offline and Wi-Fi/cellular from `NWPathMonitor`: it picks the default quality cap and lets recovery wait for
+/// the connection.
+@MainActor
+final class PlaybackNetworkMonitor {
+    private(set) var isOnline = true
+    /// Cellular, a personal hotspot, or Low Data Mode.
+    private(set) var isExpensive = false
+    var onChange: (() -> Void)?
+
+    private let monitor = NWPathMonitor()
+
+    init() {
+        monitor.pathUpdateHandler = { [weak self] path in
+            let online = path.status == .satisfied
+            let expensive = path.isExpensive || path.isConstrained
+            Task { @MainActor in self?.update(isOnline: online, isExpensive: expensive) }
+        }
+        monitor.start(queue: DispatchQueue(label: "com.robinjungerich.noslopyt.network-path"))
+    }
+
+    private func update(isOnline: Bool, isExpensive: Bool) {
+        guard self.isOnline != isOnline || self.isExpensive != isExpensive else { return }
+        self.isOnline = isOnline
+        self.isExpensive = isExpensive
+        onChange?()
+    }
+
+    /// Returns once the device is online (immediately when it already is) or the calling task is cancelled.
+    func waitUntilOnline() async {
+        while !isOnline {
+            do {
+                try await Task.sleep(for: .milliseconds(500))
+            } catch {
+                return
+            }
+        }
+    }
 }
