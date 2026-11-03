@@ -193,6 +193,28 @@ public final class LibraryStore {
         markDirty(.watchLater)
     }
 
+    /// Moves the videos at the offsets `source` so that they sit before the video that is at `destination` now (at
+    /// the end for `watchLater.count`), keeping their order among themselves. This is what
+    /// `Array.move(fromOffsets:toOffset:)` does, and what a SwiftUI `onMove` hands over. Offsets outside the list are
+    /// ignored and `destination` is limited to `0...watchLater.count`, so no input can trap; a move that leaves the
+    /// order as it is changes (and writes) nothing.
+    public func moveWatchLater(fromOffsets source: IndexSet, toOffset destination: Int) {
+        let count = watchLater.count
+        // An `IndexSet` holds no negative numbers, so only the upper end needs checking.
+        let moving = source.filter { $0 < count }
+        guard !moving.isEmpty else { return }
+
+        let target = min(max(destination, 0), count)
+        let movingOffsets = Set(moving)
+        var reordered = watchLater.enumerated().filter { !movingOffsets.contains($0.offset) }.map(\.element)
+        // `target` counts the videos that are moving; once they are out of the list it is that many places earlier.
+        reordered.insert(contentsOf: moving.map { watchLater[$0] }, at: target - moving.filter { $0 < target }.count)
+
+        guard reordered.map(\.id) != watchLater.map(\.id) else { return }
+        watchLater = reordered
+        markDirty(.watchLater)
+    }
+
     // MARK: Local playlists
 
     @discardableResult

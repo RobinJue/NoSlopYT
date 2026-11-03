@@ -73,6 +73,7 @@ private struct LikedVideosList: View {
             AccountVideosFooter(model: model, source: source)
         }
         .listStyle(.plain)
+        .miniPlayerClearance()
         .refreshable { await model.reload(from: source) }
     }
 

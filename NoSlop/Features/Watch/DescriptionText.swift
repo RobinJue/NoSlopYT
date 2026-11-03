@@ -31,6 +31,22 @@ nonisolated enum DescriptionText {
         return description.links[index].target
     }
 
+    /// The hosts whose pages the app opens itself: youtube.com with its web, mobile and music addresses, and the
+    /// youtu.be short links.
+    private static let youTubeHosts: Set<String> = [
+        "youtube.com", "www.youtube.com", "m.youtube.com", "music.youtube.com", "youtu.be",
+    ]
+
+    /// True for an http(s) address on one of YouTube's own hosts. Those open inside the app (`handleOpenURL` knows
+    /// videos, channels, `@handle`s, playlists and searches); every other address belongs to the browser.
+    static func isYouTubeLink(_ url: URL) -> Bool {
+        guard let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https",
+              var host = url.host(percentEncoded: false)?.lowercased() else { return false }
+        // "www.youtube.com." is the same host.
+        if host.hasSuffix(".") { host.removeLast() }
+        return youTubeHosts.contains(host)
+    }
+
     /// The `noslop://watch?v=<id>&t=<seconds>` link the app's own URL handling understands; it looks up the video's
     /// title and channel, which a description link does not carry.
     static func watchLink(id: String, startSeconds: Int?) -> URL? {

@@ -82,6 +82,7 @@ struct GoogleSetupGuideView: View {
             .frame(maxWidth: 640, alignment: .leading)
             .frame(maxWidth: .infinity)
         }
+        .miniPlayerClearance()
         .navigationTitle("Set up Google sign-in")
         .navigationBarTitleDisplayMode(.inline)
     }

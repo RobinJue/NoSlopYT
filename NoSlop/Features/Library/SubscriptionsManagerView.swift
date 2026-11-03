@@ -36,6 +36,7 @@ struct SubscriptionsManagerView: View {
                     }
                 }
                 .refreshable { await env.refreshAccount() }
+                .miniPlayerClearance()
             }
         }
         .navigationTitle("Subscriptions")

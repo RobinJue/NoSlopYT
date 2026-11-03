@@ -68,6 +68,7 @@ struct BlockedChannelsView: View {
                         Text("Swipe a channel to show it again.")
                     }
                 }
+                .miniPlayerClearance()
             }
         }
         .navigationTitle("Blocked channels")
@@ -114,6 +115,7 @@ struct BlockedKeywordsView: View {
                 }
             }
         }
+        .miniPlayerClearance()
         .navigationTitle("Blocked keywords")
         .navigationBarTitleDisplayMode(.inline)
     }

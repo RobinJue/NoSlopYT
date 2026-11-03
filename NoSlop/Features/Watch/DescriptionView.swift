@@ -95,7 +95,9 @@ struct DescriptionView: View {
         case .hashtag(let tag):
             env.show(.searchResults(query: DescriptionText.hashtagQuery(tag)))
         case .url(let address):
-            if YouTubeURL.resolveLocally(address) != nil {
+            // Every YouTube address goes through `handleOpenURL`, including the ones that need YouTube to say what
+            // they are (`/@handle`). Other hosts are the browser's.
+            if DescriptionText.isYouTubeLink(address) {
                 open(address)
             } else {
                 return .systemAction(address)

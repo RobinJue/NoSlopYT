@@ -42,6 +42,7 @@ struct LibraryView: View {
                 row("Settings", systemImage: "gearshape", route: .settings)
             }
         }
+        .miniPlayerClearance()
         .navigationTitle("Library")
         .refreshable { await env.refreshAccount() }
         .alert("New playlist", isPresented: $isCreatingPlaylist) {

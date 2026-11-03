@@ -56,6 +56,7 @@ struct DownloadsView: View {
                         Text("Downloaded videos are also in the Files app, in the No Slop folder.")
                     }
                 }
+                .miniPlayerClearance()
             }
         }
         .navigationTitle("Downloads")
@@ -90,6 +91,8 @@ private struct DownloadRowLayout<Trailing: View, Detail: View>: View {
     let trailing: Trailing
     let detail: Detail
 
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
     init(item: DownloadItem, @ViewBuilder trailing: () -> Trailing, @ViewBuilder detail: () -> Detail) {
         self.item = item
         self.trailing = trailing()
@@ -97,14 +100,21 @@ private struct DownloadRowLayout<Trailing: View, Detail: View>: View {
     }
 
     var body: some View {
-        HStack(alignment: .top, spacing: 12) {
+        // Side by side, the thumbnail and the button leave the title a few characters at accessibility text sizes.
+        // There the row is a stack: thumbnail, then the text with the whole width, then the button.
+        let stacked = dynamicTypeSize.isAccessibilitySize
+        let layout = stacked
+            ? AnyLayout(VStackLayout(alignment: .leading, spacing: 10))
+            : AnyLayout(HStackLayout(alignment: .top, spacing: 12))
+
+        layout {
             RemoteImage(url: item.video.displayThumbnails.best(minWidth: 320)?.url, contentMode: .fill)
                 .aspectRatio(16.0 / 9.0, contentMode: .fit)
-                .frame(width: 112)
+                .frame(width: stacked ? Theme.rowThumbnailWidth : 112)
                 .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
 
             VStack(alignment: .leading, spacing: 4) {
-                VideoTitleText(video: item.video, lineLimit: 2)
+                VideoTitleText(video: item.video, lineLimit: stacked ? nil : 2)
                     .font(.subheadline.weight(.medium))
                     .foregroundStyle(.primary)
                 detail
