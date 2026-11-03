@@ -41,8 +41,32 @@ struct RootView: View {
         .onOpenURL { url in
             Task { await env.handleOpenURL(url) }
         }
+        #if DEBUG
+        .task {
+            if let url = LaunchURLArgument.take() {
+                await env.handleOpenURL(url)
+            }
+        }
+        #endif
     }
 }
+
+#if DEBUG
+/// The debug-only `-openURL <url>` launch argument, for simulator checks. `xcrun simctl openurl` shows the iOS 26
+/// "Open in No Slop?" alert for custom schemes; launching with `-openURL 'noslop://route/settings'` runs the same
+/// `AppEnvironment.handleOpenURL` that `.onOpenURL` does, without the alert. Launch arguments reach
+/// `UserDefaults.standard`, the same way `-mockServices YES` does. Compiled out of Release builds.
+private enum LaunchURLArgument {
+    private static var isTaken = false
+
+    /// The URL to open, once per launch: nil on every later call, and when the argument is missing or not a URL.
+    static func take() -> URL? {
+        guard !isTaken else { return nil }
+        isTaken = true
+        return UserDefaults.standard.string(forKey: "openURL").flatMap { URL(string: $0) }
+    }
+}
+#endif
 
 #Preview {
     RootView()
