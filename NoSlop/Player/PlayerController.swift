@@ -482,10 +482,11 @@ final class PlayerController {
         ]
     }
 
-    /// Lets go of the current item: its observers, its stall watch, and (unless `keepingLastFrame`) the item itself.
-    /// With `keepingLastFrame` the player is only paused, because the caller attaches the next item right away and the
-    /// video layers keep showing the last frame until the new item has one, instead of flashing black in between.
-    private func tearDownItem(keepingLastFrame: Bool = false) {
+    /// Lets go of the current item: its observers, its stall watch and, unless the caller attaches the next item right
+    /// away (`replacingRightAway`), the item itself. In that case the player is only paused and never left without an
+    /// item, so Picture in Picture and AirPlay do not see an empty player in between. The video area stays black until
+    /// the new item has its first frame (seen in the simulator).
+    private func tearDownItem(replacingRightAway: Bool = false) {
         itemObservations.removeAll()
         let center = NotificationCenter.default
         for token in itemNotifications {
@@ -502,7 +503,7 @@ final class PlayerController {
         seekToken += 1
         if avPlayer.currentItem != nil {
             avPlayer.pause()
-            if !keepingLastFrame {
+            if !replacingRightAway {
                 avPlayer.replaceCurrentItem(with: nil)
             }
         }
@@ -1309,7 +1310,7 @@ final class PlayerController {
         guard let url = playbackURL(for: info) else { return }
 
         Self.log.info("quality \(self.quality.label, privacy: .public): rebuilding the item at \(position)")
-        tearDownItem(keepingLastFrame: true)
+        tearDownItem(replacingRightAway: true)
         pendingStart = position
         pendingStartIsExact = true
         currentTime = position
