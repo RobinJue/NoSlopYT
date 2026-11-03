@@ -152,6 +152,50 @@ import Testing
         #expect(page.header.ref == ChannelRef(id: "UCSMOQeBJ2RAnuFungnQOxLg", name: "Blender", avatarURL: page.header.avatarURL, handle: "@BlenderOfficial"))
     }
 
+    /// A channel response with just a header whose count row holds `counts` (after the row with the @handle).
+    private func headerResponse(counts: [String]) -> JSON {
+        let parts = JSON.array(counts.map { JSON.object(["text": .object(["content": .string($0)])]) })
+        return [
+            "header": ["pageHeaderRenderer": ["content": ["pageHeaderViewModel": [
+                "title": ["dynamicTextViewModel": ["text": ["content": "Kanal"]]],
+                "metadata": ["contentMetadataViewModel": ["metadataRows": [
+                    ["metadataParts": [["text": ["content": "@kanal"]]]],
+                    ["metadataParts": parts],
+                ]]],
+            ]]]],
+            "metadata": ["channelMetadataRenderer": ["externalId": "UCabc1234567890123456789"]],
+        ]
+    }
+
+    struct HeaderCounts: Sendable, CustomTestStringConvertible {
+        var counts: [String]
+        var subscribers: String?
+        var videos: String?
+        var testDescription: String { counts.joined(separator: " | ") }
+    }
+
+    @Test(arguments: [
+        HeaderCounts(counts: ["1.25M subscribers", "1.5K videos"], subscribers: "1.25M subscribers", videos: "1.5K videos"),
+        // Languages that say "videos" like English but not "subscribers": the other count is the subscribers.
+        HeaderCounts(counts: ["1,25 Mio. Abonnenten", "1.516 Videos"], subscribers: "1,25 Mio. Abonnenten", videos: "1.516 Videos"),
+        HeaderCounts(counts: ["1,25 M de suscriptores", "1,5 mil videos"], subscribers: "1,25 M de suscriptores", videos: "1,5 mil videos"),
+        HeaderCounts(counts: ["1,25 Mln di iscritti", "1,5 Mila video"], subscribers: "1,25 Mln di iscritti", videos: "1,5 Mila video"),
+        // Languages with neither word: YouTube's order, subscribers first.
+        HeaderCounts(counts: ["1,25 M d’abonnés", "1,5 k vidéos"], subscribers: "1,25 M d’abonnés", videos: "1,5 k vidéos"),
+        HeaderCounts(counts: ["チャンネル登録者数 125万人", "動画 1,500本"], subscribers: "チャンネル登録者数 125万人", videos: "動画 1,500本"),
+        // A hidden subscriber count leaves only the videos.
+        HeaderCounts(counts: ["1.5K videos"], subscribers: nil, videos: "1.5K videos"),
+        HeaderCounts(counts: ["1.516 Videos"], subscribers: nil, videos: "1.516 Videos"),
+        HeaderCounts(counts: ["1.25M subscribers"], subscribers: "1.25M subscribers", videos: nil),
+        HeaderCounts(counts: [], subscribers: nil, videos: nil),
+    ])
+    func headerCountsInAnyLanguage(_ example: HeaderCounts) throws {
+        let page = try #require(ChannelParser.parseChannelPage(headerResponse(counts: example.counts)))
+        #expect(page.header.handle == "@kanal")
+        #expect(page.header.subscriberCountText == example.subscribers)
+        #expect(page.header.videoCountText == example.videos)
+    }
+
     // MARK: Items carry the channel of the page
 
     @Test func tabItemsWithoutAChannelGetThePagesChannel() throws {

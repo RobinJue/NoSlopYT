@@ -111,10 +111,21 @@ public enum ChannelParser {
         let counts = parts.filter { !$0.hasPrefix("@") }
         var subscribers = counts.first { text in words(in: text).contains { $0.hasPrefix("subscriber") } }
         var videos = counts.first { text in words(in: text).contains { $0 == "video" || $0 == "videos" } }
-        // A language without these words: "<subscribers> · <videos>" is YouTube's order.
-        if subscribers == nil, videos == nil, counts.count == 2 {
-            subscribers = counts[0]
-            videos = counts[1]
+        // A language without these words: "<subscribers> · <videos>" is YouTube's order. Some languages share one of
+        // them ("Videos" in German and Spanish, "video" in Italian) and not the other ("Abonnenten"): when two counts
+        // are shown and one is known, the other one is the remaining count.
+        if counts.count == 2 {
+            switch (subscribers, videos) {
+            case (nil, nil):
+                subscribers = counts[0]
+                videos = counts[1]
+            case (nil, let known?):
+                subscribers = counts.first { $0 != known }
+            case (let known?, nil):
+                videos = counts.first { $0 != known }
+            default:
+                break
+            }
         }
 
         let avatarNode = model?["image"]?["decoratedAvatarViewModel"]?["avatar"]?["avatarViewModel"]?["image"]
