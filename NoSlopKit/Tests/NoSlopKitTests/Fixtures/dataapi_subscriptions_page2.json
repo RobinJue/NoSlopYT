@@ -1,0 +1,63 @@
+{
+  "kind": "youtube#subscriptionListResponse",
+  "etag": "Qw5eTz9UiOp1AsDfGh3JkLzXcVb",
+  "prevPageToken": "P1",
+  "pageInfo": {
+    "totalResults": 5,
+    "resultsPerPage": 3
+  },
+  "items": [
+    {
+      "kind": "youtube#subscription",
+      "etag": "Pl0kMj9NbHu8VgYc7TfXr6De5Zs",
+      "id": "Tn6QeR2wYxK9sLvH4mDbZ0cUaPjF-8oGiN3EtXyW1VA",
+      "snippet": {
+        "publishedAt": "2022-02-14T07:26:51.904118Z",
+        "title": "Kurzgesagt – In a Nutshell",
+        "description": "Videos explaining things with optimistic nihilism.",
+        "resourceId": {
+          "kind": "youtube#channel",
+          "channelId": "UCsXVk37bltHxD1rDPwtNM8Q"
+        },
+        "channelId": "UC4xKdmAXFh4ACyhpiQ_3qBw",
+        "thumbnails": {
+          "default": {
+            "url": "https://yt3.ggpht.com/ytc/AIdro_kKurzgesagtAvatar=s88-c-k-c0x00ffffff-no-rj"
+          },
+          "medium": {
+            "url": "https://yt3.ggpht.com/ytc/AIdro_kKurzgesagtAvatar=s240-c-k-c0x00ffffff-no-rj"
+          },
+          "high": {
+            "url": "https://yt3.ggpht.com/ytc/AIdro_kKurzgesagtAvatar=s800-c-k-c0x00ffffff-no-rj"
+          }
+        }
+      }
+    },
+    {
+      "kind": "youtube#subscription",
+      "etag": "Hy4sBn7MqWc2XeAr9JdLk1TuFvG",
+      "id": "cW1uJ7Lk4NzS9xQeRdY2oVhTbA6mF-3gPiXtE0wDsGM",
+      "snippet": {
+        "publishedAt": "2023-08-09T12:00:00.000001Z",
+        "title": "Veritasium",
+        "description": "An element of truth - videos about science, education, and anything else I find interesting.",
+        "resourceId": {
+          "kind": "youtube#channel",
+          "channelId": "UCHnyfMqiRRG1u-2MsSQLbXA"
+        },
+        "channelId": "UC4xKdmAXFh4ACyhpiQ_3qBw",
+        "thumbnails": {
+          "default": {
+            "url": "https://yt3.ggpht.com/ytc/AIdro_kVeritasiumAvatar=s88-c-k-c0x00ffffff-no-rj"
+          },
+          "medium": {
+            "url": "https://yt3.ggpht.com/ytc/AIdro_kVeritasiumAvatar=s240-c-k-c0x00ffffff-no-rj"
+          },
+          "high": {
+            "url": "https://yt3.ggpht.com/ytc/AIdro_kVeritasiumAvatar=s800-c-k-c0x00ffffff-no-rj"
+          }
+        }
+      }
+    }
+  ]
+}

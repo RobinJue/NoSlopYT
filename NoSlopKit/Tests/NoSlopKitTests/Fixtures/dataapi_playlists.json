@@ -1,0 +1,80 @@
+{
+  "kind": "youtube#playlistListResponse",
+  "etag": "Gt7FrDeSw3QaZxCvBnMkLoIjUhY",
+  "pageInfo": {
+    "totalResults": 3,
+    "resultsPerPage": 50
+  },
+  "items": [
+    {
+      "kind": "youtube#playlist",
+      "etag": "Ab3CdEfGhIjKlMnOpQrStUvWxYz",
+      "id": "PLx7v0qkWc3tJZ9mXn2RoAyU4DbHsEeFgK",
+      "snippet": {
+        "publishedAt": "2023-01-04T20:02:33Z",
+        "channelId": "UC4xKdmAXFh4ACyhpiQ_3qBw",
+        "title": "Blender references",
+        "description": "Things to study before the next render.",
+        "thumbnails": {
+          "default": { "url": "https://i.ytimg.com/vi/aqz-KE-bpKQ/default.jpg", "width": 120, "height": 90 },
+          "medium": { "url": "https://i.ytimg.com/vi/aqz-KE-bpKQ/mqdefault.jpg", "width": 320, "height": 180 },
+          "high": { "url": "https://i.ytimg.com/vi/aqz-KE-bpKQ/hqdefault.jpg", "width": 480, "height": 360 },
+          "standard": { "url": "https://i.ytimg.com/vi/aqz-KE-bpKQ/sddefault.jpg", "width": 640, "height": 480 },
+          "maxres": { "url": "https://i.ytimg.com/vi/aqz-KE-bpKQ/maxresdefault.jpg", "width": 1280, "height": 720 }
+        },
+        "channelTitle": "Example User",
+        "localized": {
+          "title": "Blender references",
+          "description": "Things to study before the next render."
+        }
+      },
+      "contentDetails": {
+        "itemCount": 5
+      }
+    },
+    {
+      "kind": "youtube#playlist",
+      "etag": "Qr5StUvWxYzAbCdEfGhIjKlMnOp",
+      "id": "PLq2w3e4r5t6y7u8i9o0pAsDfGhJkLzXcV",
+      "snippet": {
+        "publishedAt": "2024-05-21T11:48:02Z",
+        "channelId": "UC4xKdmAXFh4ACyhpiQ_3qBw",
+        "title": "Music to model to",
+        "description": "",
+        "thumbnails": {
+          "default": { "url": "https://i.ytimg.com/vi/jfKfPfyJRdk/default.jpg", "width": 120, "height": 90 },
+          "medium": { "url": "https://i.ytimg.com/vi/jfKfPfyJRdk/mqdefault.jpg", "width": 320, "height": 180 },
+          "high": { "url": "https://i.ytimg.com/vi/jfKfPfyJRdk/hqdefault.jpg", "width": 480, "height": 360 }
+        },
+        "channelTitle": "Example User",
+        "localized": {
+          "title": "Music to model to",
+          "description": ""
+        }
+      },
+      "contentDetails": {
+        "itemCount": 128
+      }
+    },
+    {
+      "kind": "youtube#playlist",
+      "etag": "Uv7WxYzAbCdEfGhIjKlMnOpQrSt",
+      "id": "PLm9n8b7v6c5x4z3a2s1d0fGhJkLqWeRtY",
+      "snippet": {
+        "publishedAt": "2025-09-30T08:15:40Z",
+        "channelId": "UC4xKdmAXFh4ACyhpiQ_3qBw",
+        "title": "Empty for now",
+        "description": "",
+        "thumbnails": {},
+        "channelTitle": "Example User",
+        "localized": {
+          "title": "Empty for now",
+          "description": ""
+        }
+      },
+      "contentDetails": {
+        "itemCount": 0
+      }
+    }
+  ]
+}
