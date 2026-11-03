@@ -322,8 +322,10 @@ enum BrowseJSONEdit {
     }
 
     @Test(arguments: browseFixtures)
-    func everyParserSurvivesEveryBrowseFixture(name: String) throws {
-        runEveryParser(on: try Fixture.json(name))
+    func everyParserSurvivesEveryBrowseFixture(name: String) async throws {
+        try await heavyWork {
+            runEveryParser(on: try Fixture.json(name))
+        }
     }
 
     @Test(arguments: unrelatedFixtures)
@@ -384,13 +386,18 @@ enum BrowseJSONEdit {
     }
 
     @Test(arguments: browseFixtures)
-    func blankedSubtreesNeverCrashAndNeverAddItems(name: String) throws {
-        let json = try Fixture.json(name)
-        let baseline = ItemParser.items(in: json).count
-        for (modulo, remainder) in [(7, 3), (19, 0), (43, 11)] {
-            let damaged = BrowseJSONEdit.nullingNodes(in: json, modulo: modulo, remainder: remainder)
-            runEveryParser(on: damaged)
-            #expect(ItemParser.items(in: damaged).count <= baseline, "\(name) \(modulo)/\(remainder)")
+    func blankedSubtreesNeverCrashAndNeverAddItems(name: String) async throws {
+        let counts = try await heavyWork {
+            let json = try Fixture.json(name)
+            let baseline = ItemParser.items(in: json).count
+            return [(7, 3), (19, 0), (43, 11)].map { modulo, remainder -> (baseline: Int, damaged: Int, label: String) in
+                let damaged = BrowseJSONEdit.nullingNodes(in: json, modulo: modulo, remainder: remainder)
+                runEveryParser(on: damaged)
+                return (baseline, ItemParser.items(in: damaged).count, "\(name) \(modulo)/\(remainder)")
+            }
+        }
+        for count in counts {
+            #expect(count.damaged <= count.baseline, "\(count.label)")
         }
     }
 

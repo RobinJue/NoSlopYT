@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 
 /// Builds the on-device "For you" feed from watch history, related videos and fresh subscription uploads.
 ///
@@ -22,7 +23,7 @@ public actor HomeFeedService: HomeFeedProviding {
 
     private let youTube: any YouTubeService
     private let maxSeeds: Int
-    private let fetchTimeout: Duration
+    private let deadline: FetchDeadline
     private let now: @Sendable () -> Date
 
     public init(youTube: any YouTubeService, maxSeeds: Int = 6) {
@@ -31,9 +32,14 @@ public actor HomeFeedService: HomeFeedProviding {
 
     /// Tests choose how long to wait for the watch pages and the clock.
     init(youTube: any YouTubeService, maxSeeds: Int, fetchTimeout: Duration, now: @escaping @Sendable () -> Date) {
+        self.init(youTube: youTube, maxSeeds: maxSeeds, deadline: .after(fetchTimeout), now: now)
+    }
+
+    /// Tests that must not depend on how fast the machine is decide themselves when the time is up.
+    init(youTube: any YouTubeService, maxSeeds: Int, deadline: FetchDeadline, now: @escaping @Sendable () -> Date) {
         self.youTube = youTube
         self.maxSeeds = max(0, maxSeeds)
-        self.fetchTimeout = fetchTimeout
+        self.deadline = deadline
         self.now = now
     }
 
@@ -73,36 +79,14 @@ public actor HomeFeedService: HomeFeedProviding {
 
     /// The first related videos of every seed, in the order of the seeds. Seeds that fail or do not answer within
     /// `fetchTimeout` give an empty list.
+    ///
+    /// The feed is handed over the moment the last seed has answered or the deadline has passed, whichever comes first,
+    /// and a seed that is still busy then is cancelled and left behind. It is not waited for: a structured task group
+    /// would wait for its children to finish, which makes the deadline depend on every seed noticing its cancellation
+    /// (a request awaiting a shared task does not).
     private func relatedLists(for seedIDs: [String]) async -> [[VideoSummary]] {
         guard !seedIDs.isEmpty else { return [] }
-        let youTube = youTube
-        let timeout = fetchTimeout
-        let limit = Self.relatedPerSeed
-
-        return await withTaskGroup(of: (index: Int, related: [VideoSummary])?.self) { group in
-            for (index, id) in seedIDs.enumerated() {
-                group.addTask {
-                    let details = try? await youTube.videoDetails(id: id)
-                    return (index, Array((details?.related ?? []).prefix(limit)))
-                }
-            }
-            // A nil result is the deadline passing.
-            group.addTask {
-                try? await Task.sleep(for: timeout)
-                return nil
-            }
-
-            var lists = [[VideoSummary]](repeating: [], count: seedIDs.count)
-            var waiting = seedIDs.count
-            while waiting > 0, let result = await group.next() {
-                guard let (index, related) = result else { break }
-                lists[index] = related
-                waiting -= 1
-            }
-            // Stragglers (and the timer, when everything answered in time) are cancelled.
-            group.cancelAll()
-            return lists
-        }
+        return await RelatedFetch.run(seedIDs: seedIDs, youTube: youTube, limit: Self.relatedPerSeed, deadline: deadline)
     }
 
     // MARK: Composing the feed
@@ -149,5 +133,134 @@ public actor HomeFeedService: HomeFeedProviding {
     private static func isFresh(_ video: VideoSummary, now: Date) -> Bool {
         guard let publishedAt = video.publishedAt else { return false }
         return now.timeIntervalSince(publishedAt) <= freshnessWindow
+    }
+}
+
+// MARK: - Fetching the seeds
+
+/// When a fetch gives up on the seeds that have not answered.
+enum FetchDeadline: Sendable {
+    /// After this long.
+    case after(Duration)
+    /// When this returns. Tests use it to decide the moment themselves instead of racing a clock.
+    case when(@Sendable () async -> Void)
+}
+
+/// One fetch of the related videos of a few seeds, raced against a deadline.
+///
+/// Every seed is a task of its own, and so is the deadline. The waiting caller is resumed exactly once, by whichever
+/// comes first: the last seed answering or the deadline passing. Whatever is still running then (including a seed
+/// that does not react to cancellation) is cancelled and left behind: it is not waited for, and what it delivers
+/// later is ignored. A caller that is cancelled stops waiting at once.
+private final class RelatedFetch: Sendable {
+    private struct State {
+        var lists: [[VideoSummary]]
+        var remaining: Int
+        var continuation: CheckedContinuation<[[VideoSummary]], Never>?
+        /// The seeds and the deadline, to be cancelled when the fetch is over.
+        var tasks: [Task<Void, Never>] = []
+        var isFinished = false
+    }
+
+    /// What has to happen once the fetch is over, done after the lock is released.
+    private struct Completion {
+        var continuation: CheckedContinuation<[[VideoSummary]], Never>?
+        var lists: [[VideoSummary]]
+        var tasks: [Task<Void, Never>]
+
+        func perform() {
+            for task in tasks { task.cancel() }
+            continuation?.resume(returning: lists)
+        }
+    }
+
+    private let state: Mutex<State>
+
+    private init(seedCount: Int) {
+        state = Mutex(State(lists: Array(repeating: [], count: seedCount), remaining: seedCount))
+    }
+
+    /// The first `limit` related videos of each seed, in the order of the seeds; empty for a seed that failed or did
+    /// not answer before the deadline.
+    static func run(
+        seedIDs: [String], youTube: any YouTubeService, limit: Int, deadline: FetchDeadline
+    ) async -> [[VideoSummary]] {
+        let fetch = RelatedFetch(seedCount: seedIDs.count)
+        return await withTaskCancellationHandler {
+            await withCheckedContinuation { (continuation: CheckedContinuation<[[VideoSummary]], Never>) in
+                fetch.start(seedIDs: seedIDs, youTube: youTube, limit: limit, deadline: deadline, continuation: continuation)
+            }
+        } onCancel: {
+            // The caller gave up: nobody is waiting for the seeds any more.
+            fetch.finish()
+        }
+    }
+
+    private func start(
+        seedIDs: [String], youTube: any YouTubeService, limit: Int, deadline: FetchDeadline,
+        continuation: CheckedContinuation<[[VideoSummary]], Never>
+    ) {
+        // A caller that was cancelled before it got here has nothing to wait for.
+        let alreadyFinished = state.withLock { state -> [[VideoSummary]]? in
+            if state.isFinished { return state.lists }
+            state.continuation = continuation
+            return nil
+        }
+        if let alreadyFinished {
+            continuation.resume(returning: alreadyFinished)
+            return
+        }
+
+        var tasks = seedIDs.enumerated().map { index, id in
+            Task {
+                let details = try? await youTube.videoDetails(id: id)
+                self.record(Array((details?.related ?? []).prefix(limit)), at: index)
+            }
+        }
+        tasks.append(Task {
+            switch deadline {
+            case .after(let timeout):
+                // Cancelled when the fetch is over before the time is up: then there is nothing left to do.
+                guard (try? await Task.sleep(for: timeout)) != nil else { return }
+            case .when(let timeIsUp):
+                await timeIsUp()
+            }
+            self.finish()
+        })
+
+        // Finishing cancels what runs, so it has to know it; when it already happened, cancel it here.
+        let finishedMeanwhile = state.withLock { state -> Bool in
+            if state.isFinished { return true }
+            state.tasks = tasks
+            return false
+        }
+        if finishedMeanwhile {
+            for task in tasks { task.cancel() }
+        }
+    }
+
+    private func record(_ related: [VideoSummary], at index: Int) {
+        let completion = state.withLock { state -> Completion? in
+            guard !state.isFinished else { return nil }  // too late: the feed has been handed over
+            state.lists[index] = related
+            state.remaining -= 1
+            return state.remaining == 0 ? Self.complete(&state) : nil
+        }
+        completion?.perform()
+    }
+
+    private func finish() {
+        let completion = state.withLock { Self.complete(&$0) }
+        completion?.perform()
+    }
+
+    /// Marks the fetch over and takes what has to be done about it; nil when it was over already.
+    private static func complete(_ state: inout State) -> Completion? {
+        guard !state.isFinished else { return nil }
+        state.isFinished = true
+        let completion = Completion(continuation: state.continuation, lists: state.lists, tasks: state.tasks)
+        state.continuation = nil
+        state.tasks = []
+        return completion
     }
 }

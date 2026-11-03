@@ -32,25 +32,68 @@ private func makeEntry(
     )
 }
 
+/// Suspends whoever waits for it until it is opened. Unlike `Task.sleep` it takes no notice of cancellation, which is
+/// how a request that is waiting for something shared (a visitor token being fetched) behaves.
+private final class UncancellableGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var waiting: [CheckedContinuation<Void, Never>] = []
+    private var isOpen = false
+
+    func wait() async {
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            let resumeNow = lock.withLock { () -> Bool in
+                if isOpen { return true }
+                waiting.append(continuation)
+                return false
+            }
+            if resumeNow { continuation.resume() }
+        }
+    }
+
+    func open() {
+        let continuations = lock.withLock { () -> [CheckedContinuation<Void, Never>] in
+            isOpen = true
+            defer { waiting = [] }
+            return waiting
+        }
+        for continuation in continuations { continuation.resume() }
+    }
+}
+
 /// A `YouTubeService` that only knows watch pages: `related` lists the related videos of each seed.
 private actor RelatedSource: YouTubeService {
     private let related: [String: [VideoSummary]]
     private let failing: Set<String>
     private let hanging: Set<String>
+    private let stuck: Set<String>
+    private let gate: UncancellableGate
+    private let rendezvous: Int?
     private let delay: Duration
     private(set) var requested: [String] = []
+    /// The seeds that were cancelled while they hung, and the ones that ran to the end.
+    private(set) var cancelled: [String] = []
+    private(set) var finished: [String] = []
     private var inFlight = 0
     private(set) var maxInFlight = 0
 
+    /// `hanging` seeds sleep for an hour but notice cancellation; `stuck` seeds wait for `gate` and do not. With
+    /// `rendezvous`, no seed answers before that many are in flight at once (a test of concurrency that needs no
+    /// timing: sequential fetching would never get there).
     init(
         related: [String: [VideoSummary]] = [:],
         failing: Set<String> = [],
         hanging: Set<String> = [],
+        stuck: Set<String> = [],
+        gate: UncancellableGate = UncancellableGate(),
+        rendezvous: Int? = nil,
         delay: Duration = .zero
     ) {
         self.related = related
         self.failing = failing
         self.hanging = hanging
+        self.stuck = stuck
+        self.gate = gate
+        self.rendezvous = rendezvous
         self.delay = delay
     }
 
@@ -58,9 +101,20 @@ private actor RelatedSource: YouTubeService {
         requested.append(id)
         inFlight += 1
         maxInFlight = max(maxInFlight, inFlight)
-        defer { inFlight -= 1 }
+        defer {
+            inFlight -= 1
+            finished.append(id)
+        }
         if hanging.contains(id) {
-            do { try await Task.sleep(for: .seconds(3_600)) } catch { throw NoSlopError.cancelled }
+            do { try await Task.sleep(for: .seconds(3_600)) } catch {
+                cancelled.append(id)
+                throw NoSlopError.cancelled
+            }
+        }
+        if stuck.contains(id) { await gate.wait() }
+        if let rendezvous {
+            if inFlight >= rendezvous { gate.open() }
+            await gate.wait()
         }
         if delay > .zero { try await Task.sleep(for: delay) }
         if failing.contains(id) { throw NoSlopError.network("down") }
@@ -82,8 +136,28 @@ private actor RelatedSource: YouTubeService {
     func resolve(url: URL) async throws -> ResolvedURL? { throw NoSlopError.notImplemented("RelatedSource.resolve") }
 }
 
+/// Polls `condition` every 5 ms until it holds (true) or ten seconds have passed (false).
+private func eventually(_ condition: @Sendable () async -> Bool) async -> Bool {
+    let deadline = ContinuousClock.now + .seconds(10)
+    while ContinuousClock.now < deadline {
+        if await condition() { return true }
+        try? await Task.sleep(for: .milliseconds(5))
+    }
+    return await condition()
+}
+
 private func makeService(_ source: RelatedSource, maxSeeds: Int = 6, timeout: Duration = .seconds(10)) -> HomeFeedService {
     HomeFeedService(youTube: source, maxSeeds: maxSeeds, fetchTimeout: timeout, now: { now })
+}
+
+/// A service whose deadline passes when the test opens `timeIsUp`, however fast or slow the machine is.
+private func makeService(_ source: RelatedSource, timeIsUp: UncancellableGate) -> HomeFeedService {
+    HomeFeedService(youTube: source, maxSeeds: 6, deadline: .when { await timeIsUp.wait() }, now: { now })
+}
+
+/// Lets everything that is ready to run (a seed that has just answered still has to hand its answer over) run first.
+private func settle() async {
+    for _ in 0..<50 { await Task.yield() }
 }
 
 @Suite struct HomeFeedServiceTests {
@@ -203,8 +277,11 @@ private func makeService(_ source: RelatedSource, maxSeeds: Int = 6, timeout: Du
         #expect(feed.forYou.map(\.id) == ["s1"])
     }
 
-    @Test func seedsAreFetchedConcurrently() async {
-        let source = RelatedSource(related: [:], delay: .milliseconds(150))
+    @Test(.timeLimit(.minutes(1)))
+    func seedsAreFetchedConcurrently() async {
+        // No seed answers before all five are in flight, so a service that asked one after the other would wait for
+        // ever (until the time limit) instead of passing by luck of timing.
+        let source = RelatedSource(related: [:], rendezvous: 5)
         let service = makeService(source)
 
         _ = await service.homeFeed(history: (1...5).map { makeEntry("h\($0)") }, subscriptionVideos: [])
@@ -221,16 +298,117 @@ private func makeService(_ source: RelatedSource, maxSeeds: Int = 6, timeout: Du
         #expect(feed.forYou.map(\.id) == ["c", "d"])
     }
 
-    @Test func aSeedThatNeverAnswersDoesNotHoldTheFeedBack() async {
-        let source = RelatedSource(related: ["h2": [makeVideo("c")]], hanging: ["h1"])
-        let service = makeService(source, timeout: .milliseconds(300))
+    // MARK: The deadline
+    //
+    // What these tests prove is that the feed is not held back by a seed that never answers, not how fast the machine
+    // is: a test run executes hundreds of tests at once, often next to other builds. So only one test races the real
+    // clock, and it has a seed that never answers and nothing else to lose (its bounds are generous). The tests that are
+    // about which answers made it use a deadline that the test itself lets pass once the others have answered.
+    // A regression (waiting for the hanging seed) takes an hour, which the time limit turns into a failure after a minute.
+
+    @Test(.timeLimit(.minutes(1)))
+    func aSeedThatNeverAnswersDoesNotHoldTheFeedBack() async {
+        let source = RelatedSource(hanging: ["h1"])
+        let service = makeService(source, timeout: .milliseconds(100))
+        let subscriptions = [makeVideo("s1", daysAgo: 30)]
 
         let started = ContinuousClock.now
-        let feed = await service.homeFeed(history: [makeEntry("h1"), makeEntry("h2")], subscriptionVideos: [])
+        let feed = await service.homeFeed(history: [makeEntry("h1")], subscriptionVideos: subscriptions)
         let elapsed = ContinuousClock.now - started
 
+        // Nothing was learned about the seed, so "For you" is what it is without one: the subscriptions.
+        #expect(feed.forYou.map(\.id) == ["s1"])
+        #expect(elapsed < .seconds(30))
+        // The seed that was given up on is cancelled rather than left running.
+        #expect(await eventually { await source.cancelled == ["h1"] })
+    }
+
+    @Test(.timeLimit(.minutes(1)))
+    func theAnswersThatCameInTimeAreKeptWhenAnotherSeedNeverAnswers() async {
+        let source = RelatedSource(related: ["h2": [makeVideo("c")]], hanging: ["h1"])
+        let timeIsUp = UncancellableGate()
+        let service = makeService(source, timeIsUp: timeIsUp)
+
+        let call = Task { await service.homeFeed(history: [makeEntry("h1"), makeEntry("h2")], subscriptionVideos: []) }
+        #expect(await eventually { await source.finished == ["h2"] })
+        await settle()
+        timeIsUp.open()
+        let feed = await call.value
+
         #expect(feed.forYou.map(\.id) == ["c"])
-        #expect(elapsed < .seconds(5))
+        #expect(await eventually { await source.cancelled == ["h1"] })
+    }
+
+    @Test(.timeLimit(.minutes(1)))
+    func aSeedThatIgnoresCancellationDoesNotHoldTheFeedBackEither() async {
+        // A request that waits for something shared (a visitor token being fetched) does not react to cancellation.
+        let stuck = UncancellableGate()
+        let source = RelatedSource(related: ["h1": [makeVideo("late")], "h2": [makeVideo("c")]], stuck: ["h1"], gate: stuck)
+        let timeIsUp = UncancellableGate()
+        let service = makeService(source, timeIsUp: timeIsUp)
+        let history = [makeEntry("h1"), makeEntry("h2")]
+        // If the service did wait for the stuck seed, the test would hang for ever; this makes it fail instead.
+        let watchdog = Task {
+            try? await Task.sleep(for: .seconds(20))
+            stuck.open()
+        }
+        defer { watchdog.cancel() }
+
+        let call = Task { await service.homeFeed(history: history, subscriptionVideos: []) }
+        #expect(await eventually { await source.finished == ["h2"] })
+        await settle()
+        timeIsUp.open()
+        let first = await call.value
+
+        #expect(first.forYou.map(\.id) == ["c"])
+        #expect(await source.finished == ["h2"], "the stuck seed is still stuck")
+
+        // When it finally answers, nothing happens to the feed that was handed over (and nothing resumes twice).
+        stuck.open()
+        #expect(await eventually { await source.finished.sorted() == ["h1", "h2"] })
+        #expect(first.forYou.map(\.id) == ["c"])
+        // The next feed sees the answer that came too late for the first.
+        let second = await makeService(source, timeout: .seconds(3_600)).homeFeed(history: history, subscriptionVideos: [])
+        #expect(second.forYou.map(\.id) == ["late", "c"])
+    }
+
+    @Test(.timeLimit(.minutes(1)))
+    func theDeadlineDoesNotHoldBackAFeedWhoseSeedsAllAnswered() async {
+        let source = RelatedSource(related: ["h1": [makeVideo("a")], "h2": [makeVideo("b")]])
+        let service = makeService(source, timeout: .seconds(3_600))
+
+        let feed = await service.homeFeed(history: [makeEntry("h1"), makeEntry("h2")], subscriptionVideos: [])
+
+        #expect(feed.forYou.map(\.id) == ["a", "b"])
+    }
+
+    @Test(.timeLimit(.minutes(1)))
+    func cancellingTheCallerEndsTheWaitAtOnceAndCancelsTheSeeds() async {
+        let source = RelatedSource(hanging: ["h1"])
+        let service = makeService(source, timeout: .seconds(3_600))
+        let subscriptions = [makeVideo("s1", daysAgo: 30)]
+
+        let call = Task { await service.homeFeed(history: [makeEntry("h1")], subscriptionVideos: subscriptions) }
+        #expect(await eventually { await source.requested == ["h1"] })
+        call.cancel()
+        let feed = await call.value
+
+        // Nothing was learned about the seed, so the feed is what it is without any: the subscriptions.
+        #expect(feed.forYou.map(\.id) == ["s1"])
+        #expect(await eventually { await source.cancelled == ["h1"] })
+    }
+
+    @Test(.timeLimit(.minutes(1)))
+    func aCallerThatIsAlreadyCancelledStillGetsAFeed() async {
+        let source = RelatedSource(hanging: ["h1"])
+        let service = makeService(source, timeout: .seconds(3_600))
+        let call = Task {
+            while !Task.isCancelled { await Task.yield() }
+            return await service.homeFeed(history: [makeEntry("h1")], subscriptionVideos: [makeVideo("s1", daysAgo: 30)])
+        }
+        call.cancel()
+        let feed = await call.value
+        #expect(feed.forYou.map(\.id) == ["s1"])
     }
 
     // MARK: Composition

@@ -7,7 +7,7 @@ import Testing
 
 /// Real YouTube, real network. Opt in with `NOSLOP_LIVE=1 swift test --package-path NoSlopKit --filter Live`.
 @MainActor
-@Suite(.enabled(if: ProcessInfo.processInfo.environment["NOSLOP_LIVE"] == "1")) struct LiveDownloadTests {
+@Suite(.enabled(if: ProcessInfo.processInfo.environment["NOSLOP_LIVE"] == "1"), .limitsMediaExports) struct LiveDownloadTests {
     @Test func downloadsMeAtTheZooAt144p() async throws {
         let directory = try DownloadTestDirectory.make()
         defer { directory.remove() }

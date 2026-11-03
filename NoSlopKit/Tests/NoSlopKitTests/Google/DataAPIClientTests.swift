@@ -123,6 +123,7 @@ private struct RealAuthRig {
             .google(subscriptionID: "cW1uJ7Lk4NzS9xQeRdY2oVhTbA6mF-3gPiXtE0wDsGM"),
         ])
         // The channel is the subscribed-to channel (resourceId), not the user's own (snippet.channelId); the avatar is the default thumbnail.
+        try #require(channels.count == 5)
         #expect(channels[1] == SubscribedChannel(
             id: "UCSMOQeBJ2RAnuFungnQOxLg",
             name: "Blender",
@@ -186,6 +187,7 @@ private struct RealAuthRig {
 
         #expect(channels.map(\.id) == ["UC1", "UC5"])
         // No "default" thumbnail: the smallest one that exists is used. No thumbnails at all: no avatar.
+        try #require(channels.count == 2)
         #expect(channels[0].avatarURL == URL(string: "https://x/m.jpg"))
         #expect(channels[1].avatarURL == nil)
         #expect(channels[1].subscribedAt == nil)
@@ -297,6 +299,7 @@ private struct RealAuthRig {
         #expect(playlists.map(\.id) == ["PLx7v0qkWc3tJZ9mXn2RoAyU4DbHsEeFgK", "PLq2w3e4r5t6y7u8i9o0pAsDfGhJkLzXcV", "PLm9n8b7v6c5x4z3a2s1d0fGhJkLqWeRtY"])
         #expect(playlists.map(\.title) == ["Blender references", "Music to model to", "Empty for now"])
         #expect(playlists.map(\.videoCount) == [5, 128, 0])
+        try #require(playlists.count == 3)
         #expect(playlists[0].channel == ChannelRef(id: "UC4xKdmAXFh4ACyhpiQ_3qBw", name: "Example User"))
         #expect(playlists[0].thumbnails.map(\.width) == [120, 320, 480, 640, 1280], "ascending width")
         #expect(playlists[0].thumbnails.first?.url.absoluteString == "https://i.ytimg.com/vi/aqz-KE-bpKQ/default.jpg")
@@ -312,6 +315,7 @@ private struct RealAuthRig {
         let playlists = try await rig.client.myPlaylists()
 
         #expect(playlists.map(\.id) == ["PL1", "PL2"])
+        try #require(playlists.count == 2)
         #expect(playlists[1].channel == nil)
         let base = apiBase + "playlists?part=snippet,contentDetails&mine=true&maxResults=50"
         #expect(rig.http.requests.map(urlString) == [base, base + "&pageToken=T2"])
@@ -327,6 +331,7 @@ private struct RealAuthRig {
         #expect(page.items.map(\.id) == ["aqz-KE-bpKQ", "7pPUE6cGFwI", "jNQXAC9IVRw"], "Private video and Deleted video are dropped")
         #expect(page.continuation == "EAAaBlBUOkNESQ")
 
+        try #require(page.items.count == 3)
         let first = page.items[0]
         #expect(first.title == "Big Buck Bunny 60fps 4K - Official Blender Foundation Short Film")
         #expect(first.channel == ChannelRef(id: "UCSMOQeBJ2RAnuFungnQOxLg", name: "Blender"), "the video's owner, not the playlist owner")
@@ -359,6 +364,7 @@ private struct RealAuthRig {
         """#))
         let page = try await rig.client.playlistItems(playlistID: "PL1", pageToken: nil)
         #expect(page.items.map(\.id) == ["real1", "viaResource", "orphan"])
+        try #require(page.items.count == 3)
         #expect(page.items[2].channel == nil)
     }
 
@@ -372,6 +378,7 @@ private struct RealAuthRig {
         #expect(page.items.map(\.id) == ["mHrHLqQj7Ts", "dQw4w9WgXcQ", "jfKfPfyJRdk", "PrEm1erE_42"])
         #expect(page.continuation == "CDIQAA")
 
+        try #require(page.items.count == 4)
         let making = page.items[0]
         #expect(making.title == "Making of: The Blender Open Movies Exhibition")
         #expect(making.channel == ChannelRef(id: "UCSMOQeBJ2RAnuFungnQOxLg", name: "Blender"))
@@ -419,6 +426,7 @@ private struct RealAuthRig {
         """#))
         let page = try await rig.client.likedVideos(pageToken: nil)
         #expect(page.items.map(\.id) == ["bare", "weird"])
+        try #require(page.items.count == 2)
         let weird = page.items[1]
         #expect(weird.title == "Weird")
         #expect(weird.channel == ChannelRef(id: "UC1", name: ""))
@@ -592,6 +600,7 @@ private struct RealAuthRig {
 
         #expect(channels.map(\.name) == ["Kurzgesagt \u{2013} In a Nutshell", "Veritasium"])
         #expect(rig.http.requests.map(urlString) == [subscriptionsURL, "https://oauth2.googleapis.com/token", subscriptionsURL])
+        try #require(rig.http.requests.count == 3)
         #expect(rig.http.requests[0].value(forHTTPHeaderField: "Authorization") == "Bearer old-at")
         #expect(rig.http.requests[2].value(forHTTPHeaderField: "Authorization") == "Bearer new-at")
         #expect(try rig.store.load()?.tokens.accessToken == "new-at", "the refreshed token is kept for the next call")
@@ -640,7 +649,7 @@ private struct RealAuthRig {
         #expect(try await rig.client.subscribe(channelID: "UC1") == "SUB")
 
         let posts = rig.apiRequests
-        #expect(posts.count == 2)
+        try #require(posts.count == 2)
         #expect(posts[0].httpBody == posts[1].httpBody)
         #expect(posts[0].httpBody?.isEmpty == false)
     }
