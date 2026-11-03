@@ -43,27 +43,59 @@ struct RootView: View {
         }
         #if DEBUG
         .task {
-            if let url = LaunchURLArgument.take() {
-                await env.handleOpenURL(url)
-            }
+            await LaunchURLArgument.openAll(in: env)
         }
         #endif
     }
 }
 
 #if DEBUG
-/// The debug-only `-openURL <url>` launch argument, for simulator checks. `xcrun simctl openurl` shows the iOS 26
+/// The debug-only `-openURL <links>` launch argument, for simulator checks. `xcrun simctl openurl` shows the iOS 26
 /// "Open in No Slop?" alert for custom schemes; launching with `-openURL 'noslop://route/settings'` runs the same
-/// `AppEnvironment.handleOpenURL` that `.onOpenURL` does, without the alert. Launch arguments reach
-/// `UserDefaults.standard`, the same way `-mockServices YES` does. Compiled out of Release builds.
+/// `AppEnvironment.handleOpenURL` that `.onOpenURL` does, without the alert.
+///
+/// Several links go in one argument, separated by " | " (space, pipe, space), and are handled in order:
+/// `-openURL 'noslop://watch?v=aqz-KE-bpKQ | noslop://tab/library'`. The first runs as soon as the root view appears;
+/// each following one runs `linkInterval` after the one before it was handled, so the screen has settled (the player
+/// expanded, a tab switched) when the next link arrives. A link that needs a space or a pipe of its own writes it
+/// percent-encoded (`%20`, `%7C`), as any URL does. A piece that is not a URL is skipped.
+///
+/// Launch arguments reach `UserDefaults.standard`, the same way `-mockServices YES` does. Compiled out of Release builds.
 private enum LaunchURLArgument {
     private static var isTaken = false
 
-    /// The URL to open, once per launch: nil on every later call, and when the argument is missing or not a URL.
-    static func take() -> URL? {
-        guard !isTaken else { return nil }
+    /// Between two links in the argument.
+    static let separator = " | "
+    /// From one link having been handled to the next one starting.
+    static let linkInterval: Duration = .seconds(1.5)
+
+    /// The links to open, in order, once per launch: empty on every later call, and when the argument is missing.
+    static func take() -> [URL] {
+        guard !isTaken else { return [] }
         isTaken = true
-        return UserDefaults.standard.string(forKey: "openURL").flatMap { URL(string: $0) }
+        return links(in: UserDefaults.standard.string(forKey: "openURL"))
+    }
+
+    /// `argument` cut at `separator`; the pieces that are not URLs (an empty one, say) are dropped. An argument
+    /// without a separator is one piece, so a single link goes to `URL(string:)` exactly as written.
+    static func links(in argument: String?) -> [URL] {
+        guard let argument else { return [] }
+        return argument.components(separatedBy: separator).compactMap { URL(string: $0) }
+    }
+
+    /// Opens the links of the launch argument through `env`, the way `.onOpenURL` does. Stops when the task is
+    /// cancelled (the root view going away); the links that have not run yet are dropped with it.
+    static func openAll(in env: AppEnvironment) async {
+        for (index, url) in take().enumerated() {
+            if index > 0 {
+                do {
+                    try await Task.sleep(for: linkInterval)
+                } catch {
+                    return
+                }
+            }
+            await env.handleOpenURL(url)
+        }
     }
 }
 #endif
