@@ -1,58 +1,154 @@
 import NoSlopKit
 import SwiftUI
 
-/// PLACEHOLDER (Task 1B). Task 10 owns this file and replaces it with the real mini player (live video surface,
-/// title, channel, play/pause, close). The type name and the initializer are final.
+/// The minimized player: a 64 pt bar with a live (tiny) video surface, the title and channel, play/pause and close.
+/// Tapping the bar, or swiping it up, expands the player again. The overlay container pins it above the tab bar.
 struct MiniPlayerView: View {
     @Environment(AppEnvironment.self) private var env
 
+    static let height: CGFloat = 64
+    private static let cornerRadius: CGFloat = 16
+
     var body: some View {
         let player = env.player
-        HStack(spacing: Theme.padding) {
+
+        HStack(spacing: 0) {
             Button {
                 player.expand()
             } label: {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(title(for: player.currentVideo))
-                        .font(.subheadline.weight(.medium))
-                        .foregroundStyle(.primary)
-                        .lineLimit(1)
-                    Text("Mini player placeholder")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
+                HStack(spacing: 10) {
+                    surface(player)
+                    titles(player)
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .accessibilityLabel(accessibilityTitle(player))
+            .accessibilityHint("Opens the player")
 
             Button {
                 player.togglePlayPause()
             } label: {
-                Image(systemName: player.state == .playing ? "pause.fill" : "play.fill")
-                    .font(.title3)
-                    .frame(width: 36, height: 36)
+                Image(systemName: playPauseIcon(player))
+                    .font(.system(size: 20, weight: .semibold))
+                    .frame(width: 44, height: 44)
+                    .contentShape(Rectangle())
             }
-            .accessibilityLabel(player.state == .playing ? "Pause" : "Play")
+            .accessibilityLabel(player.isPlaybackActive ? "Pause" : (player.state == .ended ? "Replay" : "Play"))
 
             Button {
                 player.close()
             } label: {
                 Image(systemName: "xmark")
-                    .font(.title3)
-                    .frame(width: 36, height: 36)
+                    .font(.system(size: 17, weight: .semibold))
+                    .frame(width: 44, height: 44)
+                    .contentShape(Rectangle())
             }
             .accessibilityLabel("Close player")
         }
         .foregroundStyle(.primary)
-        .padding(.horizontal, Theme.padding)
-        .padding(.vertical, 8)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: Theme.cornerRadius, style: .continuous))
+        .padding(.leading, 6)
+        .padding(.trailing, 2)
+        .frame(height: Self.height)
+        .overlay(alignment: .bottom) {
+            progressLine(player)
+        }
+        .clipShape(RoundedRectangle(cornerRadius: Self.cornerRadius, style: .continuous))
+        .modifier(MiniPlayerBackground(cornerRadius: Self.cornerRadius))
+        .shadow(color: .black.opacity(0.16), radius: 8, y: 2)
+        .gesture(
+            DragGesture(minimumDistance: 16)
+                .onEnded { value in
+                    if value.translation.height < -24 {
+                        player.expand()
+                    }
+                }
+        )
     }
 
-    private func title(for video: VideoSummary?) -> String {
-        guard let video else { return "" }
-        return video.title.isEmpty ? video.id : video.title
+    // MARK: Pieces
+
+    private func surface(_ player: PlayerController) -> some View {
+        ZStack {
+            Color.black
+            if let video = player.currentVideo {
+                RemoteImage(url: video.displayThumbnails.best(minWidth: 320)?.url, contentMode: .fill)
+                    .opacity(player.showsPoster ? 1 : 0)
+            }
+            VideoSurfaceView(player: player.avPlayer, pictureInPicture: player.pictureInPicture)
+                .opacity(player.isAudioOnlyPlayback ? 0 : 1)
+            if player.state == .loading || player.state == .buffering {
+                ProgressView()
+                    .controlSize(.small)
+                    .tint(.white)
+            }
+        }
+        .frame(width: 85, height: 48)
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .accessibilityHidden(true)
+    }
+
+    private func titles(_ player: PlayerController) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            if let video = player.currentVideo {
+                VideoTitleText(video: video, lineLimit: 1)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.primary)
+                if let channel = video.channel?.name, !channel.isEmpty {
+                    Text(channel)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func progressLine(_ player: PlayerController) -> some View {
+        GeometryReader { proxy in
+            let fraction = progressFraction(player)
+            ZStack(alignment: .leading) {
+                Rectangle().fill(.primary.opacity(0.12))
+                Rectangle().fill(Theme.accent).frame(width: proxy.size.width * fraction)
+            }
+        }
+        .frame(height: 2)
+        .opacity(player.duration > 0 && !player.isLive ? 1 : 0)
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+    }
+
+    private func progressFraction(_ player: PlayerController) -> CGFloat {
+        guard player.duration > 0 else { return 0 }
+        return CGFloat(min(max(player.currentTime / player.duration, 0), 1))
+    }
+
+    private func playPauseIcon(_ player: PlayerController) -> String {
+        if player.state == .ended { return "arrow.counterclockwise" }
+        return player.isPlaybackActive ? "pause.fill" : "play.fill"
+    }
+
+    /// The bar's backdrop: the iOS 26 glass of the floating tab bar below it, a blurred material before that.
+    private struct MiniPlayerBackground: ViewModifier {
+        let cornerRadius: CGFloat
+
+        func body(content: Content) -> some View {
+            let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+            if #available(iOS 26, *) {
+                content.glassEffect(.regular, in: shape)
+            } else {
+                content.background(.regularMaterial, in: shape)
+            }
+        }
+    }
+
+    private func accessibilityTitle(_ player: PlayerController) -> String {
+        guard let video = player.currentVideo else { return "Player" }
+        let title = video.title.isEmpty ? "Video" : video.title
+        if let channel = video.channel?.name, !channel.isEmpty {
+            return "\(title), \(channel)"
+        }
+        return title
     }
 }

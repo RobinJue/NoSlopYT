@@ -2,29 +2,54 @@ import AVFoundation
 import SwiftUI
 import UIKit
 
-/// PLACEHOLDER (Task 1B). Task 10 owns this file: the `AVPlayerLayer`-backed surface that shows the video, which
-/// it also registers with Picture in Picture. The type name is final; the initializer is Task 10's to define.
+/// The `AVPlayerLayer`-backed surface that shows the video. The layer is registered with
+/// `PictureInPictureController`, which binds Picture in Picture to it and detaches the player from it when the app
+/// goes to the background (so the audio keeps playing).
+///
+/// Several surfaces can exist at once (the expanded player and the mini player during a transition); they all show
+/// the same `AVPlayer`.
 struct VideoSurfaceView: UIViewRepresentable {
     let player: AVPlayer
+    /// Without it the surface just shows the player (no Picture in Picture, no background detaching).
+    var pictureInPicture: PictureInPictureController?
+    var videoGravity: AVLayerVideoGravity = .resizeAspect
 
     func makeUIView(context: Context) -> PlayerLayerView {
         let view = PlayerLayerView()
         view.backgroundColor = .black
-        view.playerLayer.videoGravity = .resizeAspect
-        view.playerLayer.player = player
+        // Touches belong to the SwiftUI controls drawn on top of the video.
+        view.isUserInteractionEnabled = false
+        view.isAccessibilityElement = false
+        view.playerLayer.videoGravity = videoGravity
+        view.pictureInPicture = pictureInPicture
+        if let pictureInPicture {
+            pictureInPicture.register(view.playerLayer)
+        } else {
+            view.playerLayer.player = player
+        }
         return view
     }
 
     func updateUIView(_ view: PlayerLayerView, context: Context) {
-        if view.playerLayer.player !== player {
+        if view.playerLayer.videoGravity != videoGravity {
+            view.playerLayer.videoGravity = videoGravity
+        }
+        if pictureInPicture == nil, view.playerLayer.player !== player {
             view.playerLayer.player = player
         }
+    }
+
+    static func dismantleUIView(_ view: PlayerLayerView, coordinator: ()) {
+        view.pictureInPicture?.unregister(view.playerLayer)
     }
 }
 
 /// A view whose backing layer is an `AVPlayerLayer`.
 final class PlayerLayerView: UIView {
     override class var layerClass: AnyClass { AVPlayerLayer.self }
+
+    /// Kept so the surface can unregister itself when SwiftUI removes it.
+    var pictureInPicture: PictureInPictureController?
 
     var playerLayer: AVPlayerLayer {
         // `layerClass` guarantees the type.
