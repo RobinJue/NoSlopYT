@@ -34,8 +34,15 @@ public enum MediaMuxer {
         } catch {
             try? fileManager.removeItem(at: output)
             if error is CancellationError || Task.isCancelled { throw CancellationError() }
-            throw DownloadFailure.mergeFailed(error.localizedDescription)
+            throw failure(forExportError: error)
         }
+    }
+
+    /// What a failed export means for the download. The export needs room for a second copy of the video, so a nearly
+    /// full device fails right here: that is not the files' fault, and reporting it as a full disk (not as a failed
+    /// merge) keeps the downloaded streams, so a retry after freeing space merges without downloading again.
+    static func failure(forExportError error: any Error) -> DownloadFailure {
+        DownloadFailure.isOutOfSpace(error) ? .outOfSpace : .mergeFailed(error.localizedDescription)
     }
 
     /// Adds the first track of `mediaType` in `file` to `composition`, at most `limit` long.

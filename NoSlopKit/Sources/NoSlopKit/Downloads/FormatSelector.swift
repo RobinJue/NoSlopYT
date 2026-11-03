@@ -59,15 +59,25 @@ public enum FormatSelector {
             options.append(DownloadOption(
                 quality: .audioOnly,
                 label: DownloadQuality.audioOnly.label,
-                estimatedBytes: audio.contentLength
+                estimatedBytes: knownSize(audio)
             ))
         }
         return options
     }
 
+    /// The size YouTube states for a format. Zero or less means "not stated" (the download itself treats it that way
+    /// and falls back to the URL's `clen`).
+    private static func knownSize(_ format: StreamFormat) -> Int64? {
+        guard let length = format.contentLength, length > 0 else { return nil }
+        return length
+    }
+
+    /// Video plus audio, or nil when either is unknown or the sum does not fit (the sizes come from the network, and
+    /// a plain `+` would trap on absurd ones).
     private static func estimatedBytes(_ video: StreamFormat, _ audio: StreamFormat) -> Int64? {
-        guard let videoBytes = video.contentLength, let audioBytes = audio.contentLength else { return nil }
-        return videoBytes + audioBytes
+        guard let videoBytes = knownSize(video), let audioBytes = knownSize(audio) else { return nil }
+        let (sum, overflow) = videoBytes.addingReportingOverflow(audioBytes)
+        return overflow ? nil : sum
     }
 
     // MARK: Ranking

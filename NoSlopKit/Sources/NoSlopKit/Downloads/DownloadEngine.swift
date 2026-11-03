@@ -67,14 +67,36 @@ enum DownloadFailure: Error, Equatable, Sendable, LocalizedError {
     /// Maps what URLSession or the file system reported for a chunk.
     static func from(_ error: any Error) -> DownloadFailure {
         if let failure = error as? DownloadFailure { return failure }
+        if isOutOfSpace(error) { return .outOfSpace }
         let ns = error as NSError
-        if (ns.domain == NSCocoaErrorDomain && ns.code == NSFileWriteOutOfSpaceError)
-            || (ns.domain == NSPOSIXErrorDomain && ns.code == Int(ENOSPC)) {
-            return .outOfSpace
+        if ns.domain == NSURLErrorDomain {
+            // URLSession reports a file it cannot write in its own domain; that is the disk's problem, not the network's.
+            switch ns.code {
+            case NSURLErrorCannotCreateFile, NSURLErrorCannotOpenFile, NSURLErrorCannotCloseFile,
+                 NSURLErrorCannotWriteToFile, NSURLErrorCannotRemoveFile, NSURLErrorCannotMoveFile:
+                return .fileSystem(ns.localizedDescription)
+            default:
+                return .network
+            }
         }
-        if ns.domain == NSURLErrorDomain { return .network }
         if ns.domain == NSCocoaErrorDomain || ns.domain == NSPOSIXErrorDomain { return .fileSystem(ns.localizedDescription) }
         return .network
+    }
+
+    /// True when `error`, or an error it wraps, says the volume is full. A full disk arrives in several shapes: a Cocoa
+    /// write error, POSIX ENOSPC, URLSession's "cannot write to file" around one of those, and AVFoundation's
+    /// "Disk Full" (-11807, which wraps ENOSPC) when the export runs out of room. The walk is bounded.
+    static func isOutOfSpace(_ error: any Error) -> Bool {
+        var current: NSError? = error as NSError
+        var depth = 0
+        while let ns = current, depth < 8 {
+            if ns.domain == NSCocoaErrorDomain && ns.code == NSFileWriteOutOfSpaceError { return true }
+            if ns.domain == NSPOSIXErrorDomain && ns.code == Int(ENOSPC) { return true }
+            if ns.domain == "AVFoundationErrorDomain" && ns.code == -11807 { return true }
+            current = ns.userInfo[NSUnderlyingErrorKey] as? NSError
+            depth += 1
+        }
+        return false
     }
 }
 

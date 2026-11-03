@@ -316,4 +316,24 @@ enum BunnyDownloadFormats {
         #expect(FormatSelector.options(from: BunnyDownloadFormats.avc1).isEmpty)
         #expect(FormatSelector.options(from: [BunnyDownloadFormats.aac140]).map(\.label) == ["Audio only"])
     }
+
+    @Test func sizesThatCannotBeAddedAreNoEstimateAndNeverACrash() {
+        // video + audio would overflow Int64: a trap here would take the whole app down when the sheet opens.
+        var absurd = BunnyDownloadFormats.all
+        for index in absurd.indices { absurd[index].contentLength = Int64.max }
+        let options = FormatSelector.options(from: absurd)
+        #expect(options.map(\.label) == ["1080p", "720p", "480p", "360p", "Audio only"])
+        #expect(options.dropLast().allSatisfy { $0.estimatedBytes == nil }, "a sum that does not fit is not an estimate")
+        #expect(options.last?.estimatedBytes == Int64.max, "a size that fits is still reported")
+    }
+
+    @Test func zeroAndNegativeSizesAreUnknownSizes() {
+        // The download itself treats them as "not stated" (it falls back to the URL's clen), so the sheet must not
+        // present them as a real size either.
+        var odd = BunnyDownloadFormats.all
+        for index in odd.indices { odd[index].contentLength = index.isMultiple(of: 2) ? 0 : -5 }
+        let options = FormatSelector.options(from: odd)
+        #expect(options.map(\.label) == ["1080p", "720p", "480p", "360p", "Audio only"])
+        #expect(options.allSatisfy { $0.estimatedBytes == nil })
+    }
 }

@@ -1903,3 +1903,58 @@ func mediaDurationAndTracks(of url: URL) async throws -> (seconds: Double, video
         #expect(!FileManager.default.fileExists(atPath: target.path), "no half-built stream file is left to be mistaken for a complete one")
     }
 }
+
+// MARK: - Failure classification
+
+@Suite struct DownloadFailureTests {
+    private let noSpace = NSError(domain: NSPOSIXErrorDomain, code: Int(ENOSPC), userInfo: [NSLocalizedDescriptionKey: "No space left on device"])
+
+    @Test func aFullDiskIsRecognisedInEveryShapeItArrivesIn() {
+        let cocoa = NSError(domain: NSCocoaErrorDomain, code: NSFileWriteOutOfSpaceError)
+        #expect(DownloadFailure.from(cocoa) == .outOfSpace)
+        #expect(DownloadFailure.from(noSpace) == .outOfSpace)
+        #expect(DownloadFailure.isOutOfSpace(CocoaError(.fileWriteOutOfSpace)))
+
+        // URLSession reports a file it cannot write as its own error, with the real cause underneath.
+        let wrapped = NSError(domain: NSURLErrorDomain, code: NSURLErrorCannotWriteToFile, userInfo: [NSUnderlyingErrorKey: noSpace])
+        #expect(DownloadFailure.from(wrapped) == .outOfSpace)
+        let twice = NSError(domain: NSURLErrorDomain, code: NSURLErrorCannotCreateFile, userInfo: [NSUnderlyingErrorKey: wrapped])
+        #expect(DownloadFailure.from(twice) == .outOfSpace)
+
+        // AVFoundation's "Disk Full" (-11807) is one even if the underlying error went missing.
+        let avFoundation = NSError(domain: "AVFoundationErrorDomain", code: -11807)
+        #expect(DownloadFailure.from(avFoundation) == .outOfSpace)
+    }
+
+    @Test func otherFileErrorsFromURLSessionAreNotNetworkErrors() {
+        // "Can't reach YouTube" would be a lie about a disk that cannot be written.
+        for code in [NSURLErrorCannotCreateFile, NSURLErrorCannotOpenFile, NSURLErrorCannotCloseFile, NSURLErrorCannotWriteToFile, NSURLErrorCannotRemoveFile, NSURLErrorCannotMoveFile] {
+            let failure = DownloadFailure.from(NSError(domain: NSURLErrorDomain, code: code))
+            guard case .fileSystem = failure else { Issue.record("code \(code) became \(failure)"); continue }
+            #expect(failure.errorDescription == "Couldn't save the download to disk.")
+        }
+    }
+
+    @Test func connectionProblemsStayNetworkErrors() {
+        for code in [NSURLErrorNotConnectedToInternet, NSURLErrorNetworkConnectionLost, NSURLErrorTimedOut, NSURLErrorCannotFindHost, NSURLErrorCancelled] {
+            #expect(DownloadFailure.from(NSError(domain: NSURLErrorDomain, code: code)) == .network)
+        }
+        #expect(DownloadFailure.from(URLError(.timedOut)) == .network)
+        #expect(!DownloadFailure.isOutOfSpace(URLError(.networkConnectionLost)))
+        #expect(!DownloadFailure.isOutOfSpace(NSError(domain: NSPOSIXErrorDomain, code: Int(EACCES))))
+    }
+
+    @Test func aVeryLongChainOfUnderlyingErrorsEndsTheWalk() {
+        // Not something the system does, but the walk is bounded: a full-disk error buried deeper than the limit is
+        // not found, and nothing hangs or recurses without end.
+        var error = noSpace
+        for _ in 0..<50 { error = NSError(domain: "wrapper", code: 1, userInfo: [NSUnderlyingErrorKey: error]) }
+        #expect(!DownloadFailure.isOutOfSpace(error))
+        #expect(DownloadFailure.from(error) == .network)
+
+        // Within the limit it is found.
+        var shallow = noSpace
+        for _ in 0..<3 { shallow = NSError(domain: "wrapper", code: 1, userInfo: [NSUnderlyingErrorKey: shallow]) }
+        #expect(DownloadFailure.isOutOfSpace(shallow))
+    }
+}

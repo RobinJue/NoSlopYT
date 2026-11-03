@@ -143,4 +143,22 @@ import Testing
             )
         }
     }
+
+    @Test func aFullDiskDuringTheExportIsNotAMergeFailure() {
+        // What AVAssetExportSession really reports when the volume fills up while it writes (captured on a nearly full
+        // RAM disk): AVError.diskFull, wrapping POSIX ENOSPC. The downloaded streams are fine; the download must be
+        // kept for another try, which only happens for `.outOfSpace`.
+        let posix = NSError(domain: NSPOSIXErrorDomain, code: Int(ENOSPC), userInfo: [NSLocalizedDescriptionKey: "No space left on device"])
+        let diskFull = NSError(
+            domain: AVFoundationErrorDomain, code: AVError.Code.diskFull.rawValue,
+            userInfo: [NSLocalizedDescriptionKey: "Disk Full", NSUnderlyingErrorKey: posix]
+        )
+        #expect(MediaMuxer.failure(forExportError: diskFull) == .outOfSpace)
+        #expect(MediaMuxer.failure(forExportError: AVError(.diskFull)) == .outOfSpace)
+        #expect(MediaMuxer.failure(forExportError: posix) == .outOfSpace)
+
+        // Anything else about the export is a merge failure that says what AVFoundation said.
+        let other = NSError(domain: AVFoundationErrorDomain, code: AVError.Code.exportFailed.rawValue, userInfo: [NSLocalizedDescriptionKey: "Export failed"])
+        #expect(MediaMuxer.failure(forExportError: other) == .mergeFailed("Export failed"))
+    }
 }
