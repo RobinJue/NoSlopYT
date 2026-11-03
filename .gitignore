@@ -10,3 +10,6 @@ xcuserdata/
 Config/Local.xcconfig
 # macOS
 .DS_Store
+# Local tool state (agent worktrees, compliance-plugin queue)
+.claude/
+.compliify/
