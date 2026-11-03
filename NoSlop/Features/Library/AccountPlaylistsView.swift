@@ -66,6 +66,7 @@ private struct PlaylistsList: View {
                         .padding(.vertical, Theme.padding)
                     }
                     .refreshable { await load() }
+                    .miniPlayerClearance()
                 }
             }
         }

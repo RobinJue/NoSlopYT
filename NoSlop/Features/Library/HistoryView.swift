@@ -38,6 +38,7 @@ struct HistoryView: View {
                     }
                 }
                 .listStyle(.plain)
+                .miniPlayerClearance()
             }
         }
         .navigationTitle("History")

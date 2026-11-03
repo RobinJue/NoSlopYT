@@ -36,6 +36,21 @@ final class GoogleSignInFlow {
     }
 }
 
+/// What the OAuth client ID typed into Settings is good for. It is judged by `GoogleOAuthConfig`, the check the
+/// sign-in itself makes, so no button starts a sign-in that is certain to fail.
+enum GoogleClientIDStatus {
+    case empty, valid, invalid
+
+    init(clientID: String) {
+        let text = clientID.trimmingCharacters(in: .whitespacesAndNewlines)
+        if text.isEmpty {
+            self = .empty
+        } else {
+            self = GoogleOAuthConfig(clientID: text) != nil ? .valid : .invalid
+        }
+    }
+}
+
 /// "Sign out" with its confirmation. The confirmation is attached to the button so it appears next to it.
 struct GoogleSignOutButton: View {
     let flow: GoogleSignInFlow
@@ -62,8 +77,9 @@ struct GoogleSignOutButton: View {
 
 /// The top of the Library tab: a "Sign in with Google" call to action, or the signed-in account with "Sign out".
 ///
-/// Signing in needs the OAuth client ID from Settings; while it is empty, tapping the call to action opens the
-/// setup guide instead of the sign-in page. Meant to sit in a `List` section.
+/// Signing in needs the OAuth client ID from Settings; while it is empty or not a client ID at all (see
+/// `GoogleClientIDStatus`), tapping the call to action opens the setup guide instead of the sign-in page. Meant to sit
+/// in a `List` section.
 struct AccountHeaderView: View {
     @Environment(AppEnvironment.self) private var env
     @State private var flow = GoogleSignInFlow()
@@ -95,13 +111,14 @@ struct AccountHeaderView: View {
 
     // MARK: Signed out
 
-    private var hasClientID: Bool {
-        !env.settings.googleClientID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    /// A client ID that can start a sign-in; an empty or malformed one needs the guide instead.
+    private var isConfigured: Bool {
+        GoogleClientIDStatus(clientID: env.settings.googleClientID) == .valid
     }
 
     private var signedOut: some View {
         Button {
-            if hasClientID {
+            if isConfigured {
                 Task { await flow.signIn(using: env) }
             } else {
                 isShowingGuide = true
@@ -119,7 +136,7 @@ struct AccountHeaderView: View {
                         .font(.headline)
                         .foregroundStyle(.primary)
                     Text(
-                        hasClientID
+                        isConfigured
                             ? "Bring your YouTube subscriptions, playlists and likes."
                             : "Optional. Set up Google sign-in to bring your subscriptions, playlists and likes."
                     )
@@ -142,7 +159,7 @@ struct AccountHeaderView: View {
         }
         .buttonStyle(.plain)
         .disabled(flow.isWorking)
-        .accessibilityHint(hasClientID ? "Opens the Google sign-in page" : "Opens the setup guide")
+        .accessibilityHint(isConfigured ? "Opens the Google sign-in page" : "Opens the setup guide")
     }
 
     // MARK: Signed in

@@ -32,6 +32,9 @@ final class CommentsViewModel {
     private(set) var loadMoreFailed = false
     private(set) var replies: [String: Replies] = [:]
 
+    /// More comments can be loaded. False once a page brought nothing new, or YouTube named no next page.
+    var hasMore: Bool { continuation != nil }
+
     private var continuation: String?
     /// The token that loads the first page of the current sort order.
     private var firstPageToken: String?
@@ -119,9 +122,11 @@ final class CommentsViewModel {
             guard current == generation, !Task.isCancelled else { return }
             // Unique ids: `ForEach` needs them, and a page may repeat a comment it (or an earlier page) already had.
             var seen = Set(comments.map(\.id))
-            comments += page.comments.filter { seen.insert($0.id).inserted }
-            // A page that brings nothing new and the same token again would loop forever.
-            continuation = page.comments.isEmpty || page.continuation == token ? nil : page.continuation
+            let fresh = page.comments.filter { seen.insert($0.id).inserted }
+            comments += fresh
+            // A page with no comment the list does not have yet is the end, whatever token it carries: going on would
+            // only walk through empty (or repeated) pages. The same token again would loop forever.
+            continuation = fresh.isEmpty || page.continuation == token ? nil : page.continuation
         } catch {
             guard current == generation, !Task.isCancelled else { return }
             loadMoreFailed = true
@@ -155,8 +160,10 @@ final class CommentsViewModel {
             guard current == generation, !Task.isCancelled else { return }
             update(commentID) { state in
                 var seen = Set(state.comments.map(\.id))
-                state.comments += page.comments.filter { seen.insert($0.id).inserted }
-                state.continuation = page.comments.isEmpty || page.continuation == token ? nil : page.continuation
+                let fresh = page.comments.filter { seen.insert($0.id).inserted }
+                state.comments += fresh
+                // As for the comments: a page with no new reply ends the replies.
+                state.continuation = fresh.isEmpty || page.continuation == token ? nil : page.continuation
                 state.hasLoaded = true
                 state.isLoading = false
             }
@@ -284,6 +291,13 @@ struct CommentsSheet: View {
             .buttonStyle(.plain)
             .foregroundStyle(.secondary)
             .listRowSeparator(.hidden)
+        } else if !model.hasMore {
+            // The end: nothing is loading and nothing more will be asked for.
+            Text("No more comments")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity)
+                .listRowSeparator(.hidden)
         }
     }
 

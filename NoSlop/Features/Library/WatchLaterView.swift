@@ -38,12 +38,11 @@ struct WatchLaterView: View {
                         }
                     }
                     .onMove { source, destination in
-                        var reordered = videos
-                        reordered.move(fromOffsets: source, toOffset: destination)
-                        WatchLaterOrdering.apply(reordered, to: env.library)
+                        env.library.moveWatchLater(fromOffsets: source, toOffset: destination)
                     }
                 }
                 .listStyle(.plain)
+                .miniPlayerClearance()
             }
         }
         .navigationTitle("Watch Later")

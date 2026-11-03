@@ -104,6 +104,7 @@ struct LocalPlaylistView: View {
                 }
             }
             .listStyle(.plain)
+            .miniPlayerClearance()
         }
     }
 

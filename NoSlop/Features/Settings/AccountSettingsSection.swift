@@ -2,13 +2,10 @@ import NoSlopKit
 import SwiftUI
 
 /// Account: the Google OAuth client ID (checked with `GoogleOAuthConfig`), sign in / sign out, and the setup guide.
+/// "Sign in with Google" is only available for a client ID that passes that check.
 struct AccountSettingsSection: View {
     @Environment(AppEnvironment.self) private var env
     @State private var flow = GoogleSignInFlow()
-
-    private enum ClientIDStatus {
-        case empty, valid, invalid
-    }
 
     var body: some View {
         @Bindable var store = env.settingsStore
@@ -58,7 +55,7 @@ struct AccountSettingsSection: View {
                         }
                     }
                 }
-                .disabled(status == .empty || flow.isWorking)
+                .disabled(status != .valid || flow.isWorking)
             }
 
             NavigationLink {
@@ -79,10 +76,8 @@ struct AccountSettingsSection: View {
 
     // MARK: Client ID
 
-    private var status: ClientIDStatus {
-        let text = env.settings.googleClientID.trimmingCharacters(in: .whitespacesAndNewlines)
-        if text.isEmpty { return .empty }
-        return GoogleOAuthConfig(clientID: text) != nil ? .valid : .invalid
+    private var status: GoogleClientIDStatus {
+        GoogleClientIDStatus(clientID: env.settings.googleClientID)
     }
 
     @ViewBuilder

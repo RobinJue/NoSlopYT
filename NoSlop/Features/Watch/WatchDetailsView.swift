@@ -21,6 +21,7 @@ private struct WatchDetailsContent: View {
     let video: VideoSummary
 
     @Environment(AppEnvironment.self) private var env
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @State private var model: WatchDetailsViewModel
     @State private var isTitleExpanded = false
     @State private var isShowingComments = false
@@ -127,37 +128,55 @@ private struct WatchDetailsContent: View {
     @ViewBuilder
     private var channelRow: some View {
         if let channel = model.channel {
-            HStack(spacing: 12) {
-                Button {
-                    env.show(.channel(id: channel.id))
-                } label: {
-                    HStack(spacing: 10) {
-                        ChannelAvatarView(url: channel.avatarURL, size: 40)
-                        VStack(alignment: .leading, spacing: 1) {
-                            Text(channel.name)
-                                .font(.subheadline.weight(.semibold))
-                                .foregroundStyle(.primary)
-                                .lineLimit(1)
-                            if let subscribers = model.details?.subscriberCountText, !subscribers.isEmpty {
-                                Text(subscribers)
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                                    .lineLimit(1)
-                            }
-                        }
+            Group {
+                if dynamicTypeSize.isAccessibilitySize {
+                    // The name and "Subscribe" cannot share a line at these sizes without one of them being cut or
+                    // broken mid-word, so the button goes under the channel.
+                    VStack(alignment: .leading, spacing: 12) {
+                        channelButton(channel, lineLimit: 3)
+                        SubscribeButton(channel: channel)
+                            .fixedSize(horizontal: true, vertical: false)
                     }
-                    .contentShape(Rectangle())
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                } else {
+                    HStack(spacing: 12) {
+                        channelButton(channel, lineLimit: 1)
+                        Spacer(minLength: 8)
+                        // The button keeps its width; a long channel name is what gets cut.
+                        SubscribeButton(channel: channel)
+                            .fixedSize(horizontal: true, vertical: false)
+                    }
                 }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Open channel \(channel.name)")
-
-                Spacer(minLength: 8)
-
-                SubscribeButton(channel: channel)
             }
             .padding(.horizontal, Theme.padding)
             .padding(.top, 14)
         }
+    }
+
+    /// Avatar, name and subscriber count; opens the channel.
+    private func channelButton(_ channel: ChannelRef, lineLimit: Int) -> some View {
+        Button {
+            env.show(.channel(id: channel.id))
+        } label: {
+            HStack(spacing: 10) {
+                ChannelAvatarView(url: channel.avatarURL, size: 40)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(channel.name)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.primary)
+                        .lineLimit(lineLimit)
+                    if let subscribers = model.details?.subscriberCountText, !subscribers.isEmpty {
+                        Text(subscribers)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(lineLimit)
+                    }
+                }
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Open channel \(channel.name)")
     }
 
     // MARK: Actions

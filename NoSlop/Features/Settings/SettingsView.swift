@@ -16,6 +16,7 @@ struct SettingsView: View {
             StorageSettingsSection()
             AboutSettingsSection()
         }
+        .miniPlayerClearance()
         .navigationTitle("Settings")
         .navigationBarTitleDisplayMode(.inline)
     }
