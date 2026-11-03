@@ -1,0 +1,143 @@
+{
+  "kind": "youtube#playlistItemListResponse",
+  "etag": "Wm4NbVcXzLkJhGfDsAqWeRtYuIo",
+  "nextPageToken": "EAAaBlBUOkNESQ",
+  "pageInfo": {
+    "totalResults": 7,
+    "resultsPerPage": 5
+  },
+  "items": [
+    {
+      "kind": "youtube#playlistItem",
+      "etag": "Ds1FgHjKlZxCvBnMqWeRtYuIoPa",
+      "id": "UExYN3YwcWtXYzN0Slo5bVhuMlJvQXlVNERiSHNFZUZnSy4wMTcyMDhGQUE4NTIzM0Y5",
+      "snippet": {
+        "publishedAt": "2023-01-04T20:05:11Z",
+        "channelId": "UC4xKdmAXFh4ACyhpiQ_3qBw",
+        "title": "Big Buck Bunny 60fps 4K - Official Blender Foundation Short Film",
+        "description": "Big Buck Bunny, a short film by the Blender Institute.",
+        "thumbnails": {
+          "default": { "url": "https://i.ytimg.com/vi/aqz-KE-bpKQ/default.jpg", "width": 120, "height": 90 },
+          "medium": { "url": "https://i.ytimg.com/vi/aqz-KE-bpKQ/mqdefault.jpg", "width": 320, "height": 180 },
+          "high": { "url": "https://i.ytimg.com/vi/aqz-KE-bpKQ/hqdefault.jpg", "width": 480, "height": 360 },
+          "standard": { "url": "https://i.ytimg.com/vi/aqz-KE-bpKQ/sddefault.jpg", "width": 640, "height": 480 },
+          "maxres": { "url": "https://i.ytimg.com/vi/aqz-KE-bpKQ/maxresdefault.jpg", "width": 1280, "height": 720 }
+        },
+        "channelTitle": "Example User",
+        "videoOwnerChannelTitle": "Blender",
+        "videoOwnerChannelId": "UCSMOQeBJ2RAnuFungnQOxLg",
+        "playlistId": "PLx7v0qkWc3tJZ9mXn2RoAyU4DbHsEeFgK",
+        "position": 0,
+        "resourceId": {
+          "kind": "youtube#video",
+          "videoId": "aqz-KE-bpKQ"
+        }
+      },
+      "contentDetails": {
+        "videoId": "aqz-KE-bpKQ",
+        "videoPublishedAt": "2014-11-10T14:42:37Z"
+      }
+    },
+    {
+      "kind": "youtube#playlistItem",
+      "etag": "Hj2KlZxCvBnMqWeRtYuIoPaSdFg",
+      "id": "UExYN3YwcWtXYzN0Slo5bVhuMlJvQXlVNERiSHNFZUZnSy4xMjc4OTBBQkNERUYwMTIz",
+      "snippet": {
+        "publishedAt": "2023-01-05T09:12:44Z",
+        "channelId": "UC4xKdmAXFh4ACyhpiQ_3qBw",
+        "title": "Private video",
+        "description": "This video is private.",
+        "thumbnails": {},
+        "channelTitle": "Example User",
+        "playlistId": "PLx7v0qkWc3tJZ9mXn2RoAyU4DbHsEeFgK",
+        "position": 1,
+        "resourceId": {
+          "kind": "youtube#video",
+          "videoId": "PrivateVid1"
+        }
+      },
+      "contentDetails": {
+        "videoId": "PrivateVid1"
+      }
+    },
+    {
+      "kind": "youtube#playlistItem",
+      "etag": "Rt3YuIoPaSdFgHjKlZxCvBnMqWe",
+      "id": "UExYN3YwcWtXYzN0Slo5bVhuMlJvQXlVNERiSHNFZUZnSy41NkI0NEY2RDEwQjU1Nzk3",
+      "snippet": {
+        "publishedAt": "2023-02-11T17:31:20Z",
+        "channelId": "UC4xKdmAXFh4ACyhpiQ_3qBw",
+        "title": "A Little Pony’s Big Heart",
+        "description": "A short film.",
+        "thumbnails": {
+          "default": { "url": "https://i.ytimg.com/vi/7pPUE6cGFwI/default.jpg", "width": 120, "height": 90 },
+          "medium": { "url": "https://i.ytimg.com/vi/7pPUE6cGFwI/mqdefault.jpg", "width": 320, "height": 180 },
+          "high": { "url": "https://i.ytimg.com/vi/7pPUE6cGFwI/hqdefault.jpg", "width": 480, "height": 360 }
+        },
+        "channelTitle": "Example User",
+        "videoOwnerChannelTitle": "PolyFilms",
+        "videoOwnerChannelId": "UCpzUp21QjEZo_Jp7rt5w83Q",
+        "playlistId": "PLx7v0qkWc3tJZ9mXn2RoAyU4DbHsEeFgK",
+        "position": 2,
+        "resourceId": {
+          "kind": "youtube#video",
+          "videoId": "7pPUE6cGFwI"
+        }
+      },
+      "contentDetails": {
+        "videoId": "7pPUE6cGFwI",
+        "videoPublishedAt": "2023-02-10T15:00:07Z"
+      }
+    },
+    {
+      "kind": "youtube#playlistItem",
+      "etag": "Yu4IoPaSdFgHjKlZxCvBnMqWeRt",
+      "id": "UExYN3YwcWtXYzN0Slo5bVhuMlJvQXlVNERiSHNFZUZnSy5GRTY5NUQwQkQ4NjNDMDQ3",
+      "snippet": {
+        "publishedAt": "2023-02-12T08:00:00Z",
+        "channelId": "UC4xKdmAXFh4ACyhpiQ_3qBw",
+        "title": "Deleted video",
+        "description": "This video is unavailable.",
+        "thumbnails": {},
+        "channelTitle": "Example User",
+        "playlistId": "PLx7v0qkWc3tJZ9mXn2RoAyU4DbHsEeFgK",
+        "position": 3,
+        "resourceId": {
+          "kind": "youtube#video",
+          "videoId": "DeletedVid1"
+        }
+      },
+      "contentDetails": {
+        "videoId": "DeletedVid1"
+      }
+    },
+    {
+      "kind": "youtube#playlistItem",
+      "etag": "Oi5PaSdFgHjKlZxCvBnMqWeRtYu",
+      "id": "UExYN3YwcWtXYzN0Slo5bVhuMlJvQXlVNERiSHNFZUZnSy4yMDhBMkNBNjBDMDJDRjY0",
+      "snippet": {
+        "publishedAt": "2023-03-01T19:44:59Z",
+        "channelId": "UC4xKdmAXFh4ACyhpiQ_3qBw",
+        "title": "Me at the zoo",
+        "description": "The first video on YouTube.",
+        "thumbnails": {
+          "default": { "url": "https://i.ytimg.com/vi/jNQXAC9IVRw/default.jpg", "width": 120, "height": 90 },
+          "medium": { "url": "https://i.ytimg.com/vi/jNQXAC9IVRw/mqdefault.jpg", "width": 320, "height": 180 }
+        },
+        "channelTitle": "Example User",
+        "videoOwnerChannelTitle": "jawed",
+        "videoOwnerChannelId": "UC4QobU6STFB0P71PMvOGN5A",
+        "playlistId": "PLx7v0qkWc3tJZ9mXn2RoAyU4DbHsEeFgK",
+        "position": 4,
+        "resourceId": {
+          "kind": "youtube#video",
+          "videoId": "jNQXAC9IVRw"
+        }
+      },
+      "contentDetails": {
+        "videoId": "jNQXAC9IVRw",
+        "videoPublishedAt": "2005-04-24T03:31:52Z"
+      }
+    }
+  ]
+}
