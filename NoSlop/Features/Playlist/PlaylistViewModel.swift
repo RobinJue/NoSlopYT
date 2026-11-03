@@ -109,6 +109,13 @@ final class PlaylistViewModel {
         list.retryLoadMore(fetch: fetch(env), filter: contentFilter(env))
     }
 
+    /// The feed filters changed (the user blocked a channel, or toggled a setting): applies them to the videos that
+    /// are on screen, right away.
+    func filtersChanged(using env: AppEnvironment) {
+        guard case .loaded = phase else { return }
+        list.refilter(fetch: fetch(env), filter: contentFilter(env))
+    }
+
     private func fetch(_ env: AppEnvironment) -> FeedPages<VideoSummary>.Fetch {
         { token in try await env.youTube.playlistMore(continuation: token) }
     }

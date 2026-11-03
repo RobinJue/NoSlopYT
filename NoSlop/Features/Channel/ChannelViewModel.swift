@@ -126,7 +126,10 @@ final class ChannelViewModel {
 
         // The page already carries the first page of the Videos tab.
         let videos = ChannelTabContent()
-        videos.list.reset(with: page.videos, filter: contentFilter(for: .videos, env))
+        videos.list.reset(
+            with: ChannelAttribution.attaching(page.header.ref, to: page.videos),
+            filter: contentFilter(for: .videos, env)
+        )
         videos.phase = .loaded
         content = [.videos: videos]
         phase = .loaded
@@ -160,7 +163,7 @@ final class ChannelViewModel {
                 let page = try await env.youTube.channelTab(channelID: id, tab: tab)
                 guard let self, let tabContent, self.generation == thisGeneration else { return }
                 self.tabTasks[tab] = nil
-                tabContent.list.reset(with: page, filter: self.contentFilter(for: tab, env))
+                tabContent.list.reset(with: self.attached(page), filter: self.contentFilter(for: tab, env))
                 tabContent.phase = .loaded
                 if tabContent.list.items.isEmpty { self.loadMore(tab, using: env) }
             } catch {
@@ -193,8 +196,27 @@ final class ChannelViewModel {
         tabContent.list.retryLoadMore(fetch: fetch(env), filter: contentFilter(for: tab, env))
     }
 
+    /// The feed filters changed (a setting was toggled): applies them to the tabs that are loaded, right away.
+    func filtersChanged(using env: AppEnvironment) {
+        for (tab, tabContent) in content {
+            guard case .loaded = tabContent.phase else { continue }
+            tabContent.list.refilter(fetch: fetch(env), filter: contentFilter(for: tab, env))
+        }
+    }
+
+    /// More of a tab. A continuation response has no channel header, so its items come without a channel: they get
+    /// the channel of the page.
     private func fetch(_ env: AppEnvironment) -> FeedPages<SearchItem>.Fetch {
-        { token in try await env.youTube.channelMore(continuation: token) }
+        { [weak self] token in
+            let page = try await env.youTube.channelMore(continuation: token)
+            return self?.attached(page) ?? page
+        }
+    }
+
+    /// `page` with the channel this screen shows on every item that has none.
+    private func attached(_ page: Page<SearchItem>) -> Page<SearchItem> {
+        guard let channel = header?.ref else { return page }
+        return ChannelAttribution.attaching(channel, to: page)
     }
 
     /// The feed filters, adjusted for a screen the user opened on purpose: a channel they blocked still shows its own
@@ -206,5 +228,45 @@ final class ChannelViewModel {
             if tab == .live { settings.hideLiveAndUpcoming = false }
             return ContentFilter(settings: settings).filter(items)
         }
+    }
+}
+
+/// Channel pages list their items without saying whose they are (every one is the channel's own), and a continuation
+/// response has no channel header to take that from. The rows that need a channel (the name under a video, the
+/// avatar, "Don't show this channel") get the one the screen is showing.
+enum ChannelAttribution {
+    /// `page` with the channel filled in on its videos and playlists.
+    static func attaching(_ channel: ChannelRef, to page: Page<SearchItem>) -> Page<SearchItem> {
+        Page(items: attaching(channel, to: page.items), continuation: page.continuation)
+    }
+
+    static func attaching(_ channel: ChannelRef, to items: [SearchItem]) -> [SearchItem] {
+        items.map { item in
+            switch item {
+            case .video(var video):
+                video.channel = attached(video.channel, to: channel)
+                return .video(video)
+            case .playlist(var playlist):
+                playlist.channel = attached(playlist.channel, to: channel)
+                return .playlist(playlist)
+            case .channel:
+                return item
+            }
+        }
+    }
+
+    /// The channel an item has, completed from `channel` where it is the same one; `channel` itself when the item has
+    /// none, or has one without a name (an empty name would show as a blank byline).
+    private static func attached(_ own: ChannelRef?, to channel: ChannelRef) -> ChannelRef {
+        guard var own else { return channel }
+        let isUnnamed = own.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        if isUnnamed && (own.id.isEmpty || own.id == channel.id) {
+            return channel
+        }
+        if own.id == channel.id {
+            own.avatarURL = own.avatarURL ?? channel.avatarURL
+            own.handle = own.handle ?? channel.handle
+        }
+        return own
     }
 }

@@ -28,12 +28,21 @@ struct HomeView: View {
                 AccountButton()
             }
         }
-        .task { model.loadIfNeeded(using: env) }
+        .task {
+            #if DEBUG
+            DebugLaunchHooks.prepareLaunch(in: env)
+            #endif
+            model.loadIfNeeded(using: env)
+        }
         // Coming back from the full-screen player: "Continue watching" has a new first entry.
         .onChange(of: env.player.presentation) { _, presentation in
             if presentation != .expanded {
                 model.loadIfNeeded(using: env)
             }
+        }
+        // "Don't show this channel" (or any other feed filter) takes effect on what is on screen, not after a reload.
+        .onChange(of: env.settings) {
+            model.applyFilter(using: env)
         }
     }
 

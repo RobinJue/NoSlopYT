@@ -34,8 +34,10 @@ enum Theme {
     static let placeholderFill = Color(.secondarySystemFill)
 
     /// Extra room at the bottom of a scrolling screen while the mini player floats above the tab bar, so the last row
-    /// can be scrolled clear of it. Measured with the Phase 1 mini player (about 52 pt tall, sitting 72 pt above the
-    /// bottom safe area, see `PlayerOverlayContainer`) on top of the room the tab bar already takes: 88 pt leaves the
-    /// last row a few points above the mini player.
-    static let miniPlayerInset: CGFloat = 88
+    /// can be scrolled clear of it. Measured with the real mini player (`MiniPlayerView.height`, 64 pt, floating 58 pt
+    /// above the bottom safe area on an iPhone, 8 pt on an iPad where the tab bar is at the top; see
+    /// `PlayerOverlayContainer`) on an iPhone 17: the top of the mini player is 156 pt above the bottom edge of the
+    /// screen, while a scroll view already stops 83 pt above that edge (safe area and tab bar). 69 pt more, behind
+    /// the `padding` every list ends with, leaves the last row 8 pt above the mini player.
+    static let miniPlayerInset: CGFloat = 69
 }

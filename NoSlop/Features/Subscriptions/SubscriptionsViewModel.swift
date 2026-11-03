@@ -67,7 +67,9 @@ final class SubscriptionsViewModel {
     /// Re-applies the filters to the feed already loaded (cheap; no network).
     func applyFilter(using env: AppEnvironment) {
         guard case .loaded = phase else { return }
-        videos = env.contentFilter.filter(unfiltered, context: .subscriptions)
+        let filtered = env.contentFilter.filter(unfiltered, context: .subscriptions)
+        // Not a new value when nothing changed, so the screen is not redrawn for a setting that is not about the feed.
+        if filtered.map(\.id) != videos.map(\.id) { videos = filtered }
     }
 
     @discardableResult
@@ -131,6 +133,8 @@ final class SubscriptionsViewModel {
     }
 
     private func show(_ feed: [VideoSummary], using env: AppEnvironment) {
+        // Every video once, whatever a cache on disk holds, so `ForEach` never meets an id twice.
+        let feed = feed.uniqued()
         unfiltered = feed
         videos = env.contentFilter.filter(feed, context: .subscriptions)
         var seen = Set<String>()

@@ -23,6 +23,11 @@ struct SearchView: View {
             .onChange(of: model.text) { _, text in
                 if text.isEmpty { model.clearResults() }
             }
+            #if DEBUG
+            .task {
+                if let text = DebugLaunchHooks.takeSearchText() { model.submit(text, using: env) }
+            }
+            #endif
             .toolbar {
                 if model.mode == .results {
                     ToolbarItem(placement: .topBarTrailing) {

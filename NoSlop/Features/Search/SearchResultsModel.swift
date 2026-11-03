@@ -122,6 +122,13 @@ final class SearchResultsModel {
         list.retryLoadMore(fetch: fetch(env), filter: contentFilter(env))
     }
 
+    /// The feed filters changed (the user blocked a channel, or toggled a setting): applies them to the results that
+    /// are on screen, right away.
+    func filtersChanged(using env: AppEnvironment) {
+        guard case .loaded = phase else { return }
+        list.refilter(fetch: fetch(env), filter: contentFilter(env))
+    }
+
     private func fetch(_ env: AppEnvironment) -> FeedPages<SearchItem>.Fetch {
         { token in try await env.youTube.searchMore(continuation: token) }
     }

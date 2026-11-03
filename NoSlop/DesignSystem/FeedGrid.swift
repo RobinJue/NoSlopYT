@@ -70,7 +70,8 @@ extension ButtonStyle where Self == PressableCardStyle {
 
 extension View {
     /// Leaves room under a scrolling screen for the mini player while it is showing, so the last row can be scrolled
-    /// clear of it.
+    /// clear of it. Without the mini player nothing is added: the screen ends `Theme.padding` below its last row, and
+    /// `Theme.miniPlayerInset` is measured for a screen that does.
     func miniPlayerClearance() -> some View {
         modifier(MiniPlayerClearance())
     }
@@ -80,9 +81,15 @@ private struct MiniPlayerClearance: ViewModifier {
     @Environment(AppEnvironment.self) private var env
 
     func body(content: Content) -> some View {
-        let inset = env.player.presentation == .minimized ? Theme.miniPlayerInset : 0
-        content
+        let isMiniPlayerShowing = env.player.presentation == .minimized
+        let inset = isMiniPlayerShowing ? Theme.miniPlayerInset : 0
+        let clearance = content
             .contentMargins(.bottom, inset, for: .scrollContent)
             .animation(.snappy, value: inset)
+        #if DEBUG
+        return clearance.debugScrollToEnd(whenMiniPlayerShows: isMiniPlayerShowing)
+        #else
+        return clearance
+        #endif
     }
 }
