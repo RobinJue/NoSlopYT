@@ -1,8 +1,9 @@
 import NoSlopKit
 import SwiftUI
 
-/// A channel in a list or in search results: avatar, name, "@handle · subscribers", a short description and a
-/// Subscribe button. Draws only; the screen decides what tapping the row does (usually `env.show(.channel(id:))`).
+/// A channel in a list or in search results: avatar, name, "@handle" and the subscriber count on lines of their
+/// own, a short description and a Subscribe button. Draws only; the screen decides what tapping the row does
+/// (usually `env.show(.channel(id:))`).
 struct ChannelRowView: View {
     let channel: ChannelSummary
 
@@ -10,21 +11,28 @@ struct ChannelRowView: View {
         HStack(spacing: 16) {
             ChannelAvatarView(url: channel.avatarURL, size: 64)
 
-            VStack(alignment: .leading, spacing: 3) {
+            VStack(alignment: .leading, spacing: 2) {
                 Text(channel.name)
                     .font(.headline)
                     .lineLimit(1)
-                if let detail {
-                    Text(detail)
+                if let handle = nonEmpty(channel.handle) {
+                    Text(handle)
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                 }
-                if let snippet = channel.descriptionSnippet, !snippet.isEmpty {
+                if let stats = statsText {
+                    Text(stats)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+                if let snippet = nonEmpty(channel.descriptionSnippet) {
                     Text(snippet)
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .lineLimit(2)
+                        .padding(.top, 2)
                 }
             }
             Spacer(minLength: 0)
@@ -34,10 +42,14 @@ struct ChannelRowView: View {
         .contentShape(Rectangle())
     }
 
-    /// "@handle · 1.2M subscribers"
-    private var detail: String? {
-        let parts = [channel.handle, channel.subscriberCountText].compactMap { $0 }.filter { !$0.isEmpty }
-        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    /// "1.25M subscribers", or the video count when the subscriber count is not known.
+    private var statsText: String? {
+        nonEmpty(channel.subscriberCountText) ?? nonEmpty(channel.videoCountText)
+    }
+
+    private func nonEmpty(_ text: String?) -> String? {
+        guard let text = text?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty else { return nil }
+        return text
     }
 }
 

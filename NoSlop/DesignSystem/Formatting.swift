@@ -22,13 +22,17 @@ enum Formatting {
         if let name = video.channel?.name, !name.isEmpty {
             parts.append(name)
         }
-        if let views = viewsText(for: video) {
-            parts.append(views)
-        }
-        if let age = ageText(for: video) {
-            parts.append(age)
+        if let stats = statsLine(for: video) {
+            parts.append(stats)
         }
         return parts.joined(separator: " · ")
+    }
+
+    /// "23M views · 11 years ago": what follows the channel name when that has a line of its own (in a row).
+    /// nil when neither is known.
+    static func statsLine(for video: VideoSummary) -> String? {
+        let parts = [viewsText(for: video), ageText(for: video)].compactMap { $0 }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }
 
     /// "23M views": compact when the count is known, else YouTube's own text (for example "1,204 watching").
@@ -57,5 +61,21 @@ enum Formatting {
             return text
         }
         return video.publishedAt.map(relativeDate)
+    }
+
+    /// What is left of a video, rounded up to whole minutes: "Less than a minute left", "12 min left",
+    /// "1 hr, 5 min left". nil when nothing is left (or the length is unknown, i.e. `seconds` is 0 or negative).
+    static func timeLeft(seconds: Double) -> String? {
+        guard seconds.isFinite, seconds > 0 else { return nil }
+        guard seconds >= 60 else { return "Less than a minute left" }
+        let minutes = Int((seconds / 60).rounded(.up))
+        let text = Duration.seconds(minutes * 60)
+            .formatted(.units(allowed: [.hours, .minutes], width: .abbreviated, maximumUnitCount: 2))
+        return "\(text) left"
+    }
+
+    /// "1 video", "14 videos".
+    static func videoCountText(_ count: Int) -> String {
+        count == 1 ? "1 video" : "\(count.formatted()) videos"
     }
 }
