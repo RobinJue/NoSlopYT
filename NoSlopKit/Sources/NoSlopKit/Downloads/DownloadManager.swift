@@ -34,6 +34,10 @@ public final class DownloadManager {
     @ObservationIgnored private var starts: [String: DownloadStart] = [:]
     /// Lower-cased names of final files that merges in progress will create.
     @ObservationIgnored private var reservedNames: [String: String] = [:]
+    /// The streams each item picked, by item id: set when the item has chosen its formats (before anything is
+    /// fetched), kept until it fails, is cancelled or deleted, or is started again. Finished items of an earlier launch
+    /// are not in it; `streamsToday(of:info:)` works those out again.
+    @ObservationIgnored private var chosenStreams: [String: DownloadStreams] = [:]
 
     /// - Parameter sessionConfiguration: nil means the background configuration with the global session id.
     public convenience init(rootDirectory: URL, streams: any StreamResolving, sessionConfiguration: URLSessionConfiguration? = nil) {
@@ -121,6 +125,11 @@ public final class DownloadManager {
     /// Adds a download at the front of the list and starts it. A failed or paused one for the same video and
     /// quality starts again; one that is queued, running or finished is left alone (a finished one whose file has
     /// disappeared is downloaded again).
+    ///
+    /// A quality is a request, not a file: "720p" of a video that stops at 144p is the 144p file, which is also what
+    /// "144p" gives. Once the streams are known (YouTube has been asked), an item that would fetch the same video and
+    /// audio streams as another item of that video that has not failed is removed from the list again instead of
+    /// downloading them twice. An original that is paused starts again, since a download of it was asked for.
     public func enqueue(video: VideoSummary, quality: DownloadQuality) {
         let id = Self.itemID(video: video, quality: quality)
         if let item = items.first(where: { $0.id == id }) {
@@ -198,6 +207,8 @@ public final class DownloadManager {
         if let previous = starts.removeValue(forKey: id) { previous.task.cancel() }
         if let stale = jobs.removeValue(forKey: id) { stale.assembly?.cancel() }
         reservedNames.removeValue(forKey: id)
+        // It picks its streams again, from fresh stream info.
+        chosenStreams.removeValue(forKey: id)
 
         update(id) { item in
             item.state = .queued
@@ -230,6 +241,16 @@ public final class DownloadManager {
             try ensureStarting(id, generation)
 
             let plan = try Self.makePlan(for: item, info: info, tuning: tuning)
+
+            // Asked for as another quality, but the very same streams are already downloaded or on their way: there
+            // is nothing to fetch. Nothing suspends between this check and the claim below, so two requests that
+            // resolve at the same time cannot both get through.
+            let chosen = DownloadStreams(plan)
+            if let original = existingDownload(fetching: chosen, besides: item, info: info) {
+                dropDuplicate(id, of: original)
+                return
+            }
+            chosenStreams[id] = chosen
 
             // Whatever an earlier attempt left running must be gone before its directory is touched.
             engine.cancelTasks(itemID: id)
@@ -333,6 +354,49 @@ public final class DownloadManager {
         return format
     }
 
+    // MARK: - Equal streams
+
+    /// Another item of the same video that has not failed and fetches (or fetched) exactly `streams`.
+    private func existingDownload(fetching streams: DownloadStreams, besides item: DownloadItem, info: StreamInfo) -> DownloadItem? {
+        items.first { other in
+            other.id != item.id
+                && other.video.id == item.video.id
+                && fetchedStreams(of: other, matching: info) == streams
+        }
+    }
+
+    /// The streams of an item that has not failed. nil when they are not known: the item is still asking YouTube for
+    /// its streams (it will compare itself with the item that is being checked when its turn comes), it failed, or its
+    /// file is gone.
+    private func fetchedStreams(of item: DownloadItem, matching info: StreamInfo) -> DownloadStreams? {
+        switch item.state {
+        case .failed:
+            return nil
+        case .queued, .downloading, .merging:
+            return chosenStreams[item.id]
+        case .paused:
+            return chosenStreams[item.id]
+                ?? workspace.loadPlan(for: item.id).map(DownloadStreams.init)
+                ?? streamsToday(of: item, info: info)
+        case .completed:
+            guard fileURL(for: item) != nil else { return nil }
+            return chosenStreams[item.id] ?? streamsToday(of: item, info: info)
+        }
+    }
+
+    /// What the item's quality picks from the formats YouTube offers now. A download of an earlier launch kept its
+    /// file but not the itags of its streams; itags name fixed renditions, so this is what it got.
+    private func streamsToday(of item: DownloadItem, info: StreamInfo) -> DownloadStreams? {
+        FormatSelector.select(from: info.formats, quality: item.quality).map(DownloadStreams.init)
+    }
+
+    /// The item asks for streams `original` has: it leaves the list instead of fetching them a second time.
+    private func dropDuplicate(_ id: String, of original: DownloadItem) {
+        cancel(id: id)
+        // Someone asked for this video: an original that is only paused picks up where it stopped.
+        if original.state == .paused { start(original.id) }
+    }
+
     // MARK: - Events
 
     /// Applies what the session delegate reported. Internal so tests can play the part of a relaunched session.
@@ -413,6 +477,7 @@ public final class DownloadManager {
 
         let present = DownloadAssembler.present(in: plan, workspace: workspace)
         jobs[itemID] = DownloadJob(plan: plan, generation: UUID(), present: present)
+        chosenStreams[itemID] = DownloadStreams(plan)
         update(itemID) { item in
             item.state = .downloading
             item.errorMessage = nil
@@ -572,6 +637,7 @@ public final class DownloadManager {
             if let destination = job.destination { try? FileManager.default.removeItem(at: destination) }
         }
         reservedNames.removeValue(forKey: id)
+        chosenStreams.removeValue(forKey: id)
         engine.cancelTasks(itemID: id)
         let engine = engine
         Task { await engine.cancelInheritedTasks(itemID: id) }
@@ -637,6 +703,23 @@ private final class MergeBackgroundTime {
 #endif
 
 // MARK: - Runtime state
+
+/// Which streams a download fetches: the itags of its video (none for audio only) and of its audio. Two downloads of
+/// one video with the same streams are the same file, whatever quality they were asked for as.
+private struct DownloadStreams: Hashable {
+    var video: Int?
+    var audio: Int
+
+    init(_ plan: DownloadJobPlan) {
+        video = plan.video?.itag
+        audio = plan.audio.itag
+    }
+
+    init(_ selected: SelectedFormats) {
+        video = selected.video?.itag
+        audio = selected.audio.itag
+    }
+}
 
 /// An item that is resolving its URLs and preparing its directory.
 private struct DownloadStart {
