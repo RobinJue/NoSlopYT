@@ -7,7 +7,8 @@ import Observation
 ///
 /// - Items are de-duplicated by id (YouTube repeats items across continuation pages, and `ForEach` needs unique ids).
 /// - The caller's `filter` runs on every page. A page the filter empties does not stall the list: loading goes on
-///   with the next page, up to `maxEmptyPages` in a row, then waits for the user to scroll again.
+///   with the next page, up to `maxEmptyPages` in a row. Then the list is `isPaused` and waits for a nudge: the user
+///   scrolling to the end of it, or the screen's "Keep looking" / "Show more" button (both call `loadMore`).
 /// - Loading runs in a task of the list's own, so a screen that disappears and returns does not restart it. `reset`
 ///   and `removeAll` start a new epoch: an answer that arrives for an older one is dropped.
 @MainActor
@@ -24,6 +25,10 @@ final class FeedPages<Item: Identifiable & Sendable> {
     private(set) var isLoadingMore = false
     /// Why the last attempt to load more failed; a retry clears it.
     private(set) var loadMoreError: Error?
+    /// Paging stopped before the end of the list without failing: the filter hid `maxEmptyPages` pages in a row, or a
+    /// request was cancelled from outside. Nothing is loading, so a screen with no rows must not show loading
+    /// placeholders for it; it offers to keep looking instead. `loadMore` goes on from here.
+    private(set) var isPaused = false
 
     @ObservationIgnored private var seen: Set<Item.ID> = []
     @ObservationIgnored private var task: Task<Void, Never>?
@@ -68,6 +73,7 @@ final class FeedPages<Item: Identifiable & Sendable> {
     /// waits for `retryLoadMore`).
     func loadMore(fetch: @escaping Fetch, filter: @escaping Filter) {
         guard continuation != nil, !isLoadingMore, loadMoreError == nil else { return }
+        isPaused = false
         isLoadingMore = true
         let thisEpoch = epoch
         task = Task { [weak self] in
@@ -90,10 +96,17 @@ final class FeedPages<Item: Identifiable & Sendable> {
                 continuation = page.continuation == token ? nil : page.continuation
                 let added = append(filter(page.items))
                 emptyPages = added == 0 ? emptyPages + 1 : 0
-                if added > 0 || emptyPages >= Self.maxEmptyPages { break }
+                if added > 0 { break }
+                if emptyPages >= Self.maxEmptyPages {
+                    isPaused = continuation != nil
+                    break
+                }
             } catch {
                 guard epoch == thisEpoch else { return }
-                if FeedError.isCancellation(error) { break }
+                if FeedError.isCancellation(error) {
+                    isPaused = continuation != nil
+                    break
+                }
                 loadMoreError = error
                 isLoadingMore = false
                 task = nil
@@ -110,6 +123,7 @@ final class FeedPages<Item: Identifiable & Sendable> {
         task = nil
         epoch += 1
         isLoadingMore = false
+        isPaused = false
         loadMoreError = nil
     }
 

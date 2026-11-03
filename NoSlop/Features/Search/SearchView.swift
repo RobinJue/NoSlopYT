@@ -7,12 +7,14 @@ struct SearchView: View {
     @Environment(AppEnvironment.self) private var env
     @State private var model = SearchViewModel()
     @State private var showsFilters = false
+    @FocusState private var isSearchFocused: Bool
 
     var body: some View {
         content
             .navigationTitle("Search")
             .navigationBarTitleDisplayMode(.large)
             .searchable(text: $model.text, prompt: "Search YouTube")
+            .searchFocused($isSearchFocused)
             // Keep the toolbar (the filter button) on screen while the search field is active.
             .searchPresentationToolbarBehavior(.avoidHidingContent)
             .textInputAutocapitalization(.never)
@@ -39,17 +41,24 @@ struct SearchView: View {
     private var content: some View {
         switch model.mode {
         case .recents:
-            RecentSearchesList { model.submit($0, using: env) }
+            RecentSearchesList { search(for: $0) }
         case .suggestions:
             SuggestionsList(
                 recents: model.matchingRecents(in: env),
                 suggestions: model.suggestions,
-                search: { model.submit($0, using: env) },
+                search: { search(for: $0) },
                 fill: { model.text = $0 }
             )
         case .results:
             SearchResultsContent(model: model.results)
         }
+    }
+
+    /// Searches for a recent search or suggestion the user tapped. The keyboard goes away, as it does when they press
+    /// the keyboard's Search key; otherwise it stays up over the results and does not go away when they scroll.
+    private func search(for query: String) {
+        isSearchFocused = false
+        model.submit(query, using: env)
     }
 }
 

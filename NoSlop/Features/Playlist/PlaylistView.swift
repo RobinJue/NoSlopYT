@@ -85,11 +85,15 @@ struct PlaylistView: View {
                 FeedFooter(
                     error: list.loadMoreError,
                     retry: { model.retryLoadMore(using: env) },
-                    onReachEnd: { model.loadMore(using: env) }
+                    onReachEnd: { model.loadMore(using: env) },
+                    isPaused: list.isPaused
                 )
             }
         } else if let error = list.loadMoreError {
             ErrorStateView(error: error) { model.retryLoadMore(using: env) }
+                .padding(.top, 30)
+        } else if list.isPaused {
+            FeedPausedView { model.loadMore(using: env) }
                 .padding(.top, 30)
         } else if list.hasMore || list.isLoadingMore {
             PlaceholderList(style: .rows, count: 4)

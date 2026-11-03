@@ -97,7 +97,22 @@ final class ChannelViewModel {
                 } else if self.header == nil {
                     self.phase = .failed(error)
                 }
-                // A failed refresh leaves the page that is on screen.
+                // A failed refresh leaves the page that is on screen, and with it the tabs the refresh had cancelled.
+                if self.header != nil { self.restartUnfinishedTabs(using: env) }
+            }
+        }
+    }
+
+    /// A refresh cancels the loads of tabs that were still opening. When the refresh then fails the old page stays, and
+    /// those tabs would show placeholders for ever (selecting a tab that has content never loads it). The tab on screen
+    /// starts over; the others are forgotten, so they load when they are selected.
+    private func restartUnfinishedTabs(using env: AppEnvironment) {
+        for (tab, tabContent) in content {
+            guard case .loading = tabContent.phase else { continue }
+            if tab == selectedTab {
+                loadTab(tab, using: env)
+            } else {
+                content[tab] = nil
             }
         }
     }

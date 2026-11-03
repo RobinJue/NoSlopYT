@@ -34,6 +34,10 @@ struct SearchResultsContent: View {
             } else if let error = model.list.loadMoreError {
                 // The filters hid the first page and the next one failed to load.
                 ErrorStateView(error: error) { model.retryLoadMore(using: env) }
+            } else if model.list.isPaused {
+                // The filters hid several pages in a row and paging stopped; nothing is on its way.
+                FeedPausedView { model.loadMore(using: env) }
+                    .padding(.top, 40)
             } else if model.list.hasMore || model.list.isLoadingMore {
                 // The filters hid the first page; the next one is on its way.
                 PlaceholderList(style: .cards)
@@ -56,7 +60,8 @@ struct SearchResultsContent: View {
                 FeedFooter(
                     error: model.list.loadMoreError,
                     retry: { model.retryLoadMore(using: env) },
-                    onReachEnd: { model.loadMore(using: env) }
+                    onReachEnd: { model.loadMore(using: env) },
+                    isPaused: model.list.isPaused
                 )
             }
         }

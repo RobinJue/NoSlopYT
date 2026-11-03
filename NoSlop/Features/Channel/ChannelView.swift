@@ -100,6 +100,9 @@ struct ChannelView: View {
                 } else if let error = list.loadMoreError {
                     ErrorStateView(error: error) { model.retryLoadMore(tab, using: env) }
                         .padding(.top, 30)
+                } else if list.isPaused {
+                    FeedPausedView { model.loadMore(tab, using: env) }
+                        .padding(.top, 30)
                 } else if list.hasMore || list.isLoadingMore {
                     PlaceholderList(style: tab == .playlists ? .rows : .cards, count: 3)
                         .padding(.top, Theme.padding)
@@ -125,7 +128,8 @@ struct ChannelView: View {
                 FeedFooter(
                     error: list.loadMoreError,
                     retry: { model.retryLoadMore(tab, using: env) },
-                    onReachEnd: { model.loadMore(tab, using: env) }
+                    onReachEnd: { model.loadMore(tab, using: env) },
+                    isPaused: list.isPaused
                 )
             }
         }

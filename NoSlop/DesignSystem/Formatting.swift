@@ -64,15 +64,19 @@ enum Formatting {
     }
 
     /// What is left of a video, rounded up to whole minutes: "Less than a minute left", "12 min left",
-    /// "1 hr, 5 min left". nil when nothing is left (or the length is unknown, i.e. `seconds` is 0 or negative).
+    /// "1 hr, 5 min left". nil when nothing is left (or the length is unknown, i.e. `seconds` is 0 or negative, or
+    /// not a length a video can have: a damaged history entry must not trap in the integer conversion below).
     static func timeLeft(seconds: Double) -> String? {
-        guard seconds.isFinite, seconds > 0 else { return nil }
+        guard seconds.isFinite, seconds > 0, seconds < longestPlausibleVideo else { return nil }
         guard seconds >= 60 else { return "Less than a minute left" }
         let minutes = Int((seconds / 60).rounded(.up))
         let text = Duration.seconds(minutes * 60)
             .formatted(.units(allowed: [.hours, .minutes], width: .abbreviated, maximumUnitCount: 2))
         return "\(text) left"
     }
+
+    /// A day-long stream is rare, a year-long one does not exist.
+    private static let longestPlausibleVideo: Double = 365 * 24 * 3_600
 
     /// "1 video", "14 videos".
     static func videoCountText(_ count: Int) -> String {
