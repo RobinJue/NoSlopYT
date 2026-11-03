@@ -9,7 +9,8 @@ import Observation
 /// `watch-later.json`, `playlists.json`, `search-history.json`). The files are read once in `init`, on the main
 /// actor, because a screen that opens right away must already see the data. A file that cannot be decoded is
 /// renamed `<file>.corrupt` (see `JSONFileStore`) and that collection starts empty; the other files are unaffected.
-/// If only some entries of a list cannot be read, the others are kept (the original still goes to `.corrupt`).
+/// If only some entries of a list cannot be read, the others are kept and written back to a clean file at once (the
+/// original, damaged entries included, still goes to `.corrupt`).
 ///
 /// Changes are written in the background: the first change after a write starts a 0.5 s timer, and everything
 /// that changed until it fires goes to disk together, encoded and written off the main thread. Writes happen in

@@ -21,20 +21,24 @@ private final class ChangeFlag: @unchecked Sendable {
 @Suite final class SettingsStoreTests {
     private static let key = "noslop.settings"
 
-    /// A defaults suite of its own per test (never `.standard`); its plist is removed afterwards.
-    private let suiteName = "NoSlopSettingsTests-\(UUID().uuidString)"
+    /// A defaults suite of its own per test (never `.standard`). Its name is a path inside a temporary directory of
+    /// its own, which puts the suite's plist there, and removing the directory afterwards removes everything.
+    ///
+    /// A suite with a plain name would leave an empty `<name>.plist` in `~/Library/Preferences` for every test:
+    /// `removePersistentDomain` does not remove it, and the preferences daemon writes it again about ten seconds
+    /// after a test deleted it, which no cleanup in the test can wait for.
+    private let directory: URL
     private let defaults: UserDefaults
 
-    init() {
-        defaults = UserDefaults(suiteName: suiteName) ?? .standard
+    init() throws {
+        directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("NoSlopSettingsTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defaults = try #require(UserDefaults(suiteName: directory.appendingPathComponent("defaults").path))
     }
 
     deinit {
-        UserDefaults(suiteName: suiteName)?.removePersistentDomain(forName: suiteName)
-        // Removing the domain leaves an empty plist in ~/Library/Preferences; take that away as well.
-        if let library = try? FileManager.default.url(for: .libraryDirectory, in: .userDomainMask, appropriateFor: nil, create: false) {
-            try? FileManager.default.removeItem(at: library.appendingPathComponent("Preferences/\(suiteName).plist"))
-        }
+        try? FileManager.default.removeItem(at: directory)
     }
 
     private func store(key: String = SettingsStoreTests.key) -> SettingsStore {

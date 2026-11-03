@@ -33,9 +33,11 @@ private func makeChannel(_ id: String, source: SubscriptionSource = .local) -> S
     SubscribedChannel(id: id, name: "Channel \(id)", source: source)
 }
 
-/// Polls `condition` every 20 ms until it holds or `timeout` passes.
+/// Polls `condition` every 20 ms until it holds or `timeout` passes. The timeout is generous because the write that
+/// is waited for runs at utility priority, which a machine busy with other work (parallel test runs) can starve for
+/// seconds; a passing test never waits that long.
 @MainActor
-private func eventually(timeout: Duration = .seconds(5), _ condition: () -> Bool) async -> Bool {
+private func eventually(timeout: Duration = .seconds(60), _ condition: () -> Bool) async -> Bool {
     let deadline = ContinuousClock.now + timeout
     while ContinuousClock.now < deadline {
         if condition() { return true }
@@ -531,12 +533,41 @@ private func eventually(timeout: Duration = .seconds(5), _ condition: () -> Bool
         // The original, damaged entries included, is kept next to the clean file that replaces it.
         #expect(try Data(contentsOf: url("subscriptions.json.corrupt")) == Data(original.utf8))
         #expect(exists("history.json.corrupt") && exists("search-history.json.corrupt"))
-        #expect(!exists("subscriptions.json"))
+        #expect(exists("subscriptions.json"), "the readable entries are written back to a clean file right away")
 
         store.subscribe(makeChannel("D"))
         await store.flush()
         #expect(makeStore().subscriptions.map(\.id) == ["A", "C", "D"])
         #expect(!exists("watch-later.json.corrupt"), "untouched files are not renamed")
+    }
+
+    /// Review Focus #5 ("everything readable kept"): the readable entries of a partly damaged file must still be
+    /// there on the launch after the one that found the damage, even when nothing was changed in between. Without
+    /// the write-back the next launch would find no file at all and start with an empty library, while the entries
+    /// sat unused in the `.corrupt` copy.
+    @Test func entriesRecoveredFromADamagedFileSurviveAnUntouchedRestart() throws {
+        let original = #"[{"id":"A","name":"first"},{"name":"has no id"},{"id":"C","name":"third"}]"#
+        try write(original, to: "subscriptions.json")
+        try write(#"[{"video":{"id":"v1"}},{"video":"not a video"},{"video":{"id":"v3"}}]"#, to: "history.json")
+        try write(#"["blender", 42, "donut"]"#, to: "search-history.json")
+
+        _ = makeStore()   // the launch that finds the damage; the viewer changes nothing
+        let second = makeStore()
+
+        #expect(second.subscriptions.map(\.id) == ["A", "C"])
+        #expect(second.history.map(\.id) == ["v1", "v3"])
+        #expect(second.searchHistory == ["blender", "donut"])
+        #expect(try Data(contentsOf: url("subscriptions.json.corrupt")) == Data(original.utf8), "the damaged original is not touched again")
+    }
+
+    @Test func aFileWithNothingReadableIsNotReplacedByAnEmptyOne() throws {
+        try write(#"[{"name":"no id"},7,"text"]"#, to: "subscriptions.json")
+
+        let store = makeStore()
+
+        #expect(store.subscriptions.isEmpty)
+        #expect(exists("subscriptions.json.corrupt"))
+        #expect(!exists("subscriptions.json"), "there is nothing to write back")
     }
 
     @Test func everyFileIsCheckedOnItsOwn() throws {
@@ -701,7 +732,13 @@ private func eventually(timeout: Duration = .seconds(5), _ condition: () -> Bool
 
         #expect(samples.map(\.name) == ["ok", "fine"])
         #expect(try Data(contentsOf: url("samples.json.corrupt")) == Data(original.utf8))
-        #expect(!exists("samples.json"))
+
+        // The readable entries are written straight back, so a second load finds a healthy file with the same content
+        // and leaves the preserved original alone.
+        #expect(exists("samples.json"))
+        let again: [Sample] = store.loadList("samples.json")
+        #expect(again == samples)
+        #expect(try Data(contentsOf: url("samples.json.corrupt")) == Data(original.utf8))
     }
 
     @Test func loadListLeavesAHealthyFileAlone() throws {

@@ -35,15 +35,23 @@ struct JSONFileStore: Sendable {
     ///
     /// One damaged entry does not cost the others: the readable entries are returned. The file is moved aside exactly
     /// as in `load` whenever *anything* in it could not be read (the whole file when it is not a list at all), so
-    /// the unreadable entry is kept in the `.corrupt` copy and the next `save` writes a clean file.
-    func loadList<Element: Decodable>(_ file: String) -> [Element] {
+    /// the unreadable entry is kept in the `.corrupt` copy. The readable entries are written back to a clean file
+    /// at once: they must not exist only in memory, or a launch that follows without any change to this list would
+    /// find no file and start with an empty list although the entries were readable.
+    func loadList<Element: Codable>(_ file: String) -> [Element] {
         let url = fileURL(file)
         guard FileManager.default.fileExists(atPath: url.path) else { return [] }
         do {
             let data = try Data(contentsOf: url)
             let entries = try Self.makeDecoder().decode([Lenient<Element>].self, from: data)
             let readable = entries.compactMap(\.value)
-            if readable.count != entries.count { Self.moveAside(url) }
+            if readable.count != entries.count {
+                Self.moveAside(url)
+                // Only over a file that really was moved away: the damaged original is never overwritten.
+                if !readable.isEmpty, !FileManager.default.fileExists(atPath: url.path) {
+                    save(readable, to: file)
+                }
+            }
             return readable
         } catch {
             Self.moveAside(url)
