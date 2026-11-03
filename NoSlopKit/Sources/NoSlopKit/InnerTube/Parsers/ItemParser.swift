@@ -476,8 +476,9 @@ public enum ItemParser {
     }
 
     /// A view count from YouTube's text. Only English texts ("9.8K views", "No views") and bare counts ("7.8M")
-    /// are read: in other languages the unit words are unknown to `parseCount` ("12万", "12 тыс.") and it would
-    /// answer 12, so those keep YouTube's own text and no number.
+    /// are read. Any other language keeps YouTube's own text and gets no number: the screens word a known count in
+    /// English ("2.8M views"), and the text YouTube sent is the better one on a screen in the user's language.
+    /// (`parseCount` itself never misreads such texts; it answers nil for the units it does not know.)
     static func viewCount(from text: String?) -> Int? {
         guard let text else { return nil }
         let tokens = words(in: text)

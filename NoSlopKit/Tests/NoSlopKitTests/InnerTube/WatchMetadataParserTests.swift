@@ -469,6 +469,53 @@ import Testing
         #expect(d.likeCount == 1_203_456)
     }
 
+    /// What the page said in some language, and the numbers the parser may derive from it.
+    struct LocalizedCounts: Sendable, CustomTestStringConvertible {
+        var views: String
+        var viewCount: Int?
+        var like: String
+        var likeAccessibility: String?
+        var likeCount: Int?
+        var subscribers: String
+
+        var testDescription: String { "\(views) | \(like) | \(subscribers)" }
+    }
+
+    private static let localizedCounts: [LocalizedCounts] = [
+        // English: numbers for everything, the exact like count from the accessibility text.
+        LocalizedCounts(
+            views: "23,500,582 views", viewCount: 23_500_582, like: "110K",
+            likeAccessibility: "like this video along with 110,320 other people", likeCount: 110_320, subscribers: "1.25M subscribers"
+        ),
+        // German: the units Tsd., Mio. and the grouping dots are understood; the exact count agrees with the rounded one.
+        LocalizedCounts(
+            views: "2.763.792 Aufrufe", viewCount: 2_763_792, like: "110 Tsd.",
+            likeAccessibility: "Mit „Gefällt mir“ bewerten – zusammen mit 110.123 anderen Personen", likeCount: 110_123,
+            subscribers: "1,25 Mio. Abonnenten"
+        ),
+        LocalizedCounts(views: "12 Aufrufe", viewCount: 12, like: "9,8 Tsd.", likeAccessibility: nil, likeCount: 9_800, subscribers: "110 Tsd. Abonnenten"),
+        // Units the parser does not know: no number, and the text YouTube sent is still there.
+        LocalizedCounts(views: "12万 回視聴", viewCount: nil, like: "12万", likeAccessibility: nil, likeCount: nil, subscribers: "チャンネル登録者数 125万人"),
+        LocalizedCounts(
+            views: "12 тыс. просмотров", viewCount: nil, like: "12 тыс.", likeAccessibility: "Нравится: 12 тыс.", likeCount: nil,
+            subscribers: "1,25 млн подписчиков"
+        ),
+        LocalizedCounts(views: "12 tn visningar", viewCount: nil, like: "12 tn", likeAccessibility: nil, likeCount: nil, subscribers: "1,25 mn prenumeranter"),
+        // A French page: the grouped view count is read, the abbreviated like count is not.
+        LocalizedCounts(views: "2 763 792 vues", viewCount: 2_763_792, like: "12 k", likeAccessibility: nil, likeCount: nil, subscribers: "1,25 M d\u{2019}abonn\u{E9}s"),
+    ]
+
+    @Test(arguments: localizedCounts)
+    func countsInAnyLanguageKeepTheirTextAndNeverBecomeAWrongNumber(_ example: LocalizedCounts) throws {
+        let json = Self.next(views: example.views, likeTitle: example.like, likeAccessibility: example.likeAccessibility, subscribers: example.subscribers)
+        let d = try #require(WatchMetadataParser.parse(json, videoID: "abc"))
+        #expect(d.viewCountText == example.views)
+        #expect(d.viewCount == example.viewCount)
+        #expect(d.likeCountText == example.like)
+        #expect(d.likeCount == example.likeCount)
+        #expect(d.subscriberCountText == example.subscribers)
+    }
+
     // MARK: - Missing and mutated shapes
 
     @Test(arguments: ["{}", "[]", "null", "\"text\"", "42", #"{"contents":{}}"#, #"{"contents":{"twoColumnWatchNextResults":{}}}"#])
@@ -605,6 +652,31 @@ import Testing
             ])])]),
         ])
         return nextResponse(contents: [.object(["videoPrimaryInfoRenderer": primary])])
+    }
+
+    /// A `next` response with a title, a view count, a like button and a channel with a subscriber count.
+    private static func next(views: String, likeTitle: String, likeAccessibility: String?, subscribers: String) -> JSON {
+        var button: [String: JSON] = ["title": .string(likeTitle)]
+        if let likeAccessibility { button["accessibilityText"] = .string(likeAccessibility) }
+        let toggle: JSON = .object(["toggleButtonViewModel": .object(["toggleButtonViewModel": .object([
+            "defaultButtonViewModel": .object(["buttonViewModel": .object(button)]),
+        ])])])
+        let like: JSON = .object(["likeButtonViewModel": .object(["likeButtonViewModel": toggle])])
+        let primary: JSON = .object([
+            "title": .object(["simpleText": "T"]),
+            "viewCount": .object(["videoViewCountRenderer": .object(["viewCount": .object(["simpleText": .string(views)])])]),
+            "videoActions": .object(["menuRenderer": .object(["topLevelButtons": .array([
+                .object(["segmentedLikeDislikeButtonViewModel": like]),
+            ])])]),
+        ])
+        let owner: JSON = .object(["videoOwnerRenderer": .object([
+            "title": .object(["runs": .array([.object(["text": "Channel"])])]),
+            "subscriberCountText": .object(["simpleText": .string(subscribers)]),
+        ])])
+        return nextResponse(contents: [
+            .object(["videoPrimaryInfoRenderer": primary]),
+            .object(["videoSecondaryInfoRenderer": .object(["owner": owner])]),
+        ])
     }
 
     /// Parses a `next` response whose secondary info holds only the given `videoOwnerRenderer`.

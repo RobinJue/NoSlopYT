@@ -34,11 +34,14 @@ public struct GoogleOAuthConfig: Sendable, Hashable {
         redirectScheme + ":/oauth2redirect"
     }
 
+    /// The scope that matters: without it the YouTube Data API refuses every account call.
+    static let youTubeScope = "https://www.googleapis.com/auth/youtube"
+
     public static let scopes: [String] = [
         "openid",
         "email",
         "profile",
-        "https://www.googleapis.com/auth/youtube",
+        youTubeScope,
     ]
 
     /// The consent page URL for an authorization-code flow with PKCE (S256). Values are fully percent-encoded.

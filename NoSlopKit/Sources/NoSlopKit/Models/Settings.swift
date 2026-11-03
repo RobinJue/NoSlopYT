@@ -59,42 +59,59 @@ public struct AppSettings: Codable, Hashable, Sendable {
 
     public init() {}
 
-    /// Every key is optional: a missing key (older build, hand-edited file) takes its default.
+    /// Decodes every key on its own: a key that is missing, `null` or of the wrong type takes its default and the
+    /// other keys keep what they say. One value that an older build, another build or a hand edit got wrong therefore
+    /// never resets the rest of the settings. Only a document that is not an object at all throws.
     public init(from decoder: any Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         let defaults = AppSettings()
-        hideShorts = try c.decodeIfPresent(Bool.self, forKey: .hideShorts) ?? defaults.hideShorts
-        hideMembersOnly = try c.decodeIfPresent(Bool.self, forKey: .hideMembersOnly) ?? defaults.hideMembersOnly
-        hideLiveAndUpcoming = try c.decodeIfPresent(Bool.self, forKey: .hideLiveAndUpcoming) ?? defaults.hideLiveAndUpcoming
-        hideWatchedInSubscriptions = try c.decodeIfPresent(Bool.self, forKey: .hideWatchedInSubscriptions)
-            ?? defaults.hideWatchedInSubscriptions
-        blockedChannels = try c.decodeIfPresent([BlockedChannel].self, forKey: .blockedChannels) ?? defaults.blockedChannels
-        blockedKeywords = try c.decodeIfPresent([String].self, forKey: .blockedKeywords) ?? defaults.blockedKeywords
-        sponsorBlockEnabled = try c.decodeIfPresent(Bool.self, forKey: .sponsorBlockEnabled) ?? defaults.sponsorBlockEnabled
-        deArrowTitles = try c.decodeIfPresent(Bool.self, forKey: .deArrowTitles) ?? defaults.deArrowTitles
-        wifiQuality = try c.decodeIfPresent(QualityPreference.self, forKey: .wifiQuality) ?? defaults.wifiQuality
-        cellularQuality = try c.decodeIfPresent(QualityPreference.self, forKey: .cellularQuality) ?? defaults.cellularQuality
-        defaultPlaybackRate = try c.decodeIfPresent(Double.self, forKey: .defaultPlaybackRate) ?? defaults.defaultPlaybackRate
-        autoplayNext = try c.decodeIfPresent(Bool.self, forKey: .autoplayNext) ?? defaults.autoplayNext
-        backgroundPlayback = try c.decodeIfPresent(Bool.self, forKey: .backgroundPlayback) ?? defaults.backgroundPlayback
-        autoPictureInPicture = try c.decodeIfPresent(Bool.self, forKey: .autoPictureInPicture) ?? defaults.autoPictureInPicture
-        preferredCaptionLanguage = try c.decodeIfPresent(String.self, forKey: .preferredCaptionLanguage)
-        googleClientID = try c.decodeIfPresent(String.self, forKey: .googleClientID) ?? defaults.googleClientID
-        contentLanguage = try c.decodeIfPresent(String.self, forKey: .contentLanguage)
-        contentRegion = try c.decodeIfPresent(String.self, forKey: .contentRegion)
+        func read<Value: Decodable>(_ key: CodingKeys, _ fallback: Value) -> Value {
+            (try? c.decodeIfPresent(Value.self, forKey: key)) ?? fallback
+        }
 
-        // Behaviours are stored as {"sponsor": "autoSkip", ...}. Decode leniently so a category or behaviour
-        // added or removed by another build never invalidates the whole file; categories not present in the
-        // stored object keep their default behaviour.
+        hideShorts = read(.hideShorts, defaults.hideShorts)
+        hideMembersOnly = read(.hideMembersOnly, defaults.hideMembersOnly)
+        hideLiveAndUpcoming = read(.hideLiveAndUpcoming, defaults.hideLiveAndUpcoming)
+        hideWatchedInSubscriptions = read(.hideWatchedInSubscriptions, defaults.hideWatchedInSubscriptions)
+        sponsorBlockEnabled = read(.sponsorBlockEnabled, defaults.sponsorBlockEnabled)
+        deArrowTitles = read(.deArrowTitles, defaults.deArrowTitles)
+        wifiQuality = read(.wifiQuality, defaults.wifiQuality)
+        cellularQuality = read(.cellularQuality, defaults.cellularQuality)
+        defaultPlaybackRate = read(.defaultPlaybackRate, defaults.defaultPlaybackRate)
+        autoplayNext = read(.autoplayNext, defaults.autoplayNext)
+        backgroundPlayback = read(.backgroundPlayback, defaults.backgroundPlayback)
+        autoPictureInPicture = read(.autoPictureInPicture, defaults.autoPictureInPicture)
+        preferredCaptionLanguage = read(.preferredCaptionLanguage, defaults.preferredCaptionLanguage)
+        googleClientID = read(.googleClientID, defaults.googleClientID)
+        contentLanguage = read(.contentLanguage, defaults.contentLanguage)
+        contentRegion = read(.contentRegion, defaults.contentRegion)
+
+        // The two lists keep their readable entries: one broken entry must not unblock every other channel.
+        blockedChannels = (try? c.decodeIfPresent([Lenient<BlockedChannel>].self, forKey: .blockedChannels))?
+            .compactMap(\.value) ?? defaults.blockedChannels
+        blockedKeywords = (try? c.decodeIfPresent([Lenient<String>].self, forKey: .blockedKeywords))?
+            .compactMap(\.value) ?? defaults.blockedKeywords
+
+        // Behaviours are stored as {"sponsor": "autoSkip", ...}. A category or behaviour added or removed by another
+        // build, or an entry of the wrong type, is skipped; categories without a readable entry keep their default.
         var behaviors = defaults.segmentBehaviors
-        if let stored = try c.decodeIfPresent([String: String].self, forKey: .segmentBehaviors) {
+        if let stored = try? c.decodeIfPresent([String: Lenient<String>].self, forKey: .segmentBehaviors) {
             for (key, value) in stored {
-                if let category = SponsorCategory(rawValue: key), let behavior = SegmentBehavior(rawValue: value) {
+                if let category = SponsorCategory(rawValue: key), let behavior = value.value.flatMap(SegmentBehavior.init(rawValue:)) {
                     behaviors[category] = behavior
                 }
             }
         }
         segmentBehaviors = behaviors
+    }
+
+    /// A list or dictionary entry that decodes to nil instead of failing, so that its neighbours still decode.
+    private struct Lenient<Value: Decodable>: Decodable {
+        let value: Value?
+
+        init(from decoder: any Decoder) {
+            value = try? Value(from: decoder)
+        }
     }
 
     /// sponsor, selfpromo and interaction auto-skip; every other category shows in the bar.

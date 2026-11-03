@@ -17,6 +17,8 @@ public actor GoogleOAuthService: GoogleAuthProviding {
     /// Signing out must not wait long for Google; the credentials are gone locally either way.
     private static let revokeTimeout: TimeInterval = 10
     private static let defaultTokenLifetime: TimeInterval = 3600
+    /// Google's access tokens live an hour; anything beyond a month is a garbled number, not a lifetime.
+    private static let maximumTokenLifetime: TimeInterval = 30 * 24 * 3600
 
     private let http: any HTTPClient
     private let store: any TokenStoring
@@ -72,6 +74,9 @@ public actor GoogleOAuthService: GoogleAuthProviding {
             throw failure.error
         }
         let tokens = try Self.tokens(from: response, at: now(), keeping: nil)
+        // The consent screen lets the user untick individual permissions. Without the YouTube one every account feature
+        // would fail later with a puzzling error, so the session is refused here and nothing of it is kept.
+        guard Self.grantsYouTubeAccess(tokens.scope) else { throw Self.youTubeAccessNotGranted }
         let account = try await account(for: tokens)
 
         try store.save(StoredCredentials(clientID: config.clientID, tokens: tokens, account: account))
@@ -248,17 +253,37 @@ public actor GoogleOAuthService: GoogleAuthProviding {
         guard let accessToken = response["access_token"]?.string, !accessToken.isEmpty else {
             throw NoSlopError.oauth("no access token in response")
         }
-        var lifetime = response["expires_in"]?.double ?? defaultTokenLifetime
-        if !(lifetime > 0) { lifetime = defaultTokenLifetime }  // also catches NaN
         let refreshToken = response["refresh_token"]?.string.flatMap { $0.isEmpty ? nil : $0 } ?? previous?.refreshToken
         return OAuthTokens(
             accessToken: accessToken,
             refreshToken: refreshToken,
-            expiresAt: now.addingTimeInterval(lifetime),
+            expiresAt: now.addingTimeInterval(lifetime(in: response)),
             scope: response["scope"]?.string ?? previous?.scope,
             idToken: response["id_token"]?.string ?? previous?.idToken
         )
     }
+
+    /// How long the access token lives, from `expires_in`. A value that cannot be right (missing, not a number, not
+    /// finite like "inf", not positive, or longer than `maximumTokenLifetime`) takes the default instead: the token is
+    /// then renewed after an hour at the latest, and the expiry is always a date that can be stored (an infinite one
+    /// cannot be encoded for the Keychain).
+    private static func lifetime(in response: JSON) -> TimeInterval {
+        guard let seconds = response["expires_in"]?.double, seconds.isFinite, seconds > 0, seconds <= maximumTokenLifetime else {
+            return defaultTokenLifetime
+        }
+        return seconds
+    }
+
+    /// Whether the scopes in a token response (space-separated) include the YouTube scope, as a whole entry:
+    /// "…/auth/youtube.readonly" is a different permission. A response without `scope` grants what was asked for.
+    fileprivate static func grantsYouTubeAccess(_ scope: String?) -> Bool {
+        guard let scope else { return true }
+        return scope.split(whereSeparator: \.isWhitespace).contains { $0 == GoogleOAuthConfig.youTubeScope }
+    }
+
+    fileprivate static let youTubeAccessNotGranted = NoSlopError.oauth(
+        "YouTube access wasn't granted. Sign in again and allow access to your YouTube account."
+    )
 
     /// `.oauth("access_denied")`, or `.oauth("invalid_client: The OAuth client was not found.")` with a description.
     fileprivate static func oauthError(_ code: String, description: String?) -> NoSlopError {

@@ -238,11 +238,39 @@ final class DownloadStubURLProtocol: URLProtocol {
     }
 }
 
-/// A flag a test can flip from the outside while a closure on another thread waits for it.
+/// A gate a test opens from the outside. Code under test waits for it with `await opened()`, which suspends instead of
+/// holding a thread: a closure that spins on `isOpen` with `Thread.sleep` keeps one thread of Swift's cooperative pool
+/// for as long as it waits, and a full test run, where hundreds of tests share that pool, then starves.
 final class DownloadTestGate: Sendable {
-    private let open = Mutex(false)
-    var isOpen: Bool { open.withLock { $0 } }
-    func release() { open.withLock { $0 = true } }
+    private struct State {
+        var isOpen = false
+        var waiting: [CheckedContinuation<Void, Never>] = []
+    }
+
+    private let state = Mutex(State())
+
+    var isOpen: Bool { state.withLock { $0.isOpen } }
+
+    func release() {
+        let waiting = state.withLock { state -> [CheckedContinuation<Void, Never>] in
+            state.isOpen = true
+            defer { state.waiting = [] }
+            return state.waiting
+        }
+        for continuation in waiting { continuation.resume() }
+    }
+
+    /// Returns once the gate is open (at once when it already is).
+    func opened() async {
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            let isOpen = state.withLock { state -> Bool in
+                if state.isOpen { return true }
+                state.waiting.append(continuation)
+                return false
+            }
+            if isOpen { continuation.resume() }
+        }
+    }
 }
 
 /// Counts calls made from closures that must be `Sendable`.
@@ -255,11 +283,17 @@ final class DownloadTestCounter: Sendable {
 /// A `StreamResolving` whose answer is computed per call, so tests can hand out fresh (or different) URLs on retry.
 final class DownloadStubResolver: StreamResolving, Sendable {
     typealias Provider = @Sendable (_ videoID: String, _ call: Int) throws -> StreamInfo
+    typealias AsyncProvider = @Sendable (_ videoID: String, _ call: Int) async throws -> StreamInfo
 
-    private let provider: Provider
+    private let provider: AsyncProvider
     private let calls = Mutex(0)
 
     init(_ provider: @escaping Provider) {
+        self.provider = { videoID, call in try provider(videoID, call) }
+    }
+
+    /// For answers that have to wait for something (`await gate.opened()`): never block a thread in here.
+    init(awaiting provider: @escaping AsyncProvider) {
         self.provider = provider
     }
 
@@ -270,7 +304,7 @@ final class DownloadStubResolver: StreamResolving, Sendable {
             count += 1
             return count
         }
-        return try provider(videoID, call)
+        return try await provider(videoID, call)
     }
 }
 
@@ -409,7 +443,7 @@ func mediaDurationAndTracks(of url: URL) async throws -> (seconds: Double, video
 // MARK: - DownloadManager
 
 @MainActor
-@Suite struct DownloadManagerTests {
+@Suite(.limitsMediaExports) struct DownloadManagerTests {
     // MARK: Options
 
     @Test func optionsFromStreamInfo() throws {
@@ -889,10 +923,10 @@ func mediaDurationAndTracks(of url: URL) async throws -> (seconds: Double, video
         defer { directory.remove() }
         try ZooFixture.serveFixtures(on: server)
         let gate = DownloadTestGate()
-        let resolver = DownloadStubResolver { _, _ in
-            while !gate.isOpen { Thread.sleep(forTimeInterval: 0.005) }
+        let resolver = DownloadStubResolver(awaiting: { _, _ in
+            await gate.opened()
             return ZooFixture.streamInfo(server: server)
-        }
+        })
         let harness = DownloadHarness(directory: directory, server: server, resolver: resolver, tuning: .testing)
         harness.manager.enqueue(video: ZooFixture.summary, quality: .video(maxHeight: 144))
         #expect(await awaitDownloadCondition { resolver.callCount == 1 })

@@ -764,13 +764,176 @@ private func eventually(timeout: Duration = .seconds(60), _ condition: () -> Boo
         #expect(exists("object.json.corrupt") && exists("garbage.json.corrupt"))
     }
 
-    @Test func aFileThatCannotBeReadIsMovedAsideToo() throws {
-        // A directory where the file should be: it exists but cannot be read as data.
+    // MARK: A file that cannot be read is not a damaged file
+
+    @Test func aFileThatCannotBeReadIsLeftWhereItIs() throws {
+        // A directory where the file should be: it exists but cannot be read as data. That says nothing about content.
         try FileManager.default.createDirectory(at: url("samples.json"), withIntermediateDirectories: true)
         let store = JSONFileStore(directory: directory)
 
         let fallback: [Int] = [7]
         #expect(store.load("samples.json", default: fallback) == fallback)
-        #expect(exists("samples.json.corrupt"))
+        #expect((store.loadList("samples.json") as [Int]).isEmpty)
+        store.save([1, 2], to: "samples.json")
+
+        var isDirectory: ObjCBool = false
+        #expect(FileManager.default.fileExists(atPath: url("samples.json").path, isDirectory: &isDirectory) && isDirectory.boolValue)
+        #expect(!exists("samples.json.corrupt"))
+        #expect(try FileManager.default.contentsOfDirectory(atPath: directory.path) == ["samples.json"], "no temporary file is left behind")
+    }
+
+    /// A reader that can be told to fail, for a store that has to survive what a locked or failing device does.
+    private final class SwitchableReader: @unchecked Sendable {
+        private let lock = NSLock()
+        private var failure: (any Error)?
+
+        init(failingWith failure: (any Error)?) {
+            self.failure = failure
+        }
+
+        func fail(with failure: (any Error)?) {
+            lock.withLock { self.failure = failure }
+        }
+
+        func read(_ url: URL) throws -> Data {
+            if let failure = lock.withLock({ failure }) { throw failure }
+            return try Data(contentsOf: url)
+        }
+    }
+
+    struct ReadFailure: Sendable, CustomTestStringConvertible {
+        var name: String
+        var error: any Error
+        var testDescription: String { name }
+    }
+
+    private static let readFailures: [ReadFailure] = [
+        ReadFailure(name: "no permission", error: CocoaError(.fileReadNoPermission)),
+        ReadFailure(name: "unknown read error", error: CocoaError(.fileReadUnknown)),
+        ReadFailure(name: "I/O error", error: POSIXError(.EIO)),
+        // What an iPhone reports for a protected file before the first unlock: no permission, caused by EPERM.
+        ReadFailure(
+            name: "data protection",
+            error: NSError(domain: NSCocoaErrorDomain, code: NSFileReadNoPermissionError, userInfo: [
+                NSUnderlyingErrorKey: NSError(domain: NSPOSIXErrorDomain, code: Int(EPERM)),
+            ])
+        ),
+        ReadFailure(name: "some other error", error: NoSlopError.network("weird")),
+    ]
+
+    @Test(arguments: readFailures)
+    func aReadFailureNeitherMovesTheFileNorLetsAnythingOverwriteIt(_ failure: ReadFailure) throws {
+        let original = "[1,2,3]"
+        try write(original, to: "samples.json")
+        let reader = SwitchableReader(failingWith: failure.error)
+        let store = JSONFileStore(directory: directory, read: { try reader.read($0) })
+
+        // The default comes back, whichever way the file is loaded.
+        let fallback: [Int] = [9]
+        #expect(store.load("samples.json", default: fallback) == fallback)
+        #expect((store.loadList("samples.json") as [Int]).isEmpty)
+
+        // The file is neither moved aside nor replaced, however often the app saves meanwhile.
+        store.save([4, 5, 6], to: "samples.json")
+        store.save([7], to: "samples.json")
+        #expect(!exists("samples.json.corrupt"))
+        #expect(try Data(contentsOf: url("samples.json")) == Data(original.utf8))
+
+        // Files that could be read are not affected.
+        store.save([1], to: "other.json")
+        #expect(exists("other.json"))
+
+        // Once a load of the file succeeds, saving works again.
+        reader.fail(with: nil)
+        #expect(store.load("samples.json", default: fallback) == [1, 2, 3])
+        store.save([4, 5, 6], to: "samples.json")
+        #expect(store.load("samples.json", default: fallback) == [4, 5, 6])
+        #expect(!exists("samples.json.corrupt"))
+    }
+
+    @Test func theProtectionLastsUntilALoadOfThatFileSucceedsWhicheverStoreDoesIt() throws {
+        try write("[1,2,3]", to: "samples.json")
+        let failing = JSONFileStore(directory: directory, read: { _ in throw CocoaError(.fileReadNoPermission) })
+        _ = failing.load("samples.json", default: [Int]())
+
+        // A store that never loaded the file is just as unable to overwrite it.
+        let other = JSONFileStore(directory: directory)
+        other.save([0], to: "samples.json")
+        #expect(try Data(contentsOf: url("samples.json")) == Data("[1,2,3]".utf8))
+
+        // A successful load of another file does not lift it.
+        try write("[5]", to: "elsewhere.json")
+        #expect(other.load("elsewhere.json", default: [Int]()) == [5])
+        other.save([0], to: "samples.json")
+        #expect(try Data(contentsOf: url("samples.json")) == Data("[1,2,3]".utf8))
+
+        // A successful load of this one does.
+        #expect(other.load("samples.json", default: [Int]()) == [1, 2, 3])
+        other.save([0], to: "samples.json")
+        #expect(other.load("samples.json", default: [Int]()) == [0])
+    }
+
+    struct MissingFileError: Sendable, CustomTestStringConvertible {
+        var name: String
+        var error: any Error
+        var testDescription: String { name }
+    }
+
+    @Test(arguments: [
+        MissingFileError(name: "no such file to read", error: CocoaError(.fileReadNoSuchFile)),
+        MissingFileError(name: "no such file", error: CocoaError(.fileNoSuchFile)),
+        MissingFileError(name: "ENOENT", error: POSIXError(.ENOENT)),
+        MissingFileError(
+            name: "ENOENT underneath",
+            error: NSError(domain: NSCocoaErrorDomain, code: NSFileReadUnknownError, userInfo: [
+                NSUnderlyingErrorKey: NSError(domain: NSPOSIXErrorDomain, code: Int(ENOENT)),
+            ])
+        ),
+    ])
+    func aFileThatIsNotThereIsNotAReadFailure(_ missing: MissingFileError) throws {
+        let store = JSONFileStore(directory: directory, read: { _ in throw missing.error })
+        let fallback: [Int] = [9]
+        #expect(store.load("samples.json", default: fallback) == fallback)
+        #expect((store.loadList("samples.json") as [Int]).isEmpty)
+
+        // Nothing to protect: the first save creates the file.
+        store.save([1], to: "samples.json")
+        #expect(exists("samples.json"))
+        #expect(!exists("samples.json.corrupt"))
+    }
+
+    @Test(.enabled(if: getuid() != 0, "the root user can read any file"))
+    func aFileWithoutReadPermissionIsNotMovedAsideOrReplaced() throws {
+        let original = "[1,2,3]"
+        try write(original, to: "samples.json")
+        let path = url("samples.json").path
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: path) }
+        let store = JSONFileStore(directory: directory)
+
+        let fallback: [Int] = [9]
+        #expect(store.load("samples.json", default: fallback) == fallback)
+        store.save([4, 5, 6], to: "samples.json")
+        #expect(!exists("samples.json.corrupt"))
+        #expect(exists("samples.json"))
+
+        try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: path)
+        #expect(try Data(contentsOf: url("samples.json")) == Data(original.utf8), "the file kept its content")
+        #expect(store.load("samples.json", default: fallback) == [1, 2, 3])
+    }
+
+    @Test func aDecodingFailureStillMovesTheFileAsideEvenAfterReadFailuresElsewhere() throws {
+        try write("[1,2,3]", to: "unreadable.json")
+        try write("{garbage", to: "damaged.json")
+        let store = JSONFileStore(directory: directory, read: { url in
+            if url.lastPathComponent == "unreadable.json" { throw CocoaError(.fileReadNoPermission) }
+            return try Data(contentsOf: url)
+        })
+
+        #expect(store.load("unreadable.json", default: [Int]()).isEmpty)
+        #expect(store.load("damaged.json", default: [Int]()).isEmpty)
+
+        #expect(exists("unreadable.json") && !exists("unreadable.json.corrupt"))
+        #expect(!exists("damaged.json") && exists("damaged.json.corrupt"))
     }
 }

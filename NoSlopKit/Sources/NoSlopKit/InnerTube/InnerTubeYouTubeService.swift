@@ -128,7 +128,8 @@ public struct InnerTubeYouTubeService: YouTubeService {
 
     /// Links that identify themselves are resolved without the network. Anything else on a YouTube host (a handle,
     /// a custom channel URL) is looked up with `navigation/resolve_url`; links on other hosts are never sent to
-    /// YouTube. A link YouTube does not know (HTTP 404) resolves to nil.
+    /// YouTube. A link YouTube does not know (HTTP 404) or finds malformed (HTTP 400, as for "https://www.youtube.com/@")
+    /// resolves to nil: neither is a failure of the app or of the network, just a link that leads nowhere.
     public func resolve(url: URL) async throws -> ResolvedURL? {
         if let local = YouTubeURL.resolveLocally(url) {
             return local
@@ -137,7 +138,7 @@ public struct InnerTubeYouTubeService: YouTubeService {
         do {
             let json = try await client.post(endpoint: "navigation/resolve_url", profile: .web, body: ["url": .string(url.absoluteString)])
             return ResolveURLParser.parse(json)
-        } catch NoSlopError.http(status: 404) {
+        } catch NoSlopError.http(status: let status) where status == 400 || status == 404 {
             return nil
         }
     }

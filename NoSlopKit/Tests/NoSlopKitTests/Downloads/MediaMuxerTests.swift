@@ -3,7 +3,7 @@ import Foundation
 import Testing
 @testable import NoSlopKit
 
-@Suite struct MediaMuxerTests {
+@Suite(.limitsMediaExports) struct MediaMuxerTests {
     /// The true duration of `zoo_video_144p.mp4` (the format's `approxDurationMs` is 18933).
     static let trueDuration = 18.933
 

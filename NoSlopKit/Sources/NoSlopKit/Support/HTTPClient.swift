@@ -13,10 +13,37 @@ public protocol HTTPClient: Sendable {
 /// - `URLError.cancelled` (and Swift task cancellation) becomes `NoSlopError.cancelled`.
 /// - Any other `URLError` becomes `NoSlopError.network(localizedDescription)`.
 /// - A response that is not HTTP becomes `NoSlopError.network`.
+///
+/// Unless a session is passed in, requests go through `defaultSession`, which neither stores nor sends cookies and
+/// keeps nothing in `URLCache`: YouTube's own endpoints (`sw.js_data`, the suggestions) answer with tracking cookies,
+/// and the app has no use for them.
 public struct URLSessionHTTPClient: HTTPClient {
-    private let session: URLSession
+    let session: URLSession
 
-    public init(session: URLSession = .shared) {
+    /// The one session behind every client made with `init()`.
+    static let defaultSession = URLSession(configuration: makeDefaultConfiguration())
+
+    /// `.default` without cookies and without a cache, and with timeouts that fit small API requests.
+    static func makeDefaultConfiguration() -> URLSessionConfiguration {
+        let configuration = URLSessionConfiguration.default
+        configuration.httpCookieStorage = nil
+        configuration.httpShouldSetCookies = false
+        configuration.httpCookieAcceptPolicy = .never
+        // Answers are small, differ from request to request, and the services that want to reuse one cache it themselves.
+        configuration.urlCache = nil
+        configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
+        // A request that has produced nothing for half a minute is not going to; a whole exchange is over in seconds.
+        configuration.timeoutIntervalForRequest = 30
+        configuration.timeoutIntervalForResource = 120
+        return configuration
+    }
+
+    public init() {
+        self.session = Self.defaultSession
+    }
+
+    /// For tests, which pass a session with a stub protocol.
+    public init(session: URLSession) {
         self.session = session
     }
 

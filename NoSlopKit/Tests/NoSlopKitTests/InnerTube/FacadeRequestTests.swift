@@ -3,8 +3,10 @@ import Testing
 @testable import NoSlopKit
 
 // These tests pin the requests the facade sends (endpoint, body, headers, client profile, continuation).
-// What the parsers of Tasks 3 and 4 make of the answers is tested there; here every answer is "{}" and the
-// results are not asserted, except for the parts that are this task's own (suggestions, URL resolving).
+// What the parsers make of the answers is tested with the parsers and in Integration/FacadeIntegrationTests; here
+// the answers only have to be ones the real parsers accept. The requests that must produce a page (a watch page, a
+// channel, a playlist) are answered with the captured response and awaited without `try?`, so a request the parsers
+// cannot make sense of fails the test instead of passing unnoticed; the others are answered with "{}", an empty page.
 
 // MARK: - Helpers
 
@@ -21,10 +23,15 @@ private func swJsDataBody(visitorData: String) throws -> Data {
     return Data(")]}'\n\n".utf8) + (try document.data())
 }
 
-/// A mock that answers the visitorData fetch, then every InnerTube endpoint with `{}`.
-private func makeHTTP() throws -> MockHTTPClient {
+/// A mock that answers the visitorData fetch, then every InnerTube endpoint with `{}`, except the ones in `answers`
+/// (endpoint → fixture name), which get the captured response.
+private func makeHTTP(answers: [String: String] = [:]) throws -> MockHTTPClient {
     let http = MockHTTPClient()
     http.enqueue("sw.js_data", body: try swJsDataBody(visitorData: token(1)))
+    // Replies are matched in the order they were queued, so the specific ones come before the catch-all.
+    for (endpoint, fixture) in answers.sorted(by: { $0.key < $1.key }) {
+        http.enqueue("youtubei/v1/\(endpoint)", body: try Fixture.data(fixture))
+    }
     http.enqueue("youtubei/v1/", body: Data("{}".utf8))
     return http
 }
@@ -59,10 +66,27 @@ private func onlyCall(_ http: MockHTTPClient, to endpoint: String) throws -> (re
         #expect(request.url?.absoluteString == "https://www.youtube.com/youtubei/v1/search?prettyPrint=false")
         #expect(request.httpMethod == "POST")
         #expect(body["query"]?.string == "blender")
-        // Whatever Task 3 encodes (nothing, in this worktree's stub), the facade sends exactly that.
+        // The protobuf for "videos only", spelled out: comparing with `SearchParams.encode(filter)` alone would pass
+        // when both sides are nil.
+        #expect(body["params"]?.string == "EgIQAQ==")
         #expect(body["params"]?.string == SearchParams.encode(filter))
         #expect(body["context"]?["client"]?["clientName"]?.string == "WEB")
         #expect(body["continuation"] == nil)
+    }
+
+    @Test(arguments: [
+        (SearchFilter(type: .channel), "EgIQAg=="),
+        (SearchFilter(type: .playlist), "EgIQAw=="),
+        (SearchFilter(type: .video, sort: .uploadDate), "CAISAhAB"),
+        (SearchFilter(sort: .viewCount), "CAM="),
+        (SearchFilter(type: .video, duration: .long), "EgQQARgC"),
+        (SearchFilter(type: .video, uploadDate: .today), "EgQIAhAB"),
+    ])
+    func searchSendsTheEncodedFilter(filter: SearchFilter, params: String) async throws {
+        let http = try makeHTTP()
+        _ = try await makeService(http).search(query: "blender", filter: filter)
+        let (_, body) = try onlyCall(http, to: "search")
+        #expect(body["params"]?.string == params)
     }
 
     @Test func queriesWithSpecialCharactersSurviveTheJSONBody() async throws {
@@ -158,8 +182,9 @@ private func onlyCall(_ http: MockHTTPClient, to endpoint: String) throws -> (re
     // MARK: Watch page
 
     @Test func videoDetailsRequest() async throws {
-        let http = try makeHTTP()
-        _ = try? await makeService(http).videoDetails(id: "aqz-KE-bpKQ")
+        let http = try makeHTTP(answers: ["next": "next_aqz.json"])
+        let details = try await makeService(http).videoDetails(id: "aqz-KE-bpKQ")
+        #expect(details.id == "aqz-KE-bpKQ")
         let (request, body) = try onlyCall(http, to: "next")
         #expect(request.url?.absoluteString == "https://www.youtube.com/youtubei/v1/next?prettyPrint=false")
         #expect(body["videoId"]?.string == "aqz-KE-bpKQ")
@@ -186,22 +211,34 @@ private func onlyCall(_ http: MockHTTPClient, to endpoint: String) throws -> (re
     // MARK: Channels
 
     @Test func channelRequestAsksForTheVideosTab() async throws {
-        let http = try makeHTTP()
-        _ = try? await makeService(http).channel(id: "UCSMOQeBJ2RAnuFungnQOxLg")
+        let http = try makeHTTP(answers: ["browse": "channel_blender_videos.json"])
+        let page = try await makeService(http).channel(id: "UCSMOQeBJ2RAnuFungnQOxLg")
+        #expect(page.header.id == "UCSMOQeBJ2RAnuFungnQOxLg")
         let (request, body) = try onlyCall(http, to: "browse")
         #expect(request.url?.absoluteString == "https://www.youtube.com/youtubei/v1/browse?prettyPrint=false")
         #expect(body["browseId"]?.string == "UCSMOQeBJ2RAnuFungnQOxLg")
+        // The params of the Videos tab, spelled out.
+        #expect(body["params"]?.string == "EgZ2aWRlb3PyBgQKAjoA")
         #expect(body["params"]?.string == ChannelParser.tabParams[.videos])
-        #expect(body["params"]?.string?.isEmpty == false)
     }
 
-    @Test(arguments: ChannelTabKind.allCases)
-    func channelTabRequestUsesThatTabsParams(tab: ChannelTabKind) async throws {
+    @Test(arguments: [
+        (ChannelTabKind.videos, "EgZ2aWRlb3PyBgQKAjoA"),
+        (.live, "EgdzdHJlYW1z8gYECgJ6AA%3D%3D"),
+        (.playlists, "EglwbGF5bGlzdHPyBgoKCEIGCgIQaCIA"),
+    ])
+    func channelTabRequestUsesThatTabsParams(tab: ChannelTabKind, params: String) async throws {
         let http = try makeHTTP()
         _ = try await makeService(http).channelTab(channelID: "UCSMOQeBJ2RAnuFungnQOxLg", tab: tab)
         let (_, body) = try onlyCall(http, to: "browse")
         #expect(body["browseId"]?.string == "UCSMOQeBJ2RAnuFungnQOxLg")
+        #expect(body["params"]?.string == params)
         #expect(body["params"]?.string == ChannelParser.tabParams[tab])
+    }
+
+    @Test func everyTabHasParams() {
+        #expect(Set(ChannelTabKind.allCases) == [.videos, .live, .playlists])
+        #expect(ChannelTabKind.allCases.allSatisfy { ChannelParser.tabParams[$0]?.isEmpty == false })
     }
 
     @Test func channelMoreSendsTheContinuationToBrowse() async throws {
@@ -216,10 +253,11 @@ private func onlyCall(_ http: MockHTTPClient, to endpoint: String) throws -> (re
     // MARK: Playlists
 
     @Test func playlistRequestBrowsesTheVLPrefixedId() async throws {
-        let http = try makeHTTP()
-        _ = try? await makeService(http).playlist(id: "PLx")
+        let http = try makeHTTP(answers: ["browse": "playlist_sample.json"])
+        let page = try await makeService(http).playlist(id: "PLsGl9GczcgBumq6fLmmR1ZYYn4EDkIg5B")
+        #expect(page.info.id == "PLsGl9GczcgBumq6fLmmR1ZYYn4EDkIg5B")
         let (_, body) = try onlyCall(http, to: "browse")
-        #expect(body["browseId"]?.string == "VLPLx")
+        #expect(body["browseId"]?.string == "VLPLsGl9GczcgBumq6fLmmR1ZYYn4EDkIg5B")
         #expect(body["params"] == nil)
     }
 
@@ -282,12 +320,31 @@ private func onlyCall(_ http: MockHTTPClient, to endpoint: String) throws -> (re
         #expect(try await makeService(http).resolve(url: handleURL) == nil)
     }
 
-    @Test func otherResolveFailuresPropagate() async throws {
+    @Test(arguments: ["https://www.youtube.com/@", "https://www.youtube.com/@@", "https://www.youtube.com/c/", "https://m.youtube.com/@%20"])
+    func aMalformedLinkResolvesToNil(text: String) async throws {
+        // YouTube answers HTTP 400 (INVALID_ARGUMENT) for a link that is not well-formed, where it answers 404 for one
+        // that is well-formed but leads nowhere. Neither is an error of the app or of the network.
         let http = MockHTTPClient()
         http.enqueue("sw.js_data", body: try swJsDataBody(visitorData: token(1)))
-        http.enqueue("navigation/resolve_url", status: 500, body: Data())
+        http.enqueue(
+            "navigation/resolve_url", status: 400,
+            body: Data(#"{"error":{"code":400,"message":"Request contains an invalid argument.","status":"INVALID_ARGUMENT"}}"#.utf8)
+        )
+        let url = try #require(URL(string: text))
+
+        #expect(try await makeService(http).resolve(url: url) == nil)
+
+        let (_, body) = try onlyCall(http, to: "navigation/resolve_url")
+        #expect(body["url"]?.string == text, "the link did go to YouTube; it was YouTube that did not understand it")
+    }
+
+    @Test(arguments: [401, 403, 429, 500, 502, 503])
+    func otherResolveFailuresPropagate(status: Int) async throws {
+        let http = MockHTTPClient()
+        http.enqueue("sw.js_data", body: try swJsDataBody(visitorData: token(1)))
+        http.enqueue("navigation/resolve_url", status: status, body: Data())
         let service = makeService(http)
-        await #expect(throws: NoSlopError.http(status: 500)) {
+        await #expect(throws: NoSlopError.http(status: status)) {
             _ = try await service.resolve(url: handleURL)
         }
     }
@@ -300,17 +357,28 @@ private func onlyCall(_ http: MockHTTPClient, to endpoint: String) throws -> (re
     // MARK: Shared transport behaviour
 
     @Test func everyMetadataRequestUsesTheWebProfileAndTheSameVisitorData() async throws {
-        let http = try makeHTTP()
+        let http = MockHTTPClient()
+        http.enqueue("sw.js_data", body: try swJsDataBody(visitorData: token(1)))
+        // The watch page is answered once and the requests to browse in the order the calls below make them: a channel,
+        // a tab, a continuation, a playlist, a continuation. Everything else is an empty page.
+        http.enqueue("youtubei/v1/next", body: try Fixture.data("next_aqz.json"))
+        http.enqueue("youtubei/v1/next", body: Data("{}".utf8))
+        http.enqueue("youtubei/v1/browse", body: try Fixture.data("channel_blender_videos.json"))
+        http.enqueue("youtubei/v1/browse", body: Data("{}".utf8))
+        http.enqueue("youtubei/v1/browse", body: Data("{}".utf8))
+        http.enqueue("youtubei/v1/browse", body: try Fixture.data("playlist_sample.json"))
+        http.enqueue("youtubei/v1/browse", body: Data("{}".utf8))
+        http.enqueue("youtubei/v1/", body: Data("{}".utf8))
         let service = makeService(http, hl: "fr", gl: "CA")
         _ = try await service.search(query: "q", filter: SearchFilter())
         _ = try await service.searchMore(continuation: "c1")
-        _ = try? await service.videoDetails(id: "aqz-KE-bpKQ")
+        _ = try await service.videoDetails(id: "aqz-KE-bpKQ")
         _ = try await service.moreRelated(continuation: "c2")
         _ = try await service.comments(continuation: "c3")
-        _ = try? await service.channel(id: "UCSMOQeBJ2RAnuFungnQOxLg")
+        _ = try await service.channel(id: "UCSMOQeBJ2RAnuFungnQOxLg")
         _ = try await service.channelTab(channelID: "UCSMOQeBJ2RAnuFungnQOxLg", tab: .playlists)
         _ = try await service.channelMore(continuation: "c4")
-        _ = try? await service.playlist(id: "PLx")
+        _ = try await service.playlist(id: "PLsGl9GczcgBumq6fLmmR1ZYYn4EDkIg5B")
         _ = try await service.playlistMore(continuation: "c5")
 
         let youtubei = http.requests.filter { $0.url?.path.hasPrefix("/youtubei/v1/") == true }
