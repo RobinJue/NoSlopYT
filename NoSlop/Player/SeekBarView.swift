@@ -16,7 +16,8 @@ struct SeekBarView: View {
 
     @State private var scrubTime: Double?
 
-    private static let height: CGFloat = 36
+    /// The bar's touch target; the controls' layout (and the strips the captions use) count on it.
+    static let height: CGFloat = 36
     private static let bubbleWidth: CGFloat = 200
 
     var body: some View {
