@@ -1,6 +1,6 @@
 import Foundation
 
-/// File sizes as text for the downloads screens and Settings: "46.7 MB", and "0 KB" instead of the "Zero KB" that
+/// File sizes as text for the downloads screens and Settings: "46.7 MB", and "0 bytes" instead of the "Zero KB" that
 /// `ByteCountFormatter` writes by default. Locale-aware (decimal separator, units).
 enum StorageSizeText {
     private static let formatter: ByteCountFormatter = {

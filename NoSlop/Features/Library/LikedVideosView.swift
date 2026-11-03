@@ -47,7 +47,7 @@ private struct LikedVideosList: View {
                 }
             }
         }
-        .task { await model.reload(from: source) }
+        .task { await model.loadIfNeeded(from: source) }
     }
 
     private var list: some View {

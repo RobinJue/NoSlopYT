@@ -62,6 +62,8 @@ private struct WatchDetailsContent: View {
         .alert("Sign in to like videos", isPresented: $isExplainingSignIn) {
             Button("Go to Library") {
                 env.player.minimize()
+                // The sign-in card is at the top of the Library tab, which may still be showing a screen from earlier.
+                env.router.popToRoot(.library)
                 env.router.selectedTab = .library
             }
             Button("Not now", role: .cancel) {}

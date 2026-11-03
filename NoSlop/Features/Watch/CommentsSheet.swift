@@ -117,8 +117,9 @@ final class CommentsViewModel {
         do {
             let page = try await env.youTube.comments(continuation: token)
             guard current == generation, !Task.isCancelled else { return }
-            let known = Set(comments.map(\.id))
-            comments += page.comments.filter { !known.contains($0.id) }
+            // Unique ids: `ForEach` needs them, and a page may repeat a comment it (or an earlier page) already had.
+            var seen = Set(comments.map(\.id))
+            comments += page.comments.filter { seen.insert($0.id).inserted }
             // A page that brings nothing new and the same token again would loop forever.
             continuation = page.comments.isEmpty || page.continuation == token ? nil : page.continuation
         } catch {
@@ -153,8 +154,8 @@ final class CommentsViewModel {
             let page = try await env.youTube.comments(continuation: token)
             guard current == generation, !Task.isCancelled else { return }
             update(commentID) { state in
-                let known = Set(state.comments.map(\.id))
-                state.comments += page.comments.filter { !known.contains($0.id) }
+                var seen = Set(state.comments.map(\.id))
+                state.comments += page.comments.filter { seen.insert($0.id).inserted }
                 state.continuation = page.comments.isEmpty || page.continuation == token ? nil : page.continuation
                 state.hasLoaded = true
                 state.isLoading = false

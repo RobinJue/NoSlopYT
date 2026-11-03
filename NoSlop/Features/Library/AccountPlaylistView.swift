@@ -33,7 +33,7 @@ struct AccountPlaylistView: View {
         // The header of the list carries the full title; a long one would only be cut off up here.
         .navigationTitle("Playlist")
         .navigationBarTitleDisplayMode(.inline)
-        .task { await model.reload(from: source) }
+        .task { await model.loadIfNeeded(from: source) }
     }
 
     private var list: some View {

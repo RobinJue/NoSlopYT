@@ -26,6 +26,15 @@ final class AccountVideosModel {
     /// Bumped on every reload, so a slow answer for an older request is dropped.
     private var generation = 0
 
+    /// The load a screen starts when it appears. It does nothing while there is a list on screen, so a screen that
+    /// comes back (another tab and back) keeps the pages the user scrolled through instead of starting over from page
+    /// one. An empty list has nothing to lose (and no pull to refresh), so it asks again. Pull to refresh and the
+    /// error state's "Retry" call `reload`.
+    func loadIfNeeded(from source: PageSource) async {
+        if case .loaded = phase, !videos.isEmpty { return }
+        await reload(from: source)
+    }
+
     /// Loads (or reloads) the first page. A reload that fails keeps the list that is already there.
     func reload(from source: PageSource) async {
         generation += 1
