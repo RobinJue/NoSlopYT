@@ -25,8 +25,13 @@ final class AppEnvironment {
     let player: PlayerController
     let router: Router
 
-    /// The signed-in Google account, nil when signed out. Set by `refreshAccount`, `signIn` and `signOut`.
+    /// The signed-in Google account, nil when signed out. Set by `refreshAccount`, `signIn` and `signOut`, and by
+    /// `reconcileGoogleAccount` when a call to Google failed because the session had ended.
     private(set) var googleAccount: GoogleAccount?
+
+    /// Why the last link could not be opened, in plain words, for the alert in `RootView`. Nil when there is nothing to
+    /// say; `dismissLinkError` clears it.
+    private(set) var linkError: String?
 
     /// `settingsStore.settings`.
     var settings: AppSettings { settingsStore.settings }
@@ -80,11 +85,19 @@ final class AppEnvironment {
 
     // MARK: Construction
 
-    /// `live()`, or `preview()` when the app was launched with `-mockServices YES`.
-    static let shared: AppEnvironment = UserDefaults.standard.bool(forKey: "mockServices") ? .preview() : .live()
+    /// `live()`; in Debug builds `preview()` instead when the app was launched with `-mockServices YES`. A Release
+    /// build has no way to switch to the mocks.
+    static let shared: AppEnvironment = {
+        #if DEBUG
+        if UserDefaults.standard.bool(forKey: "mockServices") { return .preview() }
+        #endif
+        return .live()
+    }()
 
-    /// The real services.
+    /// The real services, and nothing but: no mock, no stub, no test seam. Everything that is not a real service lives
+    /// in `preview()`.
     static func live() -> AppEnvironment {
+        // No session is passed in: which `URLSession` the kit talks through is `URLSessionHTTPClient`'s decision.
         let http = URLSessionHTTPClient()
         let settingsStore = SettingsStore()
 
@@ -189,12 +202,13 @@ final class AppEnvironment {
     /// Subscribes to the channel, or unsubscribes when already subscribed.
     ///
     /// Signed in, the change is made on the Google account through the Data API and mirrored in the library
-    /// (`.google` source); a failure leaves the library untouched and is thrown. Signed out, the subscription is
-    /// local only. Unsubscribing a local subscription never touches the Google account.
+    /// (`.google` source); a failure leaves the library untouched and is thrown (and, when it means the session
+    /// ended, `googleAccount` turns nil: see `reconcileGoogleAccount`). Signed out, the subscription is local only.
+    /// Unsubscribing a local subscription never touches the Google account.
     func toggleSubscription(_ channel: ChannelRef) async throws {
         if let existing = library.subscriptions.first(where: { $0.id == channel.id }) {
             if case .google(let subscriptionID) = existing.source, googleAccount != nil {
-                try await account.unsubscribe(subscriptionID: subscriptionID)
+                try await viaAccount { try await $0.unsubscribe(subscriptionID: subscriptionID) }
             }
             library.unsubscribe(channelID: channel.id)
             return
@@ -202,7 +216,7 @@ final class AppEnvironment {
 
         let source: SubscriptionSource
         if googleAccount != nil {
-            source = .google(subscriptionID: try await account.subscribe(channelID: channel.id))
+            source = .google(subscriptionID: try await viaAccount { try await $0.subscribe(channelID: channel.id) })
         } else {
             source = .local
         }
@@ -243,30 +257,97 @@ final class AppEnvironment {
         library.convertGoogleSubscriptionsToLocal()
     }
 
-    /// A failed sync keeps the subscriptions the library already has.
+    /// Imports the account's subscriptions. A failed sync keeps the subscriptions the library already has, and is not
+    /// reported to anyone, but it may mean that Google ended the session, so the account is looked at again.
     private func syncGoogleSubscriptions() async {
-        guard let channels = try? await account.subscriptions() else { return }
-        library.replaceGoogleSubscriptions(channels)
+        do {
+            library.replaceGoogleSubscriptions(try await account.subscriptions())
+        } catch {
+            await reconcileGoogleAccount()
+        }
+    }
+
+    /// Runs a call on the Google account. When it fails, the account is looked at again before the error goes on to
+    /// the caller, so the screens already show the signed-out state when the failure was a session that had ended.
+    private func viaAccount<Value>(_ call: (any YouTubeAccountService) async throws -> Value) async throws -> Value {
+        do {
+            return try await call(account)
+        } catch {
+            await reconcileGoogleAccount()
+            throw error
+        }
+    }
+
+    /// Makes `googleAccount` say what the auth service says, after a call to Google failed. The auth service signs
+    /// itself out when Google refuses to renew the session (`invalid_grant`: the Keychain is cleared and
+    /// `.notSignedIn` is thrown), and nothing else in the app would notice, so the screens would go on showing an
+    /// account that can no longer be used.
+    ///
+    /// Like a sign-out by the user, this keeps the subscriptions that came from the account, as local ones. A
+    /// credential store that could not be read for a moment looks the same as a sign-out from here; the next
+    /// `refreshAccount` or sign-in brings the `.google` subscriptions back, so nothing is lost by it.
+    ///
+    /// Screens that call `account` directly can call this when their call fails.
+    func reconcileGoogleAccount() async {
+        let current = await auth.currentAccount()
+        guard current != googleAccount else { return }
+        googleAccount = current
+        if current == nil {
+            library.convertGoogleSubscriptionsToLocal()
+        }
     }
 
     // MARK: Links
 
-    /// Opens what a URL points at: the app's own `noslop://` links, or a YouTube link (video, channel, playlist,
-    /// search). YouTube links are recognised locally when possible and otherwise resolved over the network.
+    /// Opens what a URL points at: the app's own `noslop://` links (see `AppLink`), or a YouTube link: a video
+    /// (`/watch`, `youtu.be`, `/shorts`, `/live`, `/embed`, with its `t=` start time), a channel (`/channel/<id>`,
+    /// `/@handle`), a playlist or a search. YouTube links are recognised locally when possible; a `/@handle` and
+    /// the like are resolved over the network.
     ///
-    /// `noslop://watch?v=<id>[&t=<seconds>]`, `noslop://channel/<id>`, `noslop://playlist/<id>`,
-    /// `noslop://search?q=<text>`, `noslop://tab/<home|subscriptions|library|search>` and
-    /// `noslop://route/<settings|downloads|history|watchLater|likedVideos|accountPlaylists|subscriptionsManager>`.
+    /// A link that cannot be opened (not a YouTube link, incomplete, or YouTube cannot be reached to resolve it)
+    /// opens nothing and sets `linkError`, which `RootView` shows in an alert.
     func handleOpenURL(_ url: URL) async {
-        if let link = AppLink(url: url) {
-            await perform(link)
-            return
+        linkError = nil
+        switch url.scheme?.lowercased() {
+        case AppLink.scheme:
+            if let link = AppLink(url: url) {
+                await perform(link)
+            } else {
+                linkError = Self.unopenableLinkMessage
+            }
+        case "http", "https":
+            await openWebLink(url)
+        default:
+            linkError = Self.unopenableLinkMessage
         }
-        guard let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https" else { return }
+    }
+
+    /// The alert for `linkError` was dismissed.
+    func dismissLinkError() {
+        linkError = nil
+    }
+
+    private static let unopenableLinkMessage =
+        "No Slop opens links to YouTube videos, channels and playlists. This one is something else, or it is incomplete."
+
+    private func openWebLink(_ url: URL) async {
         if let resolved = YouTubeURL.resolveLocally(url) {
             await openResolved(resolved)
-        } else if let resolved = try? await youTube.resolve(url: url) {
-            await openResolved(resolved)
+            return
+        }
+        // A `/@handle` or a custom channel address: only YouTube can say which channel that is.
+        do {
+            if let resolved = try await youTube.resolve(url: url) {
+                await openResolved(resolved)
+            } else {
+                linkError = Self.unopenableLinkMessage
+            }
+        } catch is CancellationError {
+            // The caller went away; nobody is waiting for an answer.
+        } catch NoSlopError.cancelled {
+            // Same, as reported by the kit.
+        } catch {
+            linkError = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
         }
     }
 
@@ -287,6 +368,12 @@ final class AppEnvironment {
     private func openResolved(_ resolved: ResolvedURL) async {
         switch resolved {
         case .video(let id, let startSeconds):
+            // YouTube's resolver hands back whatever the link said (`watch?v=abc` resolves to the video "abc"), so a
+            // malformed id is caught here instead of opening a player that can only fail.
+            guard Self.isVideoID(id) else {
+                linkError = Self.unopenableLinkMessage
+                return
+            }
             let video = await videoSummary(forID: id)
             open(video, startAt: startSeconds.map(Double.init))
         case .channel(let id):
@@ -327,6 +414,19 @@ final class AppEnvironment {
 
     // MARK: Helpers
 
+    /// A video id is eleven letters, digits, "-" and "_".
+    private static func isVideoID(_ id: String) -> Bool {
+        id.utf8.count == 11 && id.utf8.allSatisfy { byte in
+            switch byte {
+            case UInt8(ascii: "0")...UInt8(ascii: "9"), UInt8(ascii: "A")...UInt8(ascii: "Z"),
+                 UInt8(ascii: "a")...UInt8(ascii: "z"), UInt8(ascii: "-"), UInt8(ascii: "_"):
+                true
+            default:
+                false
+            }
+        }
+    }
+
     private static func nonEmpty(_ value: String?) -> String? {
         guard let value = value?.trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty else { return nil }
         return value
@@ -342,94 +442,5 @@ final class AppEnvironment {
             try? fileManager.createDirectory(at: url, withIntermediateDirectories: true)
         }
         return url
-    }
-}
-
-/// A parsed `noslop://` link: a tab to select, a route to push, or something a YouTube link could also mean.
-nonisolated enum AppLink: Equatable, Sendable {
-    case tab(AppTab)
-    case route(Route)
-    case resolved(ResolvedURL)
-
-    static let scheme = "noslop"
-
-    init?(url: URL) {
-        guard url.scheme?.lowercased() == Self.scheme,
-              let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
-              let host = components.host?.lowercased() else { return nil }
-        let parts = components.path.split(separator: "/").map(String.init)
-
-        func query(_ name: String) -> String? {
-            guard let value = components.queryItems?.first(where: { $0.name == name })?.value, !value.isEmpty else { return nil }
-            return value
-        }
-        /// "watchLater", "watch-later" and "watch_later" are the same name.
-        func normalized(_ name: String?) -> String? {
-            name?.lowercased().filter { $0 != "-" && $0 != "_" }
-        }
-
-        switch host {
-        case "watch":
-            guard let id = query("v") ?? parts.first else { return nil }
-            let start = (query("t") ?? query("start")).flatMap(Self.seconds(from:))
-            self = .resolved(.video(id: id, startSeconds: start))
-        case "channel":
-            guard let id = parts.first ?? query("id") else { return nil }
-            self = .resolved(.channel(id: id))
-        case "playlist":
-            guard let id = parts.first ?? query("list") else { return nil }
-            self = .resolved(.playlist(id: id))
-        case "search":
-            guard let text = query("q") else { return nil }
-            self = .resolved(.search(query: text))
-        case "tab":
-            guard let name = normalized(parts.first), let tab = Self.tabs[name] else { return nil }
-            self = .tab(tab)
-        case "route":
-            guard let name = normalized(parts.first), let route = Self.routes[name] else { return nil }
-            self = .route(route)
-        default:
-            return nil
-        }
-    }
-
-    private static let tabs: [String: AppTab] = [
-        "home": .home,
-        "subscriptions": .subscriptions,
-        "library": .library,
-        "search": .search,
-    ]
-
-    private static let routes: [String: Route] = [
-        "settings": .settings,
-        "downloads": .downloads,
-        "history": .history,
-        "watchlater": .watchLater,
-        "likedvideos": .likedVideos,
-        "accountplaylists": .accountPlaylists,
-        "subscriptionsmanager": .subscriptionsManager,
-    ]
-
-    /// "90", "90s", "1m30s", "1h2m3s" -> seconds; nil for anything else.
-    static func seconds(from text: String) -> Int? {
-        if let plain = Int(text) { return plain }
-        var total = 0
-        var number = 0
-        var sawUnit = false
-        for character in text.lowercased() {
-            if character.isASCII, let digit = character.wholeNumberValue {
-                number = number * 10 + digit
-                continue
-            }
-            switch character {
-            case "h": total += number * 3_600
-            case "m": total += number * 60
-            case "s": total += number
-            default: return nil
-            }
-            number = 0
-            sawUnit = true
-        }
-        return sawUnit ? total : nil
     }
 }

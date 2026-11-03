@@ -41,6 +41,17 @@ struct RootView: View {
         .onOpenURL { url in
             Task { await env.handleOpenURL(url) }
         }
+        .alert(
+            "Can't open this link",
+            isPresented: Binding(
+                get: { env.linkError != nil },
+                set: { if !$0 { env.dismissLinkError() } }
+            )
+        ) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(env.linkError ?? "")
+        }
         #if DEBUG
         .task {
             await LaunchURLArgument.openAll(in: env)
