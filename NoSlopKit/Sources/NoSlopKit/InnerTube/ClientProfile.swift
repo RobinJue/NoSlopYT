@@ -2,8 +2,8 @@ import Foundation
 
 /// How we present ourselves to InnerTube: which client, version, headers and extra `context.client` fields.
 ///
-/// STUB (Task 1A). Task 2 owns this file. The two profile constants are already final: they come straight from
-/// the design spec's table, so the parallel tasks and the mocks can rely on them.
+/// The two profiles come straight from the design spec's table. Metadata (search, next, browse, resolve_url) uses
+/// `web`; `player` uses `visionOS`, the client that needs neither a PO token nor JavaScript deciphering.
 public struct ClientProfile: Sendable, Hashable {
     public var clientName: String
     public var clientVersion: String

@@ -1,8 +1,6 @@
 import Foundation
 
 /// Content language (`hl`) and region (`gl`) sent with every InnerTube request.
-///
-/// STUB (Task 1A). Task 2 owns this file; `fromLocale` is already the final one-liner from the plan.
 public struct InnerTubeConfig: Sendable, Hashable {
     public var hl: String
     public var gl: String
