@@ -9,6 +9,7 @@ struct SearchItemRow: View {
     let item: SearchItem
 
     @Environment(AppEnvironment.self) private var env
+    @Environment(\.videoCardLayout) private var layout
 
     var body: some View {
         switch item {
@@ -18,7 +19,7 @@ struct SearchItemRow: View {
             } label: {
                 VideoCardView(video: video)
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.pressableCard)
             .videoContextMenu(video)
 
         case .channel(let channel):
@@ -26,19 +27,26 @@ struct SearchItemRow: View {
                 env.show(.channel(id: channel.id))
             } label: {
                 ChannelRowView(channel: channel)
-                    .padding(.horizontal, Theme.padding)
+                    .padding(.horizontal, inset)
+                    .padding(.vertical, 4)
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.pressableCard)
 
         case .playlist(let playlist):
             Button {
                 env.show(.playlist(id: playlist.id))
             } label: {
                 PlaylistRowView(playlist: playlist)
-                    .padding(.horizontal, Theme.padding)
+                    .padding(.horizontal, inset)
+                    .padding(.vertical, 4)
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.pressableCard)
         }
+    }
+
+    /// Rows are inset by the standard padding in a single column; in a multi-column grid the grid insets them.
+    private var inset: CGFloat {
+        layout == .inset ? 0 : Theme.padding
     }
 }
 

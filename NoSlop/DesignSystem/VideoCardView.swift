@@ -5,15 +5,20 @@ import SwiftUI
 ///
 /// The card only draws; what a tap on it does is up to the screen (usually `env.open(video)`), and so are the
 /// context menu (`.videoContextMenu(video)`) and the playlist queue. The one exception is the avatar: it opens the
-/// channel, as in the YouTube app.
+/// channel, as in the YouTube app (VoiceOver gets the same as a custom action on the card).
+///
+/// In a `FeedGrid` with several columns the card is inset and its thumbnail rounded (`videoCardLayout`); alone, or
+/// in a single column, the thumbnail runs edge to edge and only the text is inset.
 struct VideoCardView: View {
     let video: VideoSummary
 
     @Environment(AppEnvironment.self) private var env
+    @Environment(\.videoCardLayout) private var layout
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             ThumbnailView(video: video)
+                .clipShape(RoundedRectangle(cornerRadius: layout == .inset ? Theme.cornerRadius : 0, style: .continuous))
 
             HStack(alignment: .top, spacing: Theme.padding) {
                 avatar
@@ -21,6 +26,7 @@ struct VideoCardView: View {
                     VideoTitleText(video: video, lineLimit: 2)
                         .font(.subheadline.weight(.medium))
                         .foregroundStyle(.primary)
+                        .multilineTextAlignment(.leading)
                     Text(Formatting.subtitle(for: video))
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -28,9 +34,16 @@ struct VideoCardView: View {
                 }
                 Spacer(minLength: 0)
             }
-            .padding(.horizontal, Theme.padding)
+            .padding(.horizontal, layout == .inset ? 0 : Theme.padding)
         }
         .contentShape(Rectangle())
+        .accessibilityActions {
+            if let channel = video.channel {
+                Button("Open channel \(channel.name)") {
+                    env.show(.channel(id: channel.id))
+                }
+            }
+        }
     }
 
     @ViewBuilder
@@ -42,7 +55,8 @@ struct VideoCardView: View {
                 ChannelAvatarView(url: channel.avatarURL, size: 36)
             }
             .buttonStyle(.plain)
-            .accessibilityLabel("Open channel \(channel.name)")
+            // Reached by VoiceOver through the card's "Open channel" action instead, so the card reads as one element.
+            .accessibilityHidden(true)
         } else {
             ChannelAvatarView(url: nil, size: 36)
         }
