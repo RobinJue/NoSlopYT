@@ -14,9 +14,12 @@ import UIKit
 ///   builds the `AVPlayerItem` with the quality cap for the current connection, resumes where the viewer left off and
 ///   starts playing.
 /// - A 0.5 s time observer drives `currentTime`, the buffered range, the caption line, SponsorBlock auto-skip and the
-///   progress saved to the library (every 5 s, and on pause, close, background and end).
+///   progress saved to the library (every 10 s while playing, and on pause, close, background, the end and a switch to
+///   another video).
 /// - A failure is mapped to a `PlaybackFailure`; `PlaybackRecovery` decides between re-resolving fresh URLs,
 ///   waiting for the connection, and the error screen (only after a second failure).
+/// - Picking a quality rebuilds the player item from the stream info in hand (see `rebuildItemForQualityChange`), so the
+///   new quality shows within seconds instead of after the minutes AVPlayer has buffered.
 /// - In the background it keeps playing (video detached from its layers) or pauses, depending on the setting, unless
 ///   Picture in Picture has taken over. Lock screen controls come from `NowPlayingCenter`.
 @MainActor
@@ -98,9 +101,9 @@ final class PlayerController {
     }
 
     /// The resolution cap. Starts at the Wi-Fi or cellular preference of each video; picking one overrides it for
-    /// this video.
+    /// this video and rebuilds the player item, so it takes effect within seconds.
     var quality: QualityPreference {
-        didSet { qualityDidChange() }
+        didSet { qualityDidChange(from: oldValue) }
     }
 
     /// The caption track shown, nil for off. Setting it loads the cues.
@@ -129,6 +132,9 @@ final class PlayerController {
     @ObservationIgnored private var isItemReady = false
     @ObservationIgnored private var awaitingInitialStart = false
     @ObservationIgnored private var pendingStart: Double = 0
+    /// `pendingStart` is where the viewer already was (a quality change), not a saved position or a link's start time
+    /// that may be so close to the end that watching again from the start is the better guess.
+    @ObservationIgnored private var pendingStartIsExact = false
     @ObservationIgnored private var isSeeking = false
     @ObservationIgnored private var seekToken = 0
     @ObservationIgnored private var resumeAfterSeek = false
@@ -139,7 +145,7 @@ final class PlayerController {
     @ObservationIgnored private var forceStreaming = false
 
     @ObservationIgnored private var upNext: [VideoSummary] = []
-    @ObservationIgnored private var lastProgressSave = Date.distantPast
+    @ObservationIgnored private var progressThrottle = ProgressSaveThrottle()
     @ObservationIgnored private var wasPlayingBeforeInterruption = false
     @ObservationIgnored private var didDetachSurfaces = false
     @ObservationIgnored private var qualityIsManual = false
@@ -185,6 +191,9 @@ final class PlayerController {
 
         wireCollaborators()
         installPlayerObservers()
+        #if DEBUG
+        PlayerDebugScript.runIfRequested(on: self)
+        #endif
     }
 
     // MARK: Derived state for the views
@@ -250,12 +259,22 @@ final class PlayerController {
         self.chapters = chapters
     }
 
-    /// The related videos the watch page found, for autoplay once the queue is empty.
+    /// The related videos the watch page found, for autoplay once the queue is empty. The watch page calls this only
+    /// while it is on screen; it replaces whatever list autoplay carried over (see `start`).
     func setUpNext(_ videos: [VideoSummary]) {
         upNext = videos
     }
 
-    private func start(_ video: VideoSummary, startAt: Double?, queue: [VideoSummary], expand: Bool) {
+    /// Starts `video`. A video opened from outside starts with an empty up-next list (the watch page fills it); when
+    /// autoplay moves on by itself, `upNext` is what remains of the list, so it can keep going with the player minimized
+    /// and no watch page to hand over the next list.
+    private func start(
+        _ video: VideoSummary,
+        startAt: Double?,
+        queue: [VideoSummary],
+        upNext: [VideoSummary] = [],
+        expand: Bool
+    ) {
         saveProgress(force: true)
         tearDownItem()
         cancelWork()
@@ -265,7 +284,7 @@ final class PlayerController {
 
         currentVideo = video
         self.queue = queue
-        upNext = []
+        self.upNext = upNext
         streamInfo = nil
         currentTime = max(0, startAt ?? 0)
         duration = Double(video.durationSeconds ?? 0)
@@ -292,6 +311,7 @@ final class PlayerController {
         shouldPlayWhenReady = true
         resumeAfterSeek = false
         pendingStart = 0
+        pendingStartIsExact = false
         qualityIsManual = false
         applyDefaultQuality()
         rate = Self.clampedRate(settings.defaultPlaybackRate)
@@ -462,7 +482,10 @@ final class PlayerController {
         ]
     }
 
-    private func tearDownItem() {
+    /// Lets go of the current item: its observers, its stall watch, and (unless `keepingLastFrame`) the item itself.
+    /// With `keepingLastFrame` the player is only paused, because the caller attaches the next item right away and the
+    /// video layers keep showing the last frame until the new item has one, instead of flashing black in between.
+    private func tearDownItem(keepingLastFrame: Bool = false) {
         itemObservations.removeAll()
         let center = NotificationCenter.default
         for token in itemNotifications {
@@ -479,7 +502,9 @@ final class PlayerController {
         seekToken += 1
         if avPlayer.currentItem != nil {
             avPlayer.pause()
-            avPlayer.replaceCurrentItem(with: nil)
+            if !keepingLastFrame {
+                avPlayer.replaceCurrentItem(with: nil)
+            }
         }
     }
 
@@ -516,8 +541,10 @@ final class PlayerController {
     /// The item is ready: jump to the start position, then play if the viewer wants playback.
     private func beginPlayback() {
         var target = pendingStart
+        let isExact = pendingStartIsExact
         pendingStart = 0
-        if duration > 0, target > duration - 2 {
+        pendingStartIsExact = false
+        if duration > 0, target > duration - 2, !isExact {
             target = 0
         }
         awaitingInitialStart = true
@@ -556,16 +583,17 @@ final class PlayerController {
         Self.log.info("ended \(video.id, privacy: .public)")
 
         if playNext() { return }
-        if settings.autoplayNext, let next = autoplayCandidate() {
-            start(next, startAt: nil, queue: [], expand: false)
+        if settings.autoplayNext, let step = autoplayStep(after: video) {
+            // What stays up next goes along: with the player minimized the watch page is not on screen to replace the
+            // list, and the next hop would find it empty.
+            start(step.next, startAt: nil, queue: [], upNext: step.remaining, expand: false)
         }
     }
 
-    /// The first up-next suggestion the viewer has not watched.
-    private func autoplayCandidate() -> VideoSummary? {
-        upNext.first { video in
-            video.id != currentVideo?.id && !video.isShort && !video.isLive && !video.isUpcoming
-                && (library.progress(for: video.id)?.progressSeconds ?? 0) < 10
+    /// The first up-next suggestion the viewer has not watched, and the suggestions that stay up next behind it.
+    private func autoplayStep(after video: VideoSummary) -> AutoplayPlanner.Step? {
+        AutoplayPlanner.step(after: video.id, upNext: upNext) { [library] id in
+            library.progress(for: id)?.progressSeconds
         }
     }
 
@@ -809,17 +837,12 @@ final class PlayerController {
         }
     }
 
-    /// How far before the end a seek to (or past) the end lands. AVPlayer parked exactly at the end of an item waits
-    /// there for media that never comes (`waitingToMinimizeStalls`, with no end of the wait); a moment earlier it plays
-    /// out and reaches the end the usual way, which is what ends the video, starts the queue and records the progress.
-    private static let endMargin = 0.25
-
+    /// A seek to (or past) the end lands `PlaybackSeek.endMargin` before it: AVPlayer parked exactly at the end of an
+    /// item waits there for media that never comes, a moment earlier it plays out and reaches the end the usual way,
+    /// which is what ends the video, starts the queue and records the progress. That includes a SponsorBlock segment that
+    /// runs to the end of the video.
     private func clampedToDuration(_ seconds: Double) -> Double {
-        var value = max(0, seconds)
-        if duration > 0, !isLive {
-            value = min(value, max(0, duration - Self.endMargin))
-        }
-        return value
+        PlaybackSeek.clamped(seconds, duration: duration, isLive: isLive)
     }
 
     // MARK: Presentation
@@ -1002,7 +1025,9 @@ final class PlayerController {
         refreshCaption()
         syncPlannerWithSettings()
         autoSkipSegmentIfNeeded()
-        saveProgress(force: false)
+        if state == .playing {
+            saveProgress(force: false)
+        }
         resetRecoveryCounterWhenHealthy()
         applyAutomaticPictureInPicture()
     }
@@ -1077,11 +1102,14 @@ final class PlayerController {
 
     // MARK: Progress
 
+    /// Saves the position to the library: every `ProgressSaveThrottle.interval` seconds while playing (the time
+    /// observer asks without `force`), and at once when asked with `force` (pause, close, background, a failure, the
+    /// first frame and a switch to another video). The library rewrites its whole history file for each batch of
+    /// changes, so playback must not save on every tick.
     private func saveProgress(force: Bool) {
         guard let video = currentVideo, hasStartedPlayback, !isLive else { return }
-        let now = Date()
-        guard force || now.timeIntervalSince(lastProgressSave) >= 5 else { return }
-        lastProgressSave = now
+        guard progressThrottle.shouldSave(now: Date(), force: force) else { return }
+        Self.log.debug("save progress \(video.id, privacy: .public) at \(self.currentTime) (forced: \(force))")
         let length = duration > 0 ? duration : video.durationSeconds.map(Double.init)
         library.recordProgress(video: video, seconds: currentTime, duration: length)
     }
@@ -1132,13 +1160,17 @@ final class PlayerController {
     }
 
     private func autoSkipSegmentIfNeeded() {
+        // No destination: the playhead already is at the end margin of a segment that runs to the end of the video, and
+        // a skip would only repeat the notice.
         guard state == .playing, !isSeeking, let planner,
-              let segment = planner.segmentToSkip(at: currentTime, alreadySkipped: declinedSkips) else { return }
+              let segment = planner.segmentToSkip(at: currentTime, alreadySkipped: declinedSkips),
+              let destination = PlaybackSeek.skipDestination(of: segment, from: currentTime, duration: duration, isLive: isLive)
+        else { return }
         // A skip that just happened is still settling.
         if let lastSkip, lastSkip.id == segment.id, Date().timeIntervalSince(lastSkip.at) < 1.5 { return }
         lastSkip = (segment.id, Date())
-        Self.log.info("skip \(segment.category.rawValue, privacy: .public) \(segment.start)-\(segment.end)")
-        seek(to: segment.end)
+        Self.log.info("skip \(segment.category.rawValue, privacy: .public) \(segment.start)-\(segment.end) -> \(destination)")
+        seek(to: destination)
         showSkipNotice(for: segment)
     }
 
@@ -1238,13 +1270,57 @@ final class PlayerController {
         return Float(min(max(value, 0.25), 4))
     }
 
-    private func qualityDidChange() {
-        if !isApplyingDefaultQuality {
-            qualityIsManual = true
-        }
+    private func qualityDidChange(from previous: QualityPreference) {
+        guard quality != previous else { return }
         if let item = avPlayer.currentItem {
             applyQuality(to: item)
         }
+        // The connection chose it (Wi-Fi or cellular, when a video opens or the connection changes): the cap shapes what
+        // is fetched from now on and nothing that is playing is thrown away.
+        guard !isApplyingDefaultQuality else { return }
+        qualityIsManual = true
+        rebuildItemForQualityChange()
+    }
+
+    /// The viewer picked a quality. The cap alone only shapes what AVPlayer fetches from now on, and it keeps playing
+    /// the minutes it has already buffered in the old quality. So the player item is rebuilt from the stream info in
+    /// hand (no new resolve) and picks up at the current position; the new item starts with an empty buffer.
+    ///
+    /// Everything that belongs to the video rather than to the item stays: playing or paused, the rate (`defaultRate`
+    /// starts the new item at it), the caption track and its cues, the SponsorBlock segments with the ones declined, and
+    /// the time observer, which hangs on the player.
+    ///
+    /// Nothing is rebuilt when there is nothing buffered to replace (still starting, ended, failed), when the video
+    /// comes from a download (one quality), or when the device is offline (the buffer is all there is). Those keep the
+    /// cap, which the next item or the replay applies.
+    private func rebuildItemForQualityChange() {
+        guard currentVideo != nil, let info = streamInfo, !isPlayingOffline,
+              avPlayer.currentItem != nil, isItemReady, hasStartedPlayback, !isRecovering,
+              state != .ended, failureMessage == nil,
+              network.isOnline else { return }
+
+        let position = isLive ? 0 : PlaybackSeek.clamped(currentPositionForRecovery(), duration: duration, isLive: isLive)
+
+        // Links that expired while the video was paused need new ones, not a rebuild from the old.
+        guard !info.isExpired() else {
+            beginReload(at: position, waitForConnection: false)
+            return
+        }
+        guard let url = playbackURL(for: info) else { return }
+
+        Self.log.info("quality \(self.quality.label, privacy: .public): rebuilding the item at \(position)")
+        tearDownItem(keepingLastFrame: true)
+        pendingStart = position
+        pendingStartIsExact = true
+        currentTime = position
+        bufferedTime = position
+        // Playing: buffering until the first frame. Paused: stays paused, the item loads and waits.
+        state = shouldPlayWhenReady ? .buffering : .loading
+        attach(AVPlayerItem(url: url))
+        if shouldPlayWhenReady {
+            watchForStall()
+        }
+        updateNowPlaying()
     }
 
     private func applyDefaultQuality() {
@@ -1381,6 +1457,59 @@ final class PlayerController {
         )
     }
 }
+
+#if DEBUG
+// MARK: - Simulator checks
+
+/// What `PlayerDebugScript` (checks in the simulator that links cannot reach, driven by a launch argument) needs from
+/// the controller's internals. Debug builds only.
+extension PlayerController {
+    var debugSettingsStore: SettingsStore {
+        settingsStore
+    }
+
+    /// Adds a SponsorBlock segment to the loaded ones, for example an outro that runs to the end of the video.
+    func debugAddSegment(start: Double, end: Double) {
+        rawSegments.append(SponsorSegment(id: "debug-\(start)-\(end)", category: .sponsor, actionType: .skip, start: start, end: end))
+        rebuildPlanner()
+    }
+
+    /// Sets the quality the way the connection does (Wi-Fi or cellular): only the cap, no new item. That is also how a
+    /// pick behaved before the item was rebuilt.
+    func debugApplyCapOnly(_ quality: QualityPreference) {
+        isApplyingDefaultQuality = true
+        self.quality = quality
+        isApplyingDefaultQuality = false
+    }
+
+    /// Shows the skip notice of the first segment and leaves it up (it has no timer), for screenshots.
+    func debugPinNotice() {
+        guard let segment = segments.first ?? rawSegments.first else { return }
+        skipNoticeTask?.cancel()
+        skipNotice = SkipNotice(id: segment.id, segment: segment)
+    }
+
+    /// One line with the state of the player for the log (`xcrun simctl spawn <udid> log stream --level debug`).
+    func debugLogSnapshot(_ tag: String) {
+        let size = avPlayer.currentItem?.presentationSize ?? .zero
+        let caption = captionText ?? "-"
+        let notice = skipNotice?.segment.category.rawValue ?? "-"
+        let window = UIApplication.shared.connectedScenes.compactMap { ($0 as? UIWindowScene)?.keyWindow }.first
+        let bounds = window?.bounds ?? .zero
+        let insets = window?.safeAreaInsets ?? .zero
+        Self.log.info("""
+            [script] \(tag, privacy: .public) state=\(String(describing: self.state), privacy: .public) \
+            time=\(self.currentTime) duration=\(self.duration) rate=\(self.avPlayer.rate) \
+            quality=\(self.quality.label, privacy: .public) size=\(Int(size.width))x\(Int(size.height)) \
+            captions=\(self.selectedCaption?.id ?? "off", privacy: .public) caption=\(caption, privacy: .public) \
+            notice=\(notice, privacy: .public) segments=\(self.segments.count) upNext=\(self.upNext.count) \
+            queue=\(self.queue.count) video=\(self.currentVideo?.id ?? "-", privacy: .public) \
+            presentation=\(String(describing: self.presentation), privacy: .public) fullscreen=\(self.isFullscreen) \
+            window=\(Int(bounds.width))x\(Int(bounds.height)) safeTop=\(insets.top) safeBottom=\(insets.bottom)
+            """)
+    }
+}
+#endif
 
 // MARK: - Captions
 
