@@ -1,0 +1,12 @@
+# Xcode / SwiftPM
+DerivedData/
+build/
+.build/
+.swiftpm/
+*.xcuserstate
+xcuserdata/
+*.xcscmblueprint
+# Local signing config (copy Config/Local.xcconfig.example)
+Config/Local.xcconfig
+# macOS
+.DS_Store
