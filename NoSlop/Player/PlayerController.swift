@@ -809,10 +809,15 @@ final class PlayerController {
         }
     }
 
+    /// How far before the end a seek to (or past) the end lands. AVPlayer parked exactly at the end of an item waits
+    /// there for media that never comes (`waitingToMinimizeStalls`, with no end of the wait); a moment earlier it plays
+    /// out and reaches the end the usual way, which is what ends the video, starts the queue and records the progress.
+    private static let endMargin = 0.25
+
     private func clampedToDuration(_ seconds: Double) -> Double {
         var value = max(0, seconds)
         if duration > 0, !isLive {
-            value = min(value, duration)
+            value = min(value, max(0, duration - Self.endMargin))
         }
         return value
     }
@@ -1280,7 +1285,15 @@ final class PlayerController {
     // MARK: Audio interruptions
 
     private func audioInterruptionBegan() {
-        wasPlayingBeforeInterruption = isPlaybackActive
+        // The system may have paused the player before this arrives (and a second interruption arrives with the
+        // player already paused), so `state` cannot say whether playback was running. The viewer's wish can:
+        // `pause()` clears it, the system's pause does not.
+        switch state {
+        case .idle, .ended, .failed:
+            wasPlayingBeforeInterruption = false
+        case .loading, .playing, .buffering, .paused:
+            wasPlayingBeforeInterruption = shouldPlayWhenReady
+        }
     }
 
     private func audioInterruptionEnded(shouldResume: Bool) {
@@ -1311,28 +1324,32 @@ final class PlayerController {
         if pictureInPicture.isActive || pictureInPicture.isStarting {
             return
         }
+        // Asked now, before the wait below: the system may pause a player that still renders into a layer once the
+        // app is in the background, and by the time that wait is over `state` would say the viewer had paused.
+        let wasPlaying = isPlaybackActive
         // With automatic PiP on, the system starts it around now; look again once it had its say.
         let mayStartPictureInPicture = settings.autoPictureInPicture && pictureInPicture.isPossible && state == .playing
         if mayStartPictureInPicture {
             Task { [weak self] in
                 try? await Task.sleep(for: .milliseconds(600))
-                self?.settleBackgroundPlayback()
+                self?.settleBackgroundPlayback(wasPlaying: wasPlaying)
             }
         } else {
-            settleBackgroundPlayback()
+            settleBackgroundPlayback(wasPlaying: wasPlaying)
         }
     }
 
     /// Background without Picture in Picture: keep the audio going (video detached from its layers) or pause.
-    private func settleBackgroundPlayback() {
+    /// `wasPlaying` is whether playback was running when the app left the foreground.
+    private func settleBackgroundPlayback(wasPlaying: Bool) {
         guard currentVideo != nil, UIApplication.shared.applicationState != .active else { return }
         if pictureInPicture.isActive || pictureInPicture.isStarting { return }
         if settings.backgroundPlayback {
             Self.log.info("background: video detached, audio continues")
             pictureInPicture.setSurfacesAttached(false)
             didDetachSurfaces = true
-            // Entering the background with a rendering layer may have paused the player; the viewer did not ask for that.
-            if shouldPlayWhenReady, isItemReady, avPlayer.rate == 0, state != .ended, state != .paused {
+            // Leaving the app with a rendering layer may have paused the player; the viewer did not ask for that.
+            if wasPlaying, shouldPlayWhenReady, isItemReady, avPlayer.rate == 0, state != .ended {
                 avPlayer.play()
             }
         } else {
