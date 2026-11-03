@@ -41,8 +41,10 @@ private struct VideoContextMenuModifier: ViewModifier {
         }
 
         Menu {
-            Button("720p") { env.downloads.enqueue(video: video, quality: .video(maxHeight: 720)) }
-            Button("360p") { env.downloads.enqueue(video: video, quality: .video(maxHeight: 360)) }
+            // Named by the cap, not by a height: the download takes the tallest rendition the video has up to that
+            // height, which may be a lower one (a video that stops at 480p downloads as 480p under both).
+            Button("Download up to 720p") { env.downloads.enqueue(video: video, quality: .video(maxHeight: 720)) }
+            Button("Download up to 360p") { env.downloads.enqueue(video: video, quality: .video(maxHeight: 360)) }
             Button("Audio only") { env.downloads.enqueue(video: video, quality: .audioOnly) }
         } label: {
             Label("Download", systemImage: "arrow.down.circle")
@@ -50,7 +52,7 @@ private struct VideoContextMenuModifier: ViewModifier {
 
         if let channel = video.channel {
             Button(role: .destructive) {
-                block(channel)
+                ChannelBlocking.block(channel, using: env)
             } label: {
                 Label("Don't show this channel", systemImage: "nosign")
             }
@@ -60,10 +62,14 @@ private struct VideoContextMenuModifier: ViewModifier {
             Label("Share", systemImage: "square.and.arrow.up")
         }
     }
+}
 
-    private func block(_ channel: ChannelRef) {
+/// "Don't show this channel": adds the channel to the blocked channels in the settings. Every list that is on screen
+/// listens to the settings and drops the channel's videos at once.
+enum ChannelBlocking {
+    static func block(_ channel: ChannelRef, using env: AppEnvironment) {
         var settings = env.settingsStore.settings
-        guard !settings.blockedChannels.contains(where: { $0.id == channel.id }) else { return }
+        guard !channel.id.isEmpty, !settings.blockedChannels.contains(where: { $0.id == channel.id }) else { return }
         settings.blockedChannels.append(BlockedChannel(id: channel.id, name: channel.name))
         env.settingsStore.settings = settings
     }

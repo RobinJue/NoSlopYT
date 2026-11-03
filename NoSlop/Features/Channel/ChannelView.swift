@@ -30,6 +30,14 @@ struct ChannelView: View {
             }
         }
         .task { model.loadIfNeeded(using: env) }
+        // A feed filter that changes (Shorts, members-only, keywords) takes effect on the tabs on screen right away.
+        // Also when the screen comes back: it may have changed on a screen above it.
+        .onChange(of: env.settings) {
+            model.filtersChanged(using: env)
+        }
+        .onAppear {
+            model.filtersChanged(using: env)
+        }
     }
 
     @ViewBuilder
@@ -58,6 +66,8 @@ struct ChannelView: View {
                         }
                     }
                 }
+                // Like the other lists: the last row ends `padding` above the end of the page.
+                .padding(.bottom, Theme.padding)
             }
         }
     }

@@ -21,21 +21,26 @@ final class HomeViewModel {
     }
 
     private(set) var phase: Phase = .idle
+    /// "Continue watching", after the user's filters.
     private(set) var continueWatching: [HistoryEntry] = []
+    /// The feed, after the user's filters.
     private(set) var forYou: [VideoSummary] = []
 
     var hasContent: Bool { !continueWatching.isEmpty || !forYou.isEmpty }
 
-    /// What the loaded feed was built from. When it differs on a later visit the feed is rebuilt.
+    /// What the feed service built, before the user's filters. `applyFilter` runs them on it again when they change,
+    /// so a channel the user blocks leaves the screen at once.
+    @ObservationIgnored private var built = HomeFeed.empty
+
+    /// What the loaded feed was built from. When it differs on a later visit the feed is rebuilt. The feed filters are
+    /// not part of it: they are applied to the built feed (`applyFilter`), whenever they change.
     private struct Signature: Equatable {
-        var settings: AppSettings
         var subscriptionIDs: [String]
         var historyCount: Int
         /// Changes whenever progress is recorded, so finishing or starting a video refreshes "Continue watching".
         var lastWatchedAt: Date?
 
         init(_ env: AppEnvironment) {
-            settings = env.settings
             subscriptionIDs = env.library.subscriptions.map(\.id)
             historyCount = env.library.history.count
             lastWatchedAt = env.library.history.first?.lastWatchedAt
@@ -52,12 +57,14 @@ final class HomeViewModel {
 
     // MARK: Loading
 
-    /// Builds the feed when there is none yet, when it is older than 15 minutes, or when the history, the
-    /// subscriptions or the feed filters changed since it was built. Returns immediately.
+    /// Builds the feed when there is none yet, when it is older than 15 minutes, or when the history or the
+    /// subscriptions changed since it was built. Otherwise it only runs the feed filters again, which may have changed.
+    /// Returns immediately.
     func loadIfNeeded(using env: AppEnvironment) {
         guard loadTask == nil else { return }
         if phase == .loaded, let loadedAt, loadedSignature == Signature(env),
            Date().timeIntervalSince(loadedAt) < Self.maxAge {
+            applyFilter(using: env)
             return
         }
         start(using: env, forceRefresh: false)
@@ -71,6 +78,17 @@ final class HomeViewModel {
             return
         }
         await start(using: env, forceRefresh: true).value
+    }
+
+    /// Runs the user's filters on the feed already built (cheap; no network). Call it when they change: the user
+    /// blocked a channel, or turned a setting on or off.
+    func applyFilter(using env: AppEnvironment) {
+        let filter = env.contentFilter
+        let resumable = built.continueWatching.filter { filter.allows($0.video) }.uniqued()
+        let feed = filter.filter(built.forYou).uniqued()
+        // Not new values when nothing changed, so the screen is not redrawn for a setting that is not about the feed.
+        if resumable.map(\.id) != continueWatching.map(\.id) { continueWatching = resumable }
+        if feed.map(\.id) != forYou.map(\.id) { forYou = feed }
     }
 
     @discardableResult
@@ -110,9 +128,8 @@ final class HomeViewModel {
             if phase == .loading { phase = loadedAt == nil ? .idle : .loaded }
             return
         }
-        let filter = env.contentFilter
-        continueWatching = feed.continueWatching.filter { filter.allows($0.video) }
-        forYou = filter.filter(feed.forYou)
+        built = feed
+        applyFilter(using: env)
         loadedSignature = signature
         loadedAt = Date()
         phase = .loaded

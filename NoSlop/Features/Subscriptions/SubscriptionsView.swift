@@ -30,6 +30,10 @@ struct SubscriptionsView: View {
                 model.applyFilter(using: env)
             }
         }
+        // "Don't show this channel" (or any other feed filter) takes effect on what is on screen, not after a reload.
+        .onChange(of: env.settings) {
+            model.applyFilter(using: env)
+        }
     }
 
     @ViewBuilder

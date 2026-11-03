@@ -31,6 +31,14 @@ struct PlaylistView: View {
             }
         }
         .task { model.loadIfNeeded(using: env) }
+        // "Don't show this channel" (or any other feed filter) takes effect on the videos on screen, not after a
+        // reload. Also when the screen comes back: the filter may have changed on a screen above it.
+        .onChange(of: env.settings) {
+            model.filtersChanged(using: env)
+        }
+        .onAppear {
+            model.filtersChanged(using: env)
+        }
     }
 
     @ViewBuilder
@@ -60,9 +68,14 @@ struct PlaylistView: View {
 
                     videos
                 }
+                // Like the other lists: the last row ends `padding` above the end of the page (a row has its own).
+                .padding(.bottom, Theme.padding - Self.rowPadding)
             }
         }
     }
+
+    /// Space above and below each video row.
+    private static let rowPadding: CGFloat = 6
 
     @ViewBuilder
     private var videos: some View {
@@ -74,7 +87,7 @@ struct PlaylistView: View {
                 } label: {
                     VideoRowView(video: video)
                         .padding(.horizontal, Theme.padding)
-                        .padding(.vertical, 6)
+                        .padding(.vertical, Self.rowPadding)
                 }
                 .buttonStyle(.pressableCard)
                 .videoContextMenu(video)

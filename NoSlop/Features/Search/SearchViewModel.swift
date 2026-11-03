@@ -7,7 +7,8 @@ import Observation
 ///
 /// What the screen shows follows from the text: empty → recent searches; text that differs from the submitted
 /// query → suggestions; text equal to the submitted query → its results. A pasted YouTube link is opened directly
-/// instead of searched.
+/// instead of searched; any other text, including text that merely contains a domain ("asp.net tutorial"), is a
+/// search (`SearchInput` decides which).
 @MainActor
 @Observable
 final class SearchViewModel {
@@ -75,23 +76,28 @@ final class SearchViewModel {
         text = query
         suggestions = []
 
-        guard let url = YouTubeURL.extractURL(from: query) else {
+        switch SearchInput(query) {
+        case .search:
             startSearch(query, using: env)
-            return
-        }
-        // Show the placeholders (not the results of an earlier search) while the link is looked up; it may turn out
-        // to be ordinary text.
-        results.clear()
-        submittedQuery = query
-        submitTask = Task { [weak self] in
-            let resolved = await Self.resolvedLink(for: url, using: env)
-            // Dropped when the field was edited or cleared while the link was being looked up.
-            guard let self, !Task.isCancelled,
-                  self.text.trimmingCharacters(in: .whitespacesAndNewlines) == query else { return }
-            if let resolved {
-                self.open(resolved, using: env)
-            } else {
-                self.startSearch(query, using: env)
+
+        case .appLink(let link):
+            openDirectly(link, using: env)
+
+        case .link(let url):
+            // Show the placeholders (not the results of an earlier search) while the link is looked up; it may turn
+            // out to be ordinary text.
+            results.clear()
+            submittedQuery = query
+            submitTask = Task { [weak self] in
+                let resolved = await Self.resolvedLink(for: url, using: env)
+                // Dropped when the field was edited or cleared while the link was being looked up.
+                guard let self, !Task.isCancelled,
+                      self.text.trimmingCharacters(in: .whitespacesAndNewlines) == query else { return }
+                if let resolved {
+                    self.open(resolved, using: env)
+                } else {
+                    self.startSearch(query, using: env)
+                }
             }
         }
     }
@@ -121,26 +127,27 @@ final class SearchViewModel {
             startSearch(query, using: env)
         case .video, .channel, .playlist:
             guard let link = resolved.appLink else { return }
-            // Leave the field empty, so coming back to this tab starts a new search.
-            text = ""
-            submittedQuery = nil
-            results.clear()
-            // In a task of its own: emptying the field cancels `submitTask`, which must not cancel the lookup of the
-            // video's title that opening it starts.
-            Task { await env.handleOpenURL(link) }
+            openDirectly(link, using: env)
         }
     }
 
-    /// What a pasted link points at: decided locally when possible, else asked of YouTube (a `@handle` needs the
-    /// network). Anything that is not a YouTube link is not worth a request.
+    /// Opens an app link and leaves the field empty, so coming back to this tab starts a new search.
+    private func openDirectly(_ link: URL, using env: AppEnvironment) {
+        text = ""
+        submittedQuery = nil
+        results.clear()
+        // In a task of its own: emptying the field cancels `submitTask`, which must not cancel the lookup of the
+        // video's title that opening it starts.
+        Task { await env.handleOpenURL(link) }
+    }
+
+    /// What a link points at: decided locally when possible, else asked of YouTube (a `@handle` needs the network).
+    /// `SearchInput` only hands over YouTube links and the app's own, and a YouTube host is the only one worth a request.
     private static func resolvedLink(for url: URL, using env: AppEnvironment) async -> ResolvedURL? {
         if let local = YouTubeURL.resolveLocally(url) {
             return local
         }
-        guard let host = url.host?.lowercased(),
-              host == "youtu.be" || host == "youtube.com" || host.hasSuffix(".youtube.com") else {
-            return nil
-        }
+        guard SearchInput.isYouTubeHost(of: url) else { return nil }
         return try? await env.youTube.resolve(url: url)
     }
 }
