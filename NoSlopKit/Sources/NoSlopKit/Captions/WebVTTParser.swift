@@ -124,7 +124,13 @@ public enum WebVTTParser {
         var result = ""
         var index = line.startIndex
         while index < line.endIndex {
-            if line[index] == "<", let close = line[index...].firstIndex(of: ">") {
+            if line[index] == "<" {
+                guard let close = line[index...].firstIndex(of: ">") else {
+                    // No ">" follows this "<", so none follows a later "<" either: the rest of the line is text.
+                    // (Searching again from every "<" would cost n² steps for a line of n of them.)
+                    result += line[index...]
+                    break
+                }
                 index = line.index(after: close)
             } else {
                 result.append(line[index])
