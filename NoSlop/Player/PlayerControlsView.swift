@@ -34,11 +34,16 @@ struct PlayerControlsView: View {
 
     private static let jump = 10.0
     private static let autoHideDelay = 3.0
+    /// The text of the bars and of the centre buttons stops following the viewer's text size here. Beyond it the bars
+    /// grow taller than `ControlsFootprint` says, and the controls would overlap each other and the strips between them
+    /// that the skip notice and the captions use. (Video players keep their chrome at one size, for the same reason.)
+    private static let largestTextSize = DynamicTypeSize.xxxLarge
 
     var body: some View {
         let player = env.player
         let isRunning = player.state == .playing || player.state == .buffering
         let showsChrome = isVisible || !isRunning || isSettingsOpen
+        let failed = player.failureMessage != nil
 
         ZStack {
             // While the player shows its error the area belongs to the buttons of the error view.
@@ -58,20 +63,15 @@ struct PlayerControlsView: View {
                 rippleView(ripple)
             }
 
-            // Captions sit above the controls and their dimming, lifted clear of the seek bar while the controls are up.
-            if let text = player.captionText {
-                CaptionOverlayView(text: text, isLarge: isFullscreen, liftsAboveControls: showsChrome)
-            }
-
-            // "Skipped sponsor · Undo" sits in the top corner, below the title bar while that is showing, so it never
-            // meets the captions or the controls at the bottom.
-            if let notice = player.skipNotice {
-                SkipNoticeView(notice: notice) { player.undoSkip() }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                    .padding(.leading, 14)
-                    .padding(.top, showsChrome ? 50 : 12)
-                    .transition(.move(edge: .top).combined(with: .opacity))
-            }
+            // Captions and "Skipped sponsor · Undo" sit above the controls and their dimming. While the controls show
+            // they go in the empty strips between them, so neither ever sits on a button.
+            PlayerOverlayTexts(
+                notice: player.skipNotice,
+                caption: failed ? nil : player.captionText,
+                controls: showsChrome ? footprint(of: player, failed: failed) : nil,
+                isFullscreen: isFullscreen,
+                undo: { player.undoSkip() }
+            )
         }
         .animation(.easeInOut(duration: 0.2), value: showsChrome)
         .animation(.spring(duration: 0.3), value: player.skipNotice)
@@ -196,6 +196,13 @@ struct PlayerControlsView: View {
 
     // MARK: Controls
 
+    /// What the controls on screen take up, for the notice and the captions to keep clear of.
+    private func footprint(of player: PlayerController, failed: Bool) -> ControlsFootprint {
+        failed
+            ? .topBarOnly
+            : ControlsFootprint(isLive: player.isLive, isWaitingForConnection: player.isWaitingForConnection)
+    }
+
     private func chrome(_ player: PlayerController) -> some View {
         let failed = player.failureMessage != nil
         return ZStack {
@@ -241,6 +248,7 @@ struct PlayerControlsView: View {
             if let video = player.currentVideo {
                 VideoTitleText(video: video, lineLimit: 1)
                     .font(.subheadline.weight(.semibold))
+                    .dynamicTypeSize(...Self.largestTextSize)
                     .foregroundStyle(.white)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .allowsHitTesting(false)
@@ -283,6 +291,7 @@ struct PlayerControlsView: View {
             if player.isWaitingForConnection {
                 Text("Waiting for connection…")
                     .font(.caption.weight(.medium))
+                    .dynamicTypeSize(...Self.largestTextSize)
                     .foregroundStyle(.white)
             }
         }
@@ -327,6 +336,7 @@ struct PlayerControlsView: View {
             if player.isWaitingForConnection {
                 Text("Waiting for connection…")
                     .font(.caption.weight(.medium))
+                    .dynamicTypeSize(...Self.largestTextSize)
                     .foregroundStyle(.white)
             }
         }
@@ -343,7 +353,7 @@ struct PlayerControlsView: View {
             ProgressView()
                 .controlSize(.large)
                 .tint(.white)
-                .frame(width: 64, height: 64)
+                .frame(width: ControlsFootprint.centerButton, height: ControlsFootprint.centerButton)
                 .accessibilityLabel(player.isWaitingForConnection ? "Waiting for connection" : "Buffering")
         } else {
             Button {
@@ -353,7 +363,7 @@ struct PlayerControlsView: View {
                 Image(systemName: centerIcon(player))
                     .font(.system(size: 30, weight: .semibold))
                     .foregroundStyle(.white)
-                    .frame(width: 64, height: 64)
+                    .frame(width: ControlsFootprint.centerButton, height: ControlsFootprint.centerButton)
                     .background(.black.opacity(0.45), in: Circle())
                     .contentShape(Circle())
             }
@@ -370,6 +380,7 @@ struct PlayerControlsView: View {
         VStack(spacing: 0) {
             HStack(spacing: 0) {
                 timeLabel(player)
+                    .dynamicTypeSize(...Self.largestTextSize)
                 Spacer(minLength: 0)
                 if PictureInPictureController.isSupported {
                     Button {
@@ -391,7 +402,7 @@ struct PlayerControlsView: View {
             }
 
             if player.isLive {
-                Color.clear.frame(height: 10)
+                Color.clear.frame(height: ControlsFootprint.liveBarSpacer)
             } else {
                 SeekBarView(
                     currentTime: player.currentTime,
@@ -435,7 +446,7 @@ struct PlayerControlsView: View {
         Image(systemName: systemName)
             .font(.system(size: size, weight: .semibold))
             .foregroundStyle(.white)
-            .frame(width: 44, height: 44)
+            .frame(width: ControlsFootprint.barButton, height: ControlsFootprint.barButton)
             .contentShape(Rectangle())
     }
 
