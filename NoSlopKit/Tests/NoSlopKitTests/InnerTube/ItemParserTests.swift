@@ -269,8 +269,8 @@ import Testing
         // A channel whose name looks like a date or a count must not be mistaken for one.
         MetadataCase([["Chicago 2K"], ["5K views", "1 day ago"]], "5K views", 5_000, "1 day ago"),
         MetadataCase([["Watching Paint Dry"], ["5K views", "1 day ago"]], "5K views", 5_000, "1 day ago"),
-        // Other languages: the position decides, and YouTube's own text is kept without a number (parseCount would
-        // read "12万" or "12 тыс." as 12).
+        // Other languages: the position decides, and YouTube's own text is kept without a number (the screens would
+        // word a known count in English).
         MetadataCase([["Kanal"], ["9,8 Tsd. Aufrufe", "vor 22 Stunden"]], "9,8 Tsd. Aufrufe", nil, "vor 22 Stunden"),
         MetadataCase([["Canal"], ["1,2 M de visualizaciones", "hace 22 horas"]], "1,2 M de visualizaciones", nil, "hace 22 horas"),
         MetadataCase([["チャンネル"], ["12万 回視聴", "3 日前"]], "12万 回視聴", nil, "3 日前"),
@@ -560,6 +560,69 @@ import Testing
         let viewModel = try json(#"[{"continuationItemViewModel":{"continuationCommand":{"innertubeCommand":{"continuationCommand":{"token":"VIEWMODEL"}}}}}]"#)
         #expect(ItemParser.harvest(renderer).continuation == "RENDERER")
         #expect(ItemParser.harvest(viewModel).continuation == "VIEWMODEL")
+    }
+
+    // MARK: YouTube's own text is kept when there is no number
+
+    /// What YouTube sent, and the number the app may derive from it (nil: the app shows the text).
+    struct CountExample: Sendable, CustomTestStringConvertible {
+        var text: String
+        var count: Int?
+        var testDescription: String { "\(text) → \(count.map(String.init) ?? "nil")" }
+
+        init(_ text: String, _ count: Int?) {
+            self.text = text
+            self.count = count
+        }
+    }
+
+    private static let viewTexts: [CountExample] = [
+        CountExample("2,763,792 views", 2_763_792), CountExample("810K views", 810_000), CountExample("1 view", 1), CountExample("No views", 0),
+        // Other languages keep their own wording and get no number, whatever parseCount would make of them.
+        CountExample("12万 回視聴", nil), CountExample("12 тыс. просмотров", nil), CountExample("12 tn visningar", nil),
+        CountExample("2 763 792 vues", nil), CountExample("2.763.792 Aufrufe", nil), CountExample("110 Tsd. Aufrufe", nil),
+        CountExample("2,7 jt x ditonton", nil), CountExample("12 B görüntüleme", nil),
+    ]
+
+    @Test(arguments: viewTexts)
+    func videoRendererKeepsTheViewText(_ example: CountExample) throws {
+        let renderer = try json(#"{"videoId":"abc","title":{"simpleText":"T"},"viewCountText":{"simpleText":"\#(example.text)"}}"#)
+        let video = try #require(ItemParser.video(fromVideoRenderer: renderer))
+        #expect(video.viewCountText == example.text)
+        #expect(video.viewCount == example.count)
+    }
+
+    @Test(arguments: viewTexts)
+    func shortsLockupKeepsTheViewText(_ example: CountExample) throws {
+        let lockup = try json(#"""
+        {"onTap":{"innertubeCommand":{"reelWatchEndpoint":{"videoId":"abc"}}},
+         "overlayMetadata":{"primaryText":{"content":"T"},"secondaryText":{"content":"\#(example.text)"}}}
+        """#)
+        let video = try #require(ItemParser.short(fromShortsLockup: lockup))
+        #expect(video.viewCountText == example.text)
+        #expect(video.viewCount == example.count)
+    }
+
+    @Test(arguments: [
+        CountExample("14 videos", 14), CountExample("1 video", 1), CountExample("8 lessons", 8), CountExample("14 Videos", 14),
+        CountExample("1,2 Tsd. Videos", 1_200),
+        CountExample("12 тыс. видео", nil), CountExample("12万 本の動画", nil), CountExample("1 234 vidéos", nil), CountExample("12 vídeos", nil),
+    ])
+    func playlistLockupKeepsTheCountText(_ example: CountExample) throws {
+        let playlist = try #require(ItemParser.playlist(fromLockup: try playlistLockup(count: example.text)))
+        #expect(playlist.videoCountText == example.text)
+        #expect(playlist.videoCount == example.count)
+    }
+
+    @Test(arguments: ["チャンネル登録者数 125万人", "12 тыс. подписчиков", "1,25 Mio. Abonnenten", "125 k abonnés"])
+    func channelRendererKeepsTheSubscriberText(_ text: String) throws {
+        let renderer = try json(#"""
+        {"channelId":"UCx","title":{"simpleText":"Chan"},"subscriberCountText":{"simpleText":"@chan"},
+         "videoCountText":{"simpleText":"\#(text)"}}
+        """#)
+        let channel = try #require(ItemParser.channel(fromChannelRenderer: renderer))
+        #expect(channel.subscriberCountText == text)
+        #expect(channel.handle == "@chan")
     }
 
     @Test func harvestIgnoresContinuationsInsideSkippedBlocks() throws {

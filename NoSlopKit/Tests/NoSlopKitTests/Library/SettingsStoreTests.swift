@@ -176,11 +176,26 @@ private final class ChangeFlag: @unchecked Sendable {
         #expect(defaults.data(forKey: Self.key + ".corrupt") == Data("{garbage".utf8))
     }
 
-    @Test func aWronglyTypedValueIsTreatedAsDamagedToo() {
-        stored(#"{"hideShorts":"yes"}"#)
+    @Test func aWronglyTypedValueOnlyResetsThatSetting() {
+        stored(#"{"hideShorts":"yes","autoplayNext":true,"blockedKeywords":["minecraft"]}"#)
+
+        var expected = AppSettings()
+        expected.autoplayNext = true
+        expected.blockedKeywords = ["minecraft"]
+        let settings = store().settings
+
+        // "hideShorts" is back to its default (on); the readable settings around it are kept.
+        #expect(settings.hideShorts)
+        #expect(settings == expected)
+        // The document itself is fine, so nothing is moved aside.
+        #expect(defaults.object(forKey: Self.key + ".corrupt") == nil)
+    }
+
+    @Test func aBlobThatIsNotAnObjectIsDamagedAndKeptAside() {
+        stored("[1,2,3]")
 
         #expect(store().settings == AppSettings())
-        #expect(defaults.data(forKey: Self.key + ".corrupt") == Data(#"{"hideShorts":"yes"}"#.utf8))
+        #expect(defaults.data(forKey: Self.key + ".corrupt") == Data("[1,2,3]".utf8))
     }
 
     @Test func aValueThatIsNotDataIsKeptAsideToo() {

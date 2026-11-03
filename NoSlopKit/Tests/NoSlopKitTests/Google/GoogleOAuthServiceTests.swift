@@ -379,6 +379,124 @@ private struct Rig {
         }
     }
 
+    // MARK: Granted scopes
+
+    private static let youTubeAccessRefused = NoSlopError.oauth(
+        "YouTube access wasn't granted. Sign in again and allow access to your YouTube account."
+    )
+
+    @Test @MainActor func signInWithoutTheYouTubeScopeKeepsNothing() async throws {
+        // The user unticked "manage your YouTube account" on the consent screen.
+        let rig = Rig()
+        rig.http.enqueue(tokenEndpoint, body: try tokenBody(idToken: try makeIDToken(["sub": "1", "email": "you@example.com"]), scope: "openid email profile"))
+        let authenticator = GoogleFakeAuthenticator { url in redirect("code=c&state=\(queryValue(url, "state") ?? "")") }
+
+        await #expect(throws: Self.youTubeAccessRefused) {
+            _ = try await rig.service.signIn(clientID: testClientID, authenticator: authenticator)
+        }
+
+        #expect(try rig.store.load() == nil, "the credentials are not kept")
+        #expect(await rig.service.currentAccount() == nil)
+        #expect(rig.http.requests.count == 1, "only the code exchange went out: no account lookup either")
+    }
+
+    @Test(arguments: [
+        "openid email profile",
+        "https://www.googleapis.com/auth/youtube.readonly",
+        "openid https://www.googleapis.com/auth/youtube.force-ssl https://www.googleapis.com/auth/youtubepartner",
+        "https://www.googleapis.com/auth/youtube/", "HTTPS://WWW.GOOGLEAPIS.COM/AUTH/YOUTUBE",
+        "", "   ",
+    ])
+    @MainActor func onlyTheYouTubeScopeItselfCounts(scope: String) async throws {
+        let rig = Rig()
+        rig.http.enqueue(tokenEndpoint, body: try tokenBody(idToken: try makeIDToken(["sub": "1"]), scope: scope))
+        let authenticator = GoogleFakeAuthenticator { url in redirect("code=c&state=\(queryValue(url, "state") ?? "")") }
+        await #expect(throws: Self.youTubeAccessRefused) {
+            _ = try await rig.service.signIn(clientID: testClientID, authenticator: authenticator)
+        }
+        #expect(try rig.store.load() == nil)
+    }
+
+    @Test(arguments: [
+        allScopes,
+        "https://www.googleapis.com/auth/youtube",
+        "https://www.googleapis.com/auth/youtube openid",
+        "openid  email\nprofile\thttps://www.googleapis.com/auth/youtube",
+        "https://www.googleapis.com/auth/youtube.readonly https://www.googleapis.com/auth/youtube",
+    ])
+    @MainActor func theSessionIsKeptWhenTheYouTubeScopeIsAmongTheGrantedOnes(scope: String) async throws {
+        let rig = Rig()
+        rig.http.enqueue(tokenEndpoint, body: try tokenBody(idToken: try makeIDToken(["sub": "1"]), scope: scope))
+        let authenticator = GoogleFakeAuthenticator { url in redirect("code=c&state=\(queryValue(url, "state") ?? "")") }
+        let account = try await rig.service.signIn(clientID: testClientID, authenticator: authenticator)
+        #expect(account.id == "1")
+        #expect(try rig.store.load()?.tokens.scope == scope)
+    }
+
+    @Test @MainActor func aResponseWithoutAScopeGrantsWhatWasAskedFor() async throws {
+        // RFC 6749, 5.1: `scope` may be left out when it equals the requested scope.
+        let rig = Rig()
+        rig.http.enqueue(tokenEndpoint, body: try tokenBody(idToken: try makeIDToken(["sub": "1"]), scope: nil))
+        let authenticator = GoogleFakeAuthenticator { url in redirect("code=c&state=\(queryValue(url, "state") ?? "")") }
+        _ = try await rig.service.signIn(clientID: testClientID, authenticator: authenticator)
+        #expect(try rig.store.load()?.tokens.scope == nil)
+    }
+
+    @Test @MainActor func aRefusedSignInKeepsThePreviousSession() async throws {
+        let previous = freshCredentials()
+        let rig = Rig(credentials: previous)
+        rig.http.enqueue(tokenEndpoint, body: try tokenBody(idToken: try makeIDToken(["sub": "other"]), scope: "openid"))
+        let authenticator = GoogleFakeAuthenticator { url in redirect("code=c&state=\(queryValue(url, "state") ?? "")") }
+        await #expect(throws: Self.youTubeAccessRefused) {
+            _ = try await rig.service.signIn(clientID: testClientID, authenticator: authenticator)
+        }
+        #expect(try rig.store.load() == previous)
+        #expect(await rig.service.currentAccount() == previous.account)
+    }
+
+    // MARK: Token lifetime
+
+    private func bodyWithExpiry(_ expiresIn: JSON?, idToken: String) throws -> Data {
+        var object: [String: JSON] = ["access_token": "at", "refresh_token": "rt", "token_type": "Bearer", "scope": .string(allScopes), "id_token": .string(idToken)]
+        object["expires_in"] = expiresIn
+        return try JSON.object(object).data()
+    }
+
+    @Test(arguments: [
+        JSON.string("inf"), "-inf", "nan", "Infinity", "-Infinity", "0", "-5", "99999999999", "1e30", "soon", "",
+        .number(0), .number(-1), .number(1e30), .number(2_592_001), .bool(true), .null, .array([]), .object([:]),
+    ])
+    @MainActor func anExpiryThatCannotBeRightTakesTheDefaultHour(expiresIn: JSON) async throws {
+        let rig = Rig()
+        rig.http.enqueue(tokenEndpoint, body: try bodyWithExpiry(expiresIn, idToken: try makeIDToken(["sub": "1"])))
+        let authenticator = GoogleFakeAuthenticator { url in redirect("code=c&state=\(queryValue(url, "state") ?? "")") }
+
+        _ = try await rig.service.signIn(clientID: testClientID, authenticator: authenticator)
+
+        let stored = try #require(try rig.store.load())
+        #expect(stored.tokens.expiresAt == t0.addingTimeInterval(3600))
+        // An infinite expiry made the Keychain store fail to encode the credentials.
+        _ = try JSONEncoder().encode(stored)
+        _ = try JSONDecoder().decode(StoredCredentials.self, from: JSONEncoder().encode(stored))
+    }
+
+    @Test(arguments: [(JSON.number(3599), 3599.0), (.string("7200"), 7200), (.number(1), 1), (.number(2_592_000), 2_592_000), (.number(3599.5), 3599.5)])
+    @MainActor func aPlausibleExpiryIsUsed(expiresIn: JSON, seconds: Double) async throws {
+        let rig = Rig()
+        rig.http.enqueue(tokenEndpoint, body: try bodyWithExpiry(expiresIn, idToken: try makeIDToken(["sub": "1"])))
+        let authenticator = GoogleFakeAuthenticator { url in redirect("code=c&state=\(queryValue(url, "state") ?? "")") }
+        _ = try await rig.service.signIn(clientID: testClientID, authenticator: authenticator)
+        #expect(try rig.store.load()?.tokens.expiresAt == t0.addingTimeInterval(seconds))
+    }
+
+    @Test @MainActor func aMissingExpiresInOnSignInDefaultsToAnHourToo() async throws {
+        let rig = Rig()
+        rig.http.enqueue(tokenEndpoint, body: try bodyWithExpiry(nil, idToken: try makeIDToken(["sub": "1"])))
+        let authenticator = GoogleFakeAuthenticator { url in redirect("code=c&state=\(queryValue(url, "state") ?? "")") }
+        _ = try await rig.service.signIn(clientID: testClientID, authenticator: authenticator)
+        #expect(try rig.store.load()?.tokens.expiresAt == t0.addingTimeInterval(3600))
+    }
+
     @Test @MainActor func aTokenResponseWithoutAnAccessTokenFails() async throws {
         let rig = Rig()
         rig.http.enqueue(tokenEndpoint, body: Data(#"{"token_type":"Bearer"}"#.utf8))
@@ -553,6 +671,20 @@ private struct Rig {
         rig.http.enqueue(tokenEndpoint, body: Data(#"{"access_token":"new-at"}"#.utf8))
         _ = try await rig.service.accessToken()
         #expect(try rig.store.load()?.tokens.expiresAt == t0.addingTimeInterval(3600))
+    }
+
+    @Test(arguments: [JSON.string("inf"), "nan", "-1", .number(0), .number(1e30), .null])
+    func aRefreshWithAnExpiryThatCannotBeRightTakesTheDefaultHour(expiresIn: JSON) async throws {
+        let rig = Rig(credentials: expiredCredentials())
+        var object: [String: JSON] = ["access_token": "new-at", "token_type": "Bearer"]
+        object["expires_in"] = expiresIn
+        rig.http.enqueue(tokenEndpoint, body: try JSON.object(object).data())
+
+        #expect(try await rig.service.accessToken() == "new-at")
+
+        let stored = try #require(try rig.store.load())
+        #expect(stored.tokens.expiresAt == t0.addingTimeInterval(3600))
+        _ = try JSONEncoder().encode(stored)
     }
 
     @Test func concurrentAccessTokenRefreshesOnce() async throws {

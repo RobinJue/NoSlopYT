@@ -172,6 +172,30 @@ import Testing
         #expect(p.comments.map(\.replyCount) == cases.map(\.1))
     }
 
+    @Test func countsInOtherLanguagesKeepTheirTextAndNeverBecomeAWrongNumber() throws {
+        // (likes and replies as YouTube sent them, the reply count the app gets). The like count is only text. A reply
+        // count that cannot be read is 0, which the comments sheet shows as a plain "Replies".
+        let cases: [(likes: String, replies: String, replyCount: Int)] = [
+            ("1,2 Tsd.", "1,2 Tsd.", 1_200),
+            ("1.2K", "1.2K", 1_200),
+            ("12万", "12万", 0),
+            ("12 тыс.", "12 тыс.", 0),
+            ("12 tn", "12 tn", 0),
+            ("1,2 M", "1,2 M", 0),
+        ]
+        var items: [JSON] = []
+        var mutations: [JSON] = []
+        for (index, example) in cases.enumerated() {
+            items.append(Self.thread(id: "c\(index)"))
+            mutations += Self.mutations(id: "c\(index)", likes: .string(example.likes), replies: .string(example.replies))
+        }
+
+        let p = CommentsParser.parse(Self.page(items: items, mutations: mutations))
+
+        #expect(p.comments.map(\.likeCountText) == cases.map(\.likes))
+        #expect(p.comments.map(\.replyCount) == cases.map(\.replyCount))
+    }
+
     @Test func repliesTokenComesFromTheThread() throws {
         let p = CommentsParser.parse(Self.page(
             items: [Self.thread(id: "A", repliesToken: "tokA"), Self.thread(id: "B")],

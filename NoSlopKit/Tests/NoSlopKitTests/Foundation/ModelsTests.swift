@@ -342,6 +342,52 @@ import Testing
         #expect(s == expected)
     }
 
+    @Test func oneWronglyTypedSettingDoesNotResetTheOthers() throws {
+        // "hideShorts" is a string where a Bool belongs; every other key is fine and must be kept.
+        let s = try JSONDecoder().decode(AppSettings.self, from: Data(#"{"hideShorts":"yes","autoplayNext":true,"blockedKeywords":["a","b"],"wifiQuality":"p1080"}"#.utf8))
+        var expected = AppSettings()
+        expected.autoplayNext = true
+        expected.blockedKeywords = ["a", "b"]
+        expected.wifiQuality = .p1080
+        #expect(s.hideShorts, "the wrong value falls back to this key's default (on)")
+        #expect(s == expected)
+    }
+
+    @Test func everySettingFallsBackOnItsOwnWhenItsValueIsUnreadable() throws {
+        // A missing key, a null, a wrong type and an unknown enum value, each in a different place.
+        let json = #"""
+        {"hideShorts":"yes","hideMembersOnly":false,"hideLiveAndUpcoming":null,"autoplayNext":true,
+         "wifiQuality":"p1080","cellularQuality":"bogus","defaultPlaybackRate":"fast",
+         "blockedKeywords":["minecraft",5,"reaction"],
+         "blockedChannels":[{"id":"UC1","name":"One"},{"id":7},"x",{"id":"UC2","name":"Two"}],
+         "segmentBehaviors":{"sponsor":"ignore","intro":5,"outro":"autoSkip","from_the_future":"autoSkip"},
+         "googleClientID":42,"contentLanguage":"de","contentRegion":["AT"],"preferredCaptionLanguage":false}
+        """#
+        let s = try JSONDecoder().decode(AppSettings.self, from: Data(json.utf8))
+
+        var expected = AppSettings()
+        expected.hideMembersOnly = false
+        expected.autoplayNext = true
+        expected.wifiQuality = .p1080
+        expected.blockedKeywords = ["minecraft", "reaction"]
+        expected.blockedChannels = [BlockedChannel(id: "UC1", name: "One"), BlockedChannel(id: "UC2", name: "Two")]
+        expected.segmentBehaviors[.sponsor] = .ignore
+        expected.segmentBehaviors[.outro] = .autoSkip
+        expected.contentLanguage = "de"
+        #expect(s == expected)
+        // Spelled out, because a mistake in `expected` must not hide a wrong default.
+        #expect(s.hideShorts && !s.hideLiveAndUpcoming && s.cellularQuality == .p720 && s.defaultPlaybackRate == 1.0)
+        #expect(s.googleClientID == "" && s.contentRegion == nil && s.preferredCaptionLanguage == nil)
+        #expect(s.segmentBehaviors[.intro] == .showInBar)
+    }
+
+    @Test(arguments: ["[]", "\"text\"", "42", "null"])
+    func settingsThatAreNotAnObjectAreStillRejected(text: String) {
+        #expect(throws: (any Error).self) {
+            _ = try JSONDecoder().decode(AppSettings.self, from: Data(text.utf8))
+        }
+    }
+
     @Test func settingsRoundTripAndWriteBehavioursAsAKeyedObject() throws {
         var s = AppSettings()
         s.hideShorts = false

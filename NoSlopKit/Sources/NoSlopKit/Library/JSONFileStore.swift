@@ -1,29 +1,40 @@
 import Foundation
+import Synchronization
 
-/// Atomic JSON persistence for the library files. A file that cannot be decoded is renamed to
+/// Atomic JSON persistence for the library files. A file whose content cannot be decoded is renamed to
 /// `<file>.corrupt` (replacing an older one) and the default is used; it is never deleted.
 ///
 /// - Dates are written as ISO 8601 strings (whole seconds). Reading is more forgiving: fractional seconds, UTC
 ///   offsets and Foundation's default numeric dates are accepted too.
 /// - A missing file is not an error (first launch): the default is returned and nothing is touched.
-/// - A file that exists but cannot be read or decoded is moved aside, so the next `save` can never overwrite it.
+/// - Only a *decoding* failure moves a file aside. A *read* failure (no permission, data protection before the first
+///   unlock, an I/O error) says nothing about the content, which may be perfectly good: the file stays where it is,
+///   the default is returned, and `save` refuses to write over that file for the rest of the process, until a load
+///   of it succeeds. Otherwise a launch while the device is locked would replace the user's library with a new,
+///   nearly empty file.
 struct JSONFileStore: Sendable {
     let directory: URL
+    private let read: @Sendable (URL) throws -> Data
 
     init(directory: URL) {
+        self.init(directory: directory, read: { try Data(contentsOf: $0) })
+    }
+
+    /// Tests inject the reader to make reading fail the way a device can.
+    init(directory: URL, read: @escaping @Sendable (URL) throws -> Data) {
         self.directory = directory
+        self.read = read
     }
 
     func fileURL(_ file: String) -> URL {
         directory.appendingPathComponent(file, isDirectory: false)
     }
 
-    /// The decoded content of `file`, or `defaultValue` when there is none or it is damaged.
+    /// The decoded content of `file`, or `defaultValue` when there is none, it cannot be read or it is damaged.
     func load<T: Decodable>(_ file: String, default defaultValue: T) -> T {
         let url = fileURL(file)
-        guard FileManager.default.fileExists(atPath: url.path) else { return defaultValue }
+        guard case .data(let data) = readFile(at: url) else { return defaultValue }
         do {
-            let data = try Data(contentsOf: url)
             return try Self.makeDecoder().decode(T.self, from: data)
         } catch {
             Self.moveAside(url)
@@ -40,36 +51,97 @@ struct JSONFileStore: Sendable {
     /// find no file and start with an empty list although the entries were readable.
     func loadList<Element: Codable>(_ file: String) -> [Element] {
         let url = fileURL(file)
-        guard FileManager.default.fileExists(atPath: url.path) else { return [] }
+        guard case .data(let data) = readFile(at: url) else { return [] }
+        let entries: [Lenient<Element>]
         do {
-            let data = try Data(contentsOf: url)
-            let entries = try Self.makeDecoder().decode([Lenient<Element>].self, from: data)
-            let readable = entries.compactMap(\.value)
-            if readable.count != entries.count {
-                Self.moveAside(url)
-                // Only over a file that really was moved away: the damaged original is never overwritten.
-                if !readable.isEmpty, !FileManager.default.fileExists(atPath: url.path) {
-                    save(readable, to: file)
-                }
-            }
-            return readable
+            entries = try Self.makeDecoder().decode([Lenient<Element>].self, from: data)
         } catch {
             Self.moveAside(url)
             return []
         }
+        let readable = entries.compactMap(\.value)
+        if readable.count != entries.count {
+            Self.moveAside(url)
+            // Only over a file that really was moved away: the damaged original is never overwritten.
+            if !readable.isEmpty, !FileManager.default.fileExists(atPath: url.path) {
+                save(readable, to: file)
+            }
+        }
+        return readable
     }
 
     /// Writes `value` to `file` atomically (the old content stays intact until the new file is complete),
     /// creating the directory when needed. Failures (disk full, an unencodable value) leave the old file alone;
-    /// the next save simply tries again.
+    /// the next save simply tries again. A file that exists but could not be read is not written to at all (see the
+    /// type's documentation).
     func save<T: Encodable>(_ value: T, to file: String) {
+        let url = fileURL(file)
+        guard !Self.isUnreadable(url) else { return }
         guard let data = try? Self.makeEncoder().encode(value) else { return }
         do {
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-            try data.write(to: fileURL(file), options: .atomic)
+            try data.write(to: url, options: .atomic)
         } catch {
             return
         }
+    }
+
+    // MARK: Reading
+
+    private enum ReadResult {
+        case data(Data)
+        /// There is no such file (first launch).
+        case missing
+        /// The file is there but the system would not give its content.
+        case unreadable
+    }
+
+    /// The files (by path) that exist but could not be read. It is process-wide on purpose: whoever created the store
+    /// that saw the failure, no store in this process may write over such a file until one of them has read it.
+    private static let unreadableFiles = Mutex<Set<String>>([])
+
+    private static func key(for url: URL) -> String {
+        url.standardizedFileURL.path
+    }
+
+    private static func isUnreadable(_ url: URL) -> Bool {
+        unreadableFiles.withLock { $0.contains(key(for: url)) }
+    }
+
+    /// Reads the file and keeps the list of unreadable files up to date: a successful read (or a file that is not
+    /// there) lifts the protection, a failed one sets it.
+    private func readFile(at url: URL) -> ReadResult {
+        let key = Self.key(for: url)
+        do {
+            let data = try read(url)
+            Self.unreadableFiles.withLock { _ = $0.remove(key) }
+            return .data(data)
+        } catch {
+            if Self.isMissing(error) {
+                Self.unreadableFiles.withLock { _ = $0.remove(key) }
+                return .missing
+            }
+            Self.unreadableFiles.withLock { _ = $0.insert(key) }
+            return .unreadable
+        }
+    }
+
+    /// Whether the error says "there is no such file" (possibly as the underlying error of another one).
+    private static func isMissing(_ error: any Error) -> Bool {
+        var current: NSError? = error as NSError
+        for _ in 0..<5 {
+            guard let nsError = current else { return false }
+            switch nsError.domain {
+            case NSCocoaErrorDomain where nsError.code == NSFileReadNoSuchFileError || nsError.code == NSFileNoSuchFileError:
+                return true
+            case NSPOSIXErrorDomain where nsError.code == Int(ENOENT):
+                return true
+            default:
+                break
+            }
+            current = nsError.userInfo[NSUnderlyingErrorKey] as? NSError
+        }
+        return false
     }
 
     // MARK: Damaged files
