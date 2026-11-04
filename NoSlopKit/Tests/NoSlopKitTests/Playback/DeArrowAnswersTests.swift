@@ -181,17 +181,23 @@ private func memory(
         #expect(answers.recall("c") == .answer("C"))
     }
 
-    @Test func manyFailuresDoNotGrowWithoutBound() {
+    @Test func manyFailuresDoNotGrowWithoutBoundAndTheOldestGoFirst() {
         let clock = ManualClock()
         var answers = memory(capacity: 5, retryDelay: 60, clock: clock)
-        for number in 0..<20 {
+        // 22 failures, one second apart, with a wait of 60 seconds: none of them runs out, so which ones are still waiting
+        // is decided by the room alone. 22 is not a multiple of the capacity on purpose: a memory that let go of more than
+        // it had to (down to the newest one or two) must not end up with the same five by luck.
+        for number in 0..<22 {
             answers.record(.failed, for: "v\(number)")
             clock.advance(by: 1)
+
+            // After every failure the newest five (fewer at the start) wait, and no other.
+            let waiting = (0...number).filter { answers.recall("v\($0)") == .waiting }
+            #expect(waiting == Array(max(0, number - 4)...number), "after \(number + 1) failures")
         }
 
-        // Only the latest few are still waiting, the rest were let go (which just means they are asked about again).
-        let waiting = (0..<20).filter { answers.recall("v\($0)") == .waiting }
-        #expect(waiting.count <= 5)
-        #expect(waiting.contains(19), "the newest failure is still waiting")
+        // The ones that were let go are simply asked about again.
+        #expect((0..<17).allSatisfy { answers.recall("v\($0)") == .unknown })
+        #expect((17..<22).allSatisfy { answers.recall("v\($0)") == .waiting })
     }
 }

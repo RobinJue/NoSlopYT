@@ -44,9 +44,12 @@ struct VideoTitleText: View {
         }
         betterTitle = nil
         let lookup = await env.deArrow.lookup(videoID: video.id)
-        guard !Task.isCancelled else { return }
-        // Remembers titles and "none"; a lookup that failed is not an answer and is not kept as one.
+        // The answer belongs to the video, not to this card: it is kept even when the card has left the screen by now (the
+        // request itself is not cancelled with it). Otherwise a feed scrolled through a slow connection would never learn
+        // that its lookups failed, and ask again for every card that comes back. Remembers titles and "none"; a lookup that
+        // failed is not an answer and only keeps the video from being asked again for a minute.
         DeArrowTitleCache.shared.record(lookup, for: video.id)
+        guard !Task.isCancelled else { return }
         if case .title(let title) = lookup {
             betterTitle = title
         }

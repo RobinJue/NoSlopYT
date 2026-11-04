@@ -1690,8 +1690,11 @@ final class PlayerController {
         titleTask = Task { [weak self] in
             guard let self else { return }
             let lookup = await self.deArrow.lookup(videoID: videoID)
-            guard !Task.isCancelled, self.currentVideo?.id == videoID else { return }
+            // The answer belongs to the video, not to this player: the lists keep it even when the player has moved on or
+            // this task was cancelled (the request itself was not), and a failure keeps the video from being asked again
+            // for a minute.
             DeArrowTitleCache.shared.record(lookup, for: videoID)
+            guard !Task.isCancelled, self.currentVideo?.id == videoID else { return }
             switch lookup {
             case .title(let title):
                 self.betterTitle = title

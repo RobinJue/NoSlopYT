@@ -61,6 +61,10 @@ import SwiftUI
 ///   (0.3 s by default), so that "Play all" on a list can be tapped while its next page is still on its way.
 /// - `-offlineDeArrow YES`: the mock DeArrow service fails every lookup like the real one does without a connection, so the
 ///   titles stay the original ones. The UI script switches it (`deArrowServer=on|off`).
+/// - `-deArrowDelay <seconds>`: the mock DeArrow service takes that long for a lookup (0.3 s by default), a lookup runs to
+///   its end when the card that asked has left the screen (like the real client's request), and every lookup is written to
+///   the log (category `deArrow`, lines that start with "[deArrow]", see `LoggingDeArrow`). With `-offlineDeArrow YES` it
+///   is how a slow connection looks: the lookup fails when its time is up, long after the card was scrolled away.
 /// - `-uiScript '<steps>'`: taps, pulls and the like at given moments (see `DebugUIScript`).
 enum DebugLaunchHooks {
     private static var isPrepared = false
@@ -129,6 +133,12 @@ enum DebugLaunchHooks {
     /// The connection of the mock DeArrow service: on, unless `-offlineDeArrow YES`. The UI script switches it
     /// (`deArrowServer=on|off`).
     static let deArrowConnection = MockConnection(isOnline: !UserDefaults.standard.bool(forKey: "offlineDeArrow"))
+
+    /// How long the mock DeArrow service takes: `-deArrowDelay`, else its usual 0.3 s.
+    static var mockDeArrowDelay: Duration {
+        let seconds = UserDefaults.standard.double(forKey: "deArrowDelay")
+        return seconds > 0 ? .milliseconds(Int(seconds * 1_000)) : .milliseconds(300)
+    }
 
     /// How long the mock feeds take: `-feedDelay`, else their usual 0.3 s.
     static var mockFeedDelay: Duration {

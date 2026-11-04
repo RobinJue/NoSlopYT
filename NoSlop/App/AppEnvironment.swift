@@ -185,7 +185,9 @@ final class AppEnvironment {
             MockHomeFeed(delay: DebugLaunchHooks.mockFeedDelay, connection: connection)
         )
         let auth: any GoogleAuthProviding = MockAuth(signedIn: DebugLaunchHooks.signedIn)
-        let deArrow: any DeArrowProviding = MockDeArrow(connection: DebugLaunchHooks.deArrowConnection)
+        let deArrow: any DeArrowProviding = LoggingDeArrow(
+            MockDeArrow(delay: DebugLaunchHooks.mockDeArrowDelay, connection: DebugLaunchHooks.deArrowConnection)
+        )
         let account: any YouTubeAccountService = MockAccountService(delay: DebugLaunchHooks.mockAccountDelay)
         DebugLaunchHooks.seedDownload(in: scratch.appendingPathComponent("Downloads", isDirectory: true))
         #else
