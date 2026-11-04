@@ -156,6 +156,10 @@ final class PlayerController {
     @ObservationIgnored private var planner: SegmentSkipPlanner?
     @ObservationIgnored private var plannerEnabled = true
     @ObservationIgnored private var plannerBehaviors: [SponsorCategory: SegmentBehavior] = [:]
+    /// The length of the video the planner was built for; nil when it was not known then.
+    @ObservationIgnored private var plannerLength: Double?
+    /// The video whose segments were asked for and not given up on: set when the lookup starts, cleared when every
+    /// attempt failed, so that the next chance (Retry, a reload, the connection coming back) asks again.
     @ObservationIgnored private var segmentsRequestedFor: String?
     @ObservationIgnored private var declinedSkips: Set<String> = []
     @ObservationIgnored private var lastSkip: (id: String, at: Date)?
@@ -318,6 +322,7 @@ final class PlayerController {
         lastSkip = nil
         rawSegments = []
         planner = nil
+        plannerLength = nil
         segmentsRequestedFor = nil
         cueTimeline = CueTimeline(cues: [])
         selectedCaption = nil
@@ -445,6 +450,7 @@ final class PlayerController {
         if duration <= 0, info.lengthSeconds > 0 {
             duration = Double(info.lengthSeconds)
         }
+        rebuildPlannerIfLengthChanged()
         guard var video = currentVideo, video.id == info.videoID else { return }
         var changed = false
         if video.isLive != info.isLive || video.isUpcoming {
@@ -557,6 +563,7 @@ final class PlayerController {
             guard !isItemReady else { return }
             isItemReady = true
             refreshDuration()
+            rebuildPlannerIfLengthChanged()
             #if DEBUG
             if DebugLaunchHooks.silentPlayback {
                 Task { [weak self] in
@@ -935,6 +942,7 @@ final class PlayerController {
         isRecovering = false
         rawSegments = []
         planner = nil
+        plannerLength = nil
         segmentsRequestedFor = nil
         cueTimeline = CueTimeline(cues: [])
         selectedCaption = nil
@@ -1060,6 +1068,7 @@ final class PlayerController {
             setCurrentTime(max(0, time.seconds))
         }
         refreshDuration()
+        rebuildPlannerIfLengthChanged()
         refreshBufferedTime()
         if let item = avPlayer.currentItem { logPresentationSizeChange(of: item) }
         refreshCaption()
@@ -1161,16 +1170,27 @@ final class PlayerController {
     }
 
     /// Fetches the segments once per video, when SponsorBlock is on.
+    ///
+    /// A lookup that fails is tried again a few times (`SegmentLookup`), all inside this one task. Only an answer keeps
+    /// the video marked as asked for, and "no segments" is an answer. When every try failed the mark is cleared, so the
+    /// next chance asks again: Retry or a reload (`load` comes by here), a change of the SponsorBlock settings, the
+    /// connection coming back (`networkChanged`).
     private func ensureSegments(for videoID: String) {
         guard settings.sponsorBlockEnabled, segmentsRequestedFor != videoID else { return }
         segmentsRequestedFor = videoID
         segmentsTask?.cancel()
         segmentsTask = Task { [weak self] in
             guard let self else { return }
-            let loaded = (try? await self.sponsorBlock.segments(videoID: videoID)) ?? []
+            let outcome = await SegmentLookup.fetch(videoID: videoID, from: self.sponsorBlock)
             guard !Task.isCancelled, self.currentVideo?.id == videoID else { return }
-            self.rawSegments = loaded
-            self.rebuildPlanner()
+            switch outcome {
+            case .loaded(let loaded):
+                self.rawSegments = loaded
+                self.rebuildPlanner()
+            case .failed:
+                Self.log.info("SponsorBlock lookup for \(videoID, privacy: .public) failed, will ask again later")
+                self.segmentsRequestedFor = nil
+            }
         }
     }
 
@@ -1178,15 +1198,42 @@ final class PlayerController {
         let current = settings
         plannerEnabled = current.sponsorBlockEnabled
         plannerBehaviors = current.segmentBehaviors
+        let length = knownLength
+        plannerLength = length
         guard current.sponsorBlockEnabled, !rawSegments.isEmpty else {
             planner = nil
             if !segments.isEmpty { segments = [] }
             return
         }
-        let built = SegmentSkipPlanner(segments: rawSegments, behaviors: current.segmentBehaviors)
+        let built = SegmentSkipPlanner(segments: rawSegments, behaviors: current.segmentBehaviors, videoLength: length)
         planner = built
         let visible = built.visibleSegments
         if visible != segments { segments = visible }
+    }
+
+    /// How long the video is, as far as the player is sure: what the item reports once it is ready (`duration`), before
+    /// that the length of the resolved stream. Not the length of the copy of the video the player was opened with: the
+    /// video may have been trimmed since that was made. Nil for a live stream and while nothing is known.
+    private var knownLength: Double? {
+        guard !isLive else { return nil }
+        if isItemReady, duration > 0 { return duration }
+        if let length = streamInfo?.lengthSeconds, length > 0 { return Double(length) }
+        return nil
+    }
+
+    /// The planner drops segments of another cut of the video once it knows the length, and the length comes after the
+    /// segments may have (with the stream, then with the item). Builds the planner again when the length first becomes
+    /// known or moves.
+    private func rebuildPlannerIfLengthChanged() {
+        guard !rawSegments.isEmpty else { return }
+        switch (plannerLength, knownLength) {
+        case (nil, nil):
+            return
+        case let (old?, new?) where abs(old - new) <= 0.25:
+            return
+        default:
+            rebuildPlanner()
+        }
     }
 
     /// The viewer changed the SponsorBlock settings while a video plays.
@@ -1395,6 +1442,11 @@ final class PlayerController {
     private func networkChanged() {
         if !qualityIsManual {
             applyDefaultQuality()
+        }
+        // A SponsorBlock lookup that failed for good asks again now that there may be a connection. Nothing happens
+        // unless one did.
+        if network.isOnline, let id = currentVideo?.id {
+            ensureSegments(for: id)
         }
     }
 
