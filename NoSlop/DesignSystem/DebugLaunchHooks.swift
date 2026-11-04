@@ -1,4 +1,5 @@
 #if DEBUG
+import AVFoundation
 import NoSlopKit
 import SwiftUI
 
@@ -40,6 +41,17 @@ import SwiftUI
 /// - `-playlistPlay all|<n>`: once the first page of a playlist has loaded, the playlist screen plays like a tap on "Play
 ///   all" (`all`) or on its n-th row (1-based), once per launch. The mock pages the 14-video series as 10 plus 4, so
 ///   this plays with the second page not loaded yet.
+/// - `-mockOffline YES`: the mock run starts without a connection (`MockConnection`): searches, watch pages and the
+///   feeds fail like the real services do offline. The UI script turns the connection on and off (`offline=on|off`).
+/// - `-feedDelay <seconds>`: the mock subscription feed and the mock home feed take that long (0.3 s by default).
+/// - `-staleFeedCache YES`: the mock subscription feed starts with the feed of an earlier session on disk: the sample
+///   uploads without the newest one. It answers with all of them.
+/// - `-feedMaxAge <seconds>`: Home and Subscriptions call a feed that old stale (15 and 10 minutes by default).
+/// - `-signedIn YES`: the mock Google account starts signed in.
+/// - `-seedHistory '<video id>,...'`: a minute of each of these sample videos in the history at launch, the first one
+///   the most recent.
+/// - `-seedDownload <video id>`: the mock run starts with a finished (audio only, silent) download of that sample video.
+/// - `-uiScript '<steps>'`: taps, pulls and the like at given moments (see `DebugUIScript`).
 enum DebugLaunchHooks {
     private static var isPrepared = false
     private static var isSearchTextTaken = false
@@ -91,6 +103,36 @@ enum DebugLaunchHooks {
         return seconds > 0 ? .milliseconds(Int(seconds * 1_000)) : .milliseconds(300)
     }
 
+    /// The connection of the mock run: on, unless `-mockOffline YES`. The UI script switches it.
+    static let mockConnection = MockConnection(isOnline: !UserDefaults.standard.bool(forKey: "mockOffline"))
+
+    /// How long the mock feeds take: `-feedDelay`, else their usual 0.3 s.
+    static var mockFeedDelay: Duration {
+        let seconds = UserDefaults.standard.double(forKey: "feedDelay")
+        return seconds > 0 ? .milliseconds(Int(seconds * 1_000)) : .milliseconds(300)
+    }
+
+    /// The feed an earlier session left on disk, for `-staleFeedCache YES`: the uploads of the sample channels, newest
+    /// first, without the newest one.
+    static var staleFeedCache: [VideoSummary] {
+        guard UserDefaults.standard.bool(forKey: "staleFeedCache") else { return [] }
+        let uploads = SampleData.videos
+            .filter { $0.channel != nil }
+            .sorted { ($0.publishedAt ?? .distantPast) > ($1.publishedAt ?? .distantPast) }
+        return Array(uploads.dropFirst())
+    }
+
+    /// `-signedIn YES`: the mock account is signed in from the start.
+    static var signedIn: Bool {
+        UserDefaults.standard.bool(forKey: "signedIn")
+    }
+
+    /// `-feedMaxAge`: how old a loaded feed may get before Home and Subscriptions load it again; nil without the argument.
+    static var feedMaxAge: TimeInterval? {
+        let seconds = UserDefaults.standard.double(forKey: "feedMaxAge")
+        return seconds > 0 ? seconds : nil
+    }
+
     /// How many SponsorBlock lookups of a mock run fail first: `-flakySponsorBlock`, else none.
     static var flakySponsorBlockFailures: Int {
         max(0, UserDefaults.standard.integer(forKey: "flakySponsorBlock"))
@@ -111,6 +153,14 @@ enum DebugLaunchHooks {
             }
         }
 
+        if let ids = defaults.string(forKey: "seedHistory") {
+            // The first is the most recent, so record them from the last to the first.
+            for id in ids.split(separator: ",").reversed() {
+                guard let video = SampleData.video(id: String(id)) else { continue }
+                env.library.recordProgress(video: video, seconds: 60, duration: video.durationSeconds.map(Double.init))
+            }
+        }
+
         let seededSearches = defaults.integer(forKey: "seedSearches")
         if seededSearches > 0 {
             // The newest is first, so record them from the last to the first.
@@ -126,6 +176,56 @@ enum DebugLaunchHooks {
                 try? await Task.sleep(for: .seconds(delay > 0 ? delay : 6))
                 ChannelBlocking.block(ChannelRef(id: id, name: id), using: env)
             }
+        }
+    }
+
+    /// Pull to refresh on the biggest scroll view on screen that has a refresh control (what `.refreshable` puts there):
+    /// the control starts spinning and sends the action the pull would. False when there is none.
+    @discardableResult
+    static func pullToRefresh() -> Bool {
+        let windows = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.flatMap(\.windows)
+        var best: UIScrollView?
+        func visit(_ view: UIView) {
+            if view.isHidden || view.alpha < 0.01 { return }
+            if let scrollView = view as? UIScrollView, scrollView.refreshControl != nil,
+               scrollView.bounds.width * scrollView.bounds.height > (best.map { $0.bounds.width * $0.bounds.height } ?? 0) {
+                best = scrollView
+            }
+            view.subviews.forEach(visit)
+        }
+        windows.forEach(visit)
+        guard let control = best?.refreshControl else { return false }
+        control.beginRefreshing()
+        control.sendActions(for: .valueChanged)
+        return true
+    }
+
+    /// `-seedDownload <video id>`: writes a finished, silent, audio-only download of that sample video into `root`
+    /// (the folder the download manager is about to read), the way a real download would have left it.
+    static func seedDownload(in root: URL) {
+        guard let id = UserDefaults.standard.string(forKey: "seedDownload"), let video = SampleData.video(id: id) else { return }
+        let fileName = "Seeded download.m4a"
+        do {
+            try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+            let settings: [String: Any] = [
+                AVFormatIDKey: kAudioFormatMPEG4AAC, AVSampleRateKey: 44_100, AVNumberOfChannelsKey: 1,
+            ]
+            // The file is finished when the writer goes away, at the end of this scope.
+            do {
+                let file = try AVAudioFile(forWriting: root.appendingPathComponent(fileName), settings: settings)
+                if let format = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 44_100, channels: 1, interleaved: false),
+                   let silence = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 44_100 * 20) {
+                    silence.frameLength = silence.frameCapacity
+                    try file.write(from: silence)
+                }
+            }
+            let item = DownloadItem(
+                id: "\(video.id)-audio", video: video, quality: .audioOnly, state: .completed,
+                progress: 1, bytesDownloaded: 1, bytesTotal: 1, relativeFilePath: fileName
+            )
+            try JSONEncoder().encode([item]).write(to: root.appendingPathComponent("downloads.json"), options: .atomic)
+        } catch {
+            NSLog("[seedDownload] failed: \(error)")
         }
     }
 

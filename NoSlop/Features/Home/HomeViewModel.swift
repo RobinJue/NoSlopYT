@@ -48,7 +48,11 @@ final class HomeViewModel {
     }
 
     /// A feed older than this is rebuilt the next time Home appears, even when nothing else changed.
+    #if DEBUG
+    private static var maxAge: TimeInterval { DebugLaunchHooks.feedMaxAge ?? 15 * 60 }
+    #else
     private static let maxAge: TimeInterval = 15 * 60
+    #endif
 
     @ObservationIgnored private var loadedSignature: Signature?
     @ObservationIgnored private var loadedAt: Date?
@@ -106,6 +110,9 @@ final class HomeViewModel {
         let thisGeneration = generation
         let signature = Signature(env)
         phase = .loading
+        #if DEBUG
+        FeedLog.info("home run force=\(forceRefresh) hasContent=\(hasContent)")
+        #endif
 
         let history = env.library.history
         let subscriptions = env.library.subscriptions
@@ -133,5 +140,8 @@ final class HomeViewModel {
         loadedSignature = signature
         loadedAt = Date()
         phase = .loaded
+        #if DEBUG
+        FeedLog.info("home published continue=\(continueWatching.count) forYou=\(forYou.count) first \(forYou.first?.id ?? "-")")
+        #endif
     }
 }

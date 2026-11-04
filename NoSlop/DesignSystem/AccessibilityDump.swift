@@ -67,6 +67,31 @@ enum AccessibilityDump {
         return false
     }
 
+    /// A tap on the element labelled `label`, the way VoiceOver's double tap makes one (`accessibilityActivate`); a plain
+    /// control that does not answer to that gets its touch-up action. True when an element was found and did something.
+    static func activate(label: String) -> Bool {
+        var found: NSObject?
+        let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+        for window in scenes.flatMap(\.windows) where !window.isHidden && found == nil {
+            find(label: label, in: window, found: &found)
+        }
+        guard let element = found else {
+            log.info("[ax] activate: nothing is labelled \"\(label, privacy: .public)\"")
+            return false
+        }
+        if element.accessibilityActivate() {
+            log.info("[ax] activate \"\(label, privacy: .public)\": \(String(describing: type(of: element)), privacy: .public) answered")
+            return true
+        }
+        if let control = element as? UIControl {
+            control.sendActions(for: .touchUpInside)
+            log.info("[ax] activate \"\(label, privacy: .public)\": touch up inside on \(String(describing: type(of: element)), privacy: .public)")
+            return true
+        }
+        log.info("[ax] activate \"\(label, privacy: .public)\": \(String(describing: type(of: element)), privacy: .public) did not answer")
+        return false
+    }
+
     /// The container of an accessibility element (SwiftUI's nodes keep it where UIKit's elements do), or the superview.
     private static func container(of object: NSObject) -> NSObject? {
         let selector = NSSelectorFromString("accessibilityContainer")

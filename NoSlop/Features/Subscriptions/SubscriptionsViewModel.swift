@@ -37,7 +37,11 @@ final class SubscriptionsViewModel {
 
     /// A feed older than this is refreshed (not forced: the feed service decides what is still fresh) the next time
     /// the screen appears.
+    #if DEBUG
+    private static var maxAge: TimeInterval { DebugLaunchHooks.feedMaxAge ?? 10 * 60 }
+    #else
     private static let maxAge: TimeInterval = 10 * 60
+    #endif
 
     // MARK: Loading
 
@@ -86,6 +90,9 @@ final class SubscriptionsViewModel {
         let channels = env.library.subscriptions
         let channelIDs = channels.map(\.id)
         loadedChannelIDs = channelIDs
+        #if DEBUG
+        FeedLog.info("subscriptions run force=\(forceRefresh) channels=\(channelIDs.count)")
+        #endif
 
         guard !channels.isEmpty else {
             unfiltered = []
@@ -116,6 +123,9 @@ final class SubscriptionsViewModel {
             refreshFailure = nil
             loadedAt = Date()
             phase = .loaded
+            #if DEBUG
+            FeedLog.info("subscriptions published videos=\(videos.count) channelOrder=\(channelOrder.count)")
+            #endif
         } catch {
             if FeedError.isCancellation(error) {
                 if case .loading = phase { phase = .idle }

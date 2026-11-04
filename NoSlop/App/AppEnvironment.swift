@@ -161,13 +161,25 @@ final class AppEnvironment {
         let defaults = UserDefaults(suiteName: "com.robinjungerich.noslopyt.preview.\(UUID().uuidString)") ?? .standard
 
         #if DEBUG
-        let youTube = MockYouTubeService(delay: DebugLaunchHooks.mockYouTubeDelay)
+        let connection = DebugLaunchHooks.mockConnection
+        let youTube = MockYouTubeService(delay: DebugLaunchHooks.mockYouTubeDelay, connection: connection)
         let streams = MockStreamResolver(delay: DebugLaunchHooks.mockStreamDelay)
         let sponsorBlock = MockSponsorBlock(failingFirst: DebugLaunchHooks.flakySponsorBlockFailures)
+        let subscriptionFeed: any SubscriptionFeedProviding = LoggingSubscriptionFeed(
+            MockSubscriptionFeed(delay: DebugLaunchHooks.mockFeedDelay, connection: connection, cached: DebugLaunchHooks.staleFeedCache)
+        )
+        let homeFeed: any HomeFeedProviding = LoggingHomeFeed(
+            MockHomeFeed(delay: DebugLaunchHooks.mockFeedDelay, connection: connection)
+        )
+        let auth: any GoogleAuthProviding = MockAuth(signedIn: DebugLaunchHooks.signedIn)
+        DebugLaunchHooks.seedDownload(in: scratch.appendingPathComponent("Downloads", isDirectory: true))
         #else
         let youTube = MockYouTubeService()
         let streams = MockStreamResolver()
         let sponsorBlock = MockSponsorBlock()
+        let subscriptionFeed: any SubscriptionFeedProviding = MockSubscriptionFeed()
+        let homeFeed: any HomeFeedProviding = MockHomeFeed()
+        let auth: any GoogleAuthProviding = MockAuth()
         #endif
         let settingsStore = SettingsStore(defaults: defaults)
         let library = LibraryStore(directory: scratch.appendingPathComponent("Library", isDirectory: true))
@@ -181,11 +193,11 @@ final class AppEnvironment {
             youTube: youTube,
             streams: streams,
             captions: MockCaptions(),
-            subscriptionFeed: MockSubscriptionFeed(),
-            homeFeed: MockHomeFeed(),
+            subscriptionFeed: subscriptionFeed,
+            homeFeed: homeFeed,
             sponsorBlock: sponsorBlock,
             deArrow: MockDeArrow(),
-            auth: MockAuth(),
+            auth: auth,
             account: MockAccountService(),
             library: library,
             settingsStore: settingsStore,
