@@ -345,15 +345,29 @@ private struct WatchDetailsContent: View {
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 48)
         case .failed(let error):
-            ErrorStateView(error: error, openURL: video.watchURL) {
-                await model.reload(using: env)
+            if isOfflineDownloadPage(failedWith: error) {
+                OfflinePageNote {
+                    await model.reload(using: env)
+                }
+            } else {
+                ErrorStateView(error: error, openURL: video.watchURL) {
+                    await model.reload(using: env)
+                }
+                .padding(.top, 24)
             }
-            .padding(.top, 24)
         case .loaded:
             if let details = model.details {
                 loadedContent(details)
             }
         }
+    }
+
+    /// The page could not be loaded for lack of a connection, but this video plays from a download on the device: the
+    /// player works, and only what comes from YouTube is missing. A genuine failure, or a download that fell back to
+    /// streaming (`isPlayingOffline` is false then), keeps the full error card.
+    private func isOfflineDownloadPage(failedWith error: Error) -> Bool {
+        guard let known = error as? NoSlopError, case .network = known else { return false }
+        return env.player.isPlayingOffline && env.player.currentVideo?.id == video.id
     }
 
     @ViewBuilder
@@ -454,6 +468,31 @@ private struct WatchDetailsContent: View {
                     .padding(.vertical, 16)
             }
         }
+    }
+}
+
+/// What the page says under a video that plays from a download when YouTube cannot be reached: a quiet note and Retry in
+/// the footnote size of the list footers, not the error card of a screen that failed. The video itself is fine.
+private struct OfflinePageNote: View {
+    let retry: @MainActor () async -> Void
+
+    var body: some View {
+        VStack(spacing: 8) {
+            Label("Can't reach YouTube", systemImage: "wifi.slash")
+                .font(.footnote.weight(.semibold))
+            Text("The description, comments and related videos need a connection.")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+            Button("Retry") {
+                Task { await retry() }
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+        }
+        .padding(.horizontal, Theme.padding)
+        .padding(.top, 28)
+        .frame(maxWidth: .infinity)
     }
 }
 
