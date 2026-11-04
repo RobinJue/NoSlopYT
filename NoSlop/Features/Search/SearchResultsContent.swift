@@ -60,6 +60,15 @@ struct SearchResultsContent: View {
 
     private var results: some View {
         LazyVStack(spacing: 0) {
+            // A pull to refresh that failed: the results below are the ones from before.
+            if let failure = model.refreshFailure {
+                RefreshFailureBanner(error: failure, fallback: "Showing the last results.") {
+                    await model.refresh(using: env)
+                }
+                .padding(.horizontal, Theme.padding)
+                .padding(.bottom, Theme.padding)
+            }
+
             FeedGrid {
                 ForEach(model.list.items) { item in
                     SearchItemRow(item: item)
