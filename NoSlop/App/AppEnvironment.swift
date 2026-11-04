@@ -391,8 +391,12 @@ final class AppEnvironment {
     ///
     /// A link that cannot be opened (not a YouTube link, incomplete, or YouTube cannot be reached to resolve it)
     /// opens nothing and sets `linkError`, which `RootView` shows in an alert.
+    ///
+    /// A link that has to wait for YouTube's answer (`openWebLink`) is dropped when the answer comes after the viewer
+    /// has moved on: another link was opened, or the viewer switched tab, pushed or popped a screen or opened a video.
     func handleOpenURL(_ url: URL) async {
         linkError = nil
+        linksHandled += 1
         switch url.scheme?.lowercased() {
         case AppLink.scheme:
             if let link = AppLink(url: url) {
@@ -415,14 +419,28 @@ final class AppEnvironment {
     private static let unopenableLinkMessage =
         "No Slop opens links to YouTube videos, channels and playlists. This one is something else, or it is incomplete."
 
+    /// How many links `handleOpenURL` has been given. A link that waits for YouTube compares it afterwards, to see whether
+    /// the viewer opened another link while it waited.
+    @ObservationIgnored private var linksHandled = 0
+
     private func openWebLink(_ url: URL) async {
         if let resolved = YouTubeURL.resolveLocally(url) {
             openResolved(resolved)
             return
         }
-        // A `/@handle` or a custom channel address: only YouTube can say which channel that is.
+        // A `/@handle` or a custom channel address: only YouTube can say which channel that is. The answer can take a
+        // while and nothing on screen shows that a link is being opened, so the viewer goes on meanwhile.
+        let link = linksHandled
+        let placeOfViewer = ViewerPlace(self)
         do {
-            if let resolved = try await youTube.resolve(url: url) {
+            let resolved = try await youTube.resolve(url: url)
+            // Another link was opened meanwhile: this answer is to a link nobody waits for any more.
+            guard link == linksHandled else { return }
+            if let resolved {
+                // The viewer has gone elsewhere since (another tab, a screen pushed or popped, a video opened): a channel
+                // page that appears now would pull them away from what they chose. Video links open at once for the same
+                // reason (see `openResolved`).
+                guard !ViewerPlace(self).hasMoved(since: placeOfViewer) else { return }
                 openResolved(resolved)
             } else {
                 linkError = Self.unopenableLinkMessage
@@ -432,7 +450,36 @@ final class AppEnvironment {
         } catch NoSlopError.cancelled {
             // Same, as reported by the kit.
         } catch {
+            // A late failure of a link that was replaced by another one is not news; it would also replace that one's
+            // own message.
+            guard link == linksHandled else { return }
             linkError = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+        }
+    }
+
+    /// Where the viewer is, as far as a link that waits for YouTube needs to know.
+    private struct ViewerPlace {
+        private let tab: AppTab
+        private let paths: [[Route]]
+        private let videoID: String?
+        private let isPlayerExpanded: Bool
+
+        init(_ env: AppEnvironment) {
+            let router = env.router
+            tab = router.selectedTab
+            paths = [router.homePath, router.subscriptionsPath, router.libraryPath, router.searchPath]
+            videoID = env.player.currentVideo?.id
+            isPlayerExpanded = env.player.presentation == .expanded
+        }
+
+        /// The viewer is somewhere else than at `earlier`: on another tab, with a screen pushed or popped (on any tab),
+        /// with another video loaded, or in the player after not being there. A viewer who minimizes the player to look at
+        /// the tabs is still waiting for the link, so that is not leaving.
+        func hasMoved(since earlier: ViewerPlace) -> Bool {
+            tab != earlier.tab
+                || paths != earlier.paths
+                || videoID != earlier.videoID
+                || (isPlayerExpanded && !earlier.isPlayerExpanded)
         }
     }
 

@@ -3,6 +3,8 @@ import SwiftUI
 
 /// "Save to playlist": the playlists on this device (tap to add the video or take it out again), a way to create a
 /// new one, and, when signed in, the playlists of the YouTube account (tap to add the video to that playlist).
+///
+/// A playlist gets the video as the player knows it, never a bare one: see `savable`. Taking a video out needs no title.
 struct AddToPlaylistSheet: View {
     let video: VideoSummary
 
@@ -26,9 +28,23 @@ struct AddToPlaylistSheet: View {
     @State private var newTitle = ""
     @State private var failureMessage: String?
 
+    /// The video as it is saved: the one the sheet was opened with, completed by the player's copy of the same video. A
+    /// video opened from a link starts as a bare id, and the player fills in its title as the stream and the page
+    /// answer; the sheet keeps the copy it was handed when it opened. nil while no title is known: a playlist row
+    /// saved without one stays blank for good, so nothing is saved then.
+    private var savable: VideoSummary? {
+        video.savableCopy(completedBy: env.player.currentVideo)
+    }
+
     var body: some View {
         NavigationStack {
             List {
+                if savable == nil {
+                    Section {
+                        LoadingVideoDetailsNote()
+                    }
+                }
+
                 Section {
                     Button {
                         newTitle = ""
@@ -36,6 +52,7 @@ struct AddToPlaylistSheet: View {
                     } label: {
                         Label("New playlist", systemImage: "plus")
                     }
+                    .disabled(savable == nil)
                 }
 
                 if !env.library.playlists.isEmpty {
@@ -61,7 +78,9 @@ struct AddToPlaylistSheet: View {
                 TextField("Title", text: $newTitle)
                 Button("Create") {
                     let playlist = env.library.createPlaylist(title: newTitle)
-                    env.library.add(video, toPlaylist: playlist.id)
+                    if let savable {
+                        env.library.add(savable, toPlaylist: playlist.id)
+                    }
                 }
                 Button("Cancel", role: .cancel) {}
             }
@@ -88,8 +107,8 @@ struct AddToPlaylistSheet: View {
         return Button {
             if contains {
                 env.library.remove(videoID: video.id, fromPlaylist: playlist.id)
-            } else {
-                env.library.add(video, toPlaylist: playlist.id)
+            } else if let savable {
+                env.library.add(savable, toPlaylist: playlist.id)
             }
         } label: {
             HStack {
@@ -108,6 +127,8 @@ struct AddToPlaylistSheet: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        // A video that is in the playlist can always be taken out again.
+        .disabled(!contains && savable == nil)
         .accessibilityLabel(playlist.title)
         .accessibilityValue(contains ? "Contains this video" : "Does not contain this video")
     }
@@ -179,7 +200,7 @@ struct AddToPlaylistSheet: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .disabled(isAdded || isAdding)
+        .disabled(isAdded || isAdding || savable == nil)
         .accessibilityLabel(playlist.title)
         .accessibilityValue(isAdded ? "Added" : "")
     }

@@ -66,6 +66,7 @@ private actor ScriptedRSS: RSSFeedFetching {
     private(set) var cancelled: [String] = []
     private var inFlight = 0
     private(set) var maxInFlight = 0
+    private var isHeld = false
 
     init(_ replies: [String: Reply], delay: Duration = .zero) {
         self.replies = replies
@@ -76,6 +77,16 @@ private actor ScriptedRSS: RSSFeedFetching {
         replies[channelID] = reply
     }
 
+    /// From now on a request waits, after it was counted, until `release()` (or until it is cancelled). It keeps a
+    /// refresh running for as long as a test needs another caller to arrive.
+    func hold() {
+        isHeld = true
+    }
+
+    func release() {
+        isHeld = false
+    }
+
     func latestVideos(channelID: String) async throws -> [VideoSummary] {
         requested.append(channelID)
         inFlight += 1
@@ -83,6 +94,7 @@ private actor ScriptedRSS: RSSFeedFetching {
         defer { inFlight -= 1 }
         do {
             if delay > .zero { try await Task.sleep(for: delay) }
+            while isHeld { try await Task.sleep(for: .milliseconds(2)) }
             if case .hang? = replies[channelID] { try await Task.sleep(for: .seconds(3_600)) }
         } catch {
             cancelled.append(channelID)
@@ -815,5 +827,329 @@ private func afterRequests(_ rss: ScriptedRSS, _ target: Counter) -> FetchDeadli
         #expect(feed.map(\.id) == ["v-UC_0"])
         #expect(feed.first?.durationSeconds == nil)
         #expect(await account.batches.isEmpty)
+    }
+}
+
+// MARK: - One refresh for everyone who asks at the same time
+//
+// Home and Subscriptions both bring the uploads up to date, and they do it at the same moment when the app starts on
+// one and the viewer goes to the other. A call that asks while a refresh of the same channels is running joins that
+// refresh instead of starting another one, so every channel is requested once. The tests keep a refresh running with
+// `ScriptedRSS.hold()` and read the service's counters to know that a call has found it, so none of them depends on
+// how fast the machine is.
+
+/// True as soon as `condition` holds, false when it still does not after five seconds. A call that never finds the
+/// refresh fails its test this way instead of hanging it.
+private func eventually(_ condition: @Sendable () async -> Bool) async -> Bool {
+    let limit = ContinuousClock.now + .seconds(5)
+    while ContinuousClock.now < limit {
+        if await condition() { return true }
+        try? await Task.sleep(for: .milliseconds(5))
+    }
+    return await condition()
+}
+
+@Suite final class SubscriptionFeedSharingTests {
+    private func channels(_ count: Int) -> [SubscribedChannel] {
+        (0..<count).map { makeChannel("UC_\($0)") }
+    }
+
+    private func video(of channel: SubscribedChannel, daysAgo: Double) -> VideoSummary {
+        makeVideo("v-\(channel.id)", channel: channel.id, daysAgo: daysAgo)
+    }
+
+    /// Every channel answers with one video of its own, the first channel's the newest.
+    private func answering(_ channels: [SubscribedChannel]) -> ScriptedRSS {
+        var replies: [String: ScriptedRSS.Reply] = [:]
+        for (index, channel) in channels.enumerated() {
+            replies[channel.id] = .videos([video(of: channel, daysAgo: Double(index))])
+        }
+        return ScriptedRSS(replies)
+    }
+
+    /// The first `answering` channels answer at once, every other one hangs.
+    private func scripted(_ channels: [SubscribedChannel], answering: Int) -> ScriptedRSS {
+        var replies: [String: ScriptedRSS.Reply] = [:]
+        for (index, channel) in channels.enumerated() {
+            replies[channel.id] = index < answering ? .videos([video(of: channel, daysAgo: Double(index))]) : .hang
+        }
+        return ScriptedRSS(replies)
+    }
+
+    /// The clock stands still, so what a refresh fetched stays fresh for as long as the test runs.
+    private func makeService(
+        _ rss: ScriptedRSS,
+        account: ScriptedAccount? = nil,
+        maxConcurrent: Int = 8,
+        deadline: FetchDeadline = .after(.seconds(3_600))
+    ) -> SubscriptionFeedService {
+        SubscriptionFeedService(
+            rss: rss, account: account, cacheURL: nil, maxConcurrent: maxConcurrent,
+            channelCacheTTL: 900, fetchDeadline: deadline, now: { t0 }
+        )
+    }
+
+    /// A call that is under way when this returns and ends when its refresh does.
+    private func call(
+        _ service: SubscriptionFeedService, _ channels: [SubscribedChannel], forced: Bool = false
+    ) -> Task<[VideoSummary], any Error> {
+        Task { try await service.feed(channels: channels, forceRefresh: forced) }
+    }
+
+    // MARK: Sharing
+
+    @Test func twoCallsAtTheSameTimeRequestEveryChannelOnce() async throws {
+        let channels = channels(6)
+        let rss = answering(channels)
+        let service = makeService(rss, maxConcurrent: 3)
+        await rss.hold()
+
+        let first = call(service, channels)
+        _ = await eventually { await rss.requested.count >= 1 }
+        let second = call(service, channels)
+        let joined = await eventually { await service.callsJoined == 1 }
+        await rss.release()
+
+        let firstFeed = try await first.value
+        let secondFeed = try await second.value
+        #expect(joined, "the second call started a refresh of its own instead of joining the one that was running")
+        #expect(firstFeed.count == 6)
+        #expect(secondFeed == firstFeed)
+        #expect(await rss.requested.sorted() == channels.map(\.id).sorted())
+        #expect(await service.refreshesStarted == 1)
+    }
+
+    @Test(arguments: [(false, false), (true, false), (false, true), (true, true)])
+    func aCallJoinsARefreshThatAsksForAllItsChannels(firstForced: Bool, secondForced: Bool) async throws {
+        // Nothing has been fetched yet, so the refresh that is running asks for every channel, whichever way it was
+        // asked for: it is as good as a forced one for a forced call.
+        let channels = channels(4)
+        let rss = answering(channels)
+        let service = makeService(rss, maxConcurrent: 2)
+        await rss.hold()
+
+        let first = call(service, channels, forced: firstForced)
+        _ = await eventually { await rss.requested.count >= 1 }
+        let second = call(service, channels, forced: secondForced)
+        let joined = await eventually { await service.callsJoined == 1 }
+        await rss.release()
+
+        let firstFeed = try await first.value
+        let secondFeed = try await second.value
+        #expect(joined)
+        #expect(secondFeed == firstFeed)
+        #expect(await rss.requested.sorted() == channels.map(\.id).sorted())
+        #expect(await service.refreshesStarted == 1)
+    }
+
+    @Test func aForcedCallIsNotServedByARefreshThatLeftOutFreshChannels() async throws {
+        let channels = channels(2)
+        let rss = answering(channels)
+        let service = makeService(rss)
+        // The first channel is fresh from now on.
+        _ = try await service.feed(channels: [channels[0]], forceRefresh: false)
+        #expect(await rss.requested == ["UC_0"])
+
+        await rss.hold()
+        let first = call(service, channels)  // asks for the second channel only
+        _ = await eventually { await rss.requested.count >= 2 }
+        let second = call(service, channels, forced: true)  // has to ask for both again
+        let started = await eventually { await service.refreshesStarted == 3 }
+        await rss.release()
+
+        let firstFeed = try await first.value
+        let secondFeed = try await second.value
+        #expect(started, "the forced call was served by a refresh that had not asked for the first channel")
+        #expect(await service.callsJoined == 0)
+        #expect(await rss.requested.sorted() == ["UC_0", "UC_0", "UC_1", "UC_1"])
+        #expect(firstFeed.count == 2)
+        #expect(secondFeed.count == 2)
+    }
+
+    @Test func aCallForFewerChannelsJoinsAndGetsOnlyItsOwnVideos() async throws {
+        let channels = channels(3)
+        let rss = answering(channels)
+        let service = makeService(rss)
+        await rss.hold()
+
+        let first = call(service, channels)
+        _ = await eventually { await rss.requested.count >= 1 }
+        let second = call(service, Array(channels.prefix(2)))
+        let joined = await eventually { await service.callsJoined == 1 }
+        await rss.release()
+
+        let firstFeed = try await first.value
+        let secondFeed = try await second.value
+        #expect(joined)
+        #expect(firstFeed.map(\.id) == ["v-UC_0", "v-UC_1", "v-UC_2"])
+        #expect(secondFeed.map(\.id) == ["v-UC_0", "v-UC_1"])
+        #expect(await rss.requested.sorted() == channels.map(\.id).sorted())
+    }
+
+    @Test func aCallForMoreChannelsStartsARefreshOfItsOwnAndGetsAllOfThem() async throws {
+        let channels = channels(3)
+        let rss = answering(channels)
+        let service = makeService(rss)
+        await rss.hold()
+
+        let first = call(service, Array(channels.prefix(2)))
+        _ = await eventually { await rss.requested.count >= 1 }
+        let second = call(service, channels)
+        let started = await eventually { await service.refreshesStarted == 2 }
+        await rss.release()
+
+        let firstFeed = try await first.value
+        let secondFeed = try await second.value
+        #expect(started, "a refresh that does not cover the channels cannot serve the call")
+        #expect(await service.callsJoined == 0)
+        #expect(firstFeed.map(\.id) == ["v-UC_0", "v-UC_1"])
+        #expect(secondFeed.map(\.id) == ["v-UC_0", "v-UC_1", "v-UC_2"])
+    }
+
+    @Test func aCallAfterTheRefreshHasEndedJoinsNothing() async throws {
+        let channels = channels(3)
+        let rss = answering(channels)
+        let service = makeService(rss)
+
+        let first = try await service.feed(channels: channels, forceRefresh: false)
+        let second = try await service.feed(channels: channels, forceRefresh: false)
+
+        #expect(second == first)
+        #expect(await service.callsJoined == 0)
+        #expect(await rss.requested.count == 3, "the channels are fresh, so the second call asks for none of them")
+    }
+
+    @Test func everyoneWhoSharedARefreshGetsItsError() async throws {
+        let channels = channels(3)
+        let rss = ScriptedRSS(Dictionary(uniqueKeysWithValues: channels.map { ($0.id, ScriptedRSS.Reply.failure(.network("offline"))) }))
+        let service = makeService(rss)
+        await rss.hold()
+
+        let first = call(service, channels)
+        _ = await eventually { await rss.requested.count >= 1 }
+        let second = call(service, channels)
+        let joined = await eventually { await service.callsJoined == 1 }
+        await rss.release()
+
+        let results = [await first.result, await second.result]
+        #expect(joined)
+        for result in results {
+            guard case .failure(let error) = result else {
+                Issue.record("expected the error of the channels, got \(result)")
+                continue
+            }
+            #expect(error as? NoSlopError == .network("offline"))
+        }
+        #expect(await rss.requested.sorted() == channels.map(\.id).sorted())
+    }
+
+    @Test func callsThatShareARefreshShareTheDurationLookup() async throws {
+        let channels = channels(2)
+        let rss = answering(channels)
+        let account = ScriptedAccount(durations: ["v-UC_0": 60, "v-UC_1": 120])
+        let service = makeService(rss, account: account)
+        await rss.hold()
+
+        let first = call(service, channels)
+        _ = await eventually { await rss.requested.count >= 1 }
+        let second = call(service, channels)
+        let joined = await eventually { await service.callsJoined == 1 }
+        await rss.release()
+
+        let firstFeed = try await first.value
+        let secondFeed = try await second.value
+        #expect(joined)
+        #expect(firstFeed.map(\.durationSeconds) == [60, 120])
+        #expect(secondFeed == firstFeed)
+        #expect(await account.batches.count == 1, "one lookup for both calls")
+    }
+
+    // MARK: Cancelling
+
+    @Test func aCallThatIsCancelledLeavesTheRefreshToTheOthers() async throws {
+        let channels = channels(4)
+        let rss = answering(channels)
+        let service = makeService(rss, maxConcurrent: 2)
+        await rss.hold()
+
+        let first = call(service, channels)
+        _ = await eventually { await rss.requested.count >= 2 }
+        let second = call(service, channels)
+        let joined = await eventually { await service.callsJoined == 1 }
+
+        first.cancel()
+        // Whoever gave up is told at once, while the requests are still held.
+        let firstResult = await first.result
+        await rss.release()
+        let secondFeed = try await second.value
+
+        #expect(joined)
+        if case .failure(let error) = firstResult {
+            #expect(error as? NoSlopError == .cancelled)
+        } else {
+            Issue.record("expected the cancelled call to end with .cancelled, got \(firstResult)")
+        }
+        #expect(secondFeed.count == 4, "the other call still gets the whole refresh")
+        #expect(await rss.cancelled.isEmpty, "no request was cancelled for the sake of the caller that left")
+        #expect(await rss.requested.sorted() == channels.map(\.id).sorted())
+    }
+
+    @Test func theRefreshIsCancelledWhenTheLastCallLeaves() async throws {
+        let channels = channels(4)
+        let rss = answering(channels)
+        let service = makeService(rss, maxConcurrent: 2)
+        await rss.hold()
+
+        let first = call(service, channels)
+        _ = await eventually { await rss.requested.count >= 2 }
+        let second = call(service, channels)
+        let joined = await eventually { await service.callsJoined == 1 }
+
+        first.cancel()
+        _ = await first.result
+        #expect(await rss.cancelled.isEmpty, "one call is still waiting for the requests")
+        second.cancel()
+        _ = await second.result
+
+        // Nobody is waiting any more: the two requests that were under way are cancelled and no other is started.
+        let stopped = await eventually { await rss.cancelled.count == 2 }
+        #expect(joined)
+        #expect(stopped)
+        #expect(Set(await rss.cancelled) == ["UC_0", "UC_1"])
+        #expect(await rss.requested.count == 2)
+
+        // The next call starts over and gets everything.
+        await rss.release()
+        let feed = try await call(service, channels).value
+        #expect(feed.count == 4)
+    }
+
+    // MARK: The time limit
+
+    @Test func theTimeLimitEndsASharedRefreshForEveryone() async throws {
+        // Two slots. The first three channels answer; then both slots are taken by requests that never do. The time is
+        // up once five requests have been made, which the test only says after the second call has joined.
+        let channels = channels(8)
+        let rss = scripted(channels, answering: 3)
+        let target = Counter(.max)
+        let service = makeService(rss, maxConcurrent: 2, deadline: afterRequests(rss, target))
+
+        let first = call(service, channels)
+        _ = await eventually { await rss.requested.count == 5 }
+        let second = call(service, channels)
+        let joined = await eventually { await service.callsJoined == 1 }
+        target.value = 5
+
+        let firstOutcome = await finishing { try await first.value }
+        let secondOutcome = await finishing { try await second.value }
+
+        #expect(joined)
+        let firstFeed = try #require(try firstOutcome?.get(), "the first call went on waiting for the channels that do not answer")
+        let secondFeed = try #require(try secondOutcome?.get(), "the second call went on waiting for the channels that do not answer")
+        #expect(firstFeed.map(\.id) == ["v-UC_0", "v-UC_1", "v-UC_2"])
+        #expect(secondFeed == firstFeed)
+        #expect(await rss.requested.count == 5, "every channel was asked once, and none after the time was up")
+        await waitUntil { await rss.cancelled.count >= 2 }
+        #expect(Set(await rss.cancelled) == ["UC_3", "UC_4"])
     }
 }

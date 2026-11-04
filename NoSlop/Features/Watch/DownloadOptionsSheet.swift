@@ -5,6 +5,8 @@ import SwiftUI
 /// (`downloads.availableOptions(for:)`) with their estimated sizes; a quality that was already started shows its
 /// progress, or "Downloaded", and can be cancelled, retried or removed from here (cancelling and removing ask first,
 /// as they do on the Downloads screen).
+///
+/// A download is started for the video as the player knows it, never for a bare one: see `downloadable`.
 struct DownloadOptionsSheet: View {
     let video: VideoSummary
 
@@ -12,6 +14,14 @@ struct DownloadOptionsSheet: View {
     @Environment(\.dismiss) private var dismiss
     @State private var phase: Phase = .loading
     @State private var removal: DownloadRemoval?
+
+    /// The video as it is downloaded: the one the sheet was opened with, completed by the player's copy of the same
+    /// video. A video opened from a link starts as a bare id, and the player fills in its title as the stream and the
+    /// page answer; the sheet keeps the copy it was handed when it opened. nil while no title is known: the Downloads
+    /// screen would list a row with a thumbnail and nothing else, for good, so no download is started then.
+    private var downloadable: VideoSummary? {
+        video.savableCopy(completedBy: env.player.currentVideo)
+    }
 
     private enum Phase {
         case loading
@@ -57,16 +67,33 @@ struct DownloadOptionsSheet: View {
     }
 
     private func list(of options: [DownloadOption]) -> some View {
-        List {
+        let target = downloadable
+        return List {
             Section {
+                if target == nil {
+                    LoadingVideoDetailsNote()
+                }
                 ForEach(options) { option in
-                    OptionRow(video: video, option: option, onStarted: { dismiss() }, onRemove: { removal = $0 })
+                    OptionRow(
+                        videoID: video.id,
+                        downloadable: target,
+                        option: option,
+                        onStarted: { dismiss() },
+                        onRemove: { removal = $0 }
+                    )
                 }
             } header: {
-                Text(video.title.isEmpty ? "Choose a quality" : video.title)
-                    .lineLimit(2)
-                    .textCase(nil)
-                    .font(.subheadline)
+                // The title every other screen shows (the community title when "De-clickbait titles" is on).
+                Group {
+                    if let target {
+                        VideoTitleText(video: target, lineLimit: 2)
+                    } else {
+                        Text("Choose a quality")
+                            .lineLimit(2)
+                    }
+                }
+                .textCase(nil)
+                .font(.subheadline)
             } footer: {
                 Text("Downloads play offline in the No Slop player, even without a connection. Sizes are estimates. The files are also in the Files app, in the No Slop folder.")
             }
@@ -90,7 +117,9 @@ struct DownloadOptionsSheet: View {
 
 /// One quality: its label and size, and what the download of it is doing.
 private struct OptionRow: View {
-    let video: VideoSummary
+    let videoID: String
+    /// The video to download, nil while its title is not known: the quality cannot be chosen yet then.
+    let downloadable: VideoSummary?
     let option: DownloadOption
     /// Called after a download was started or restarted, to close the sheet.
     let onStarted: () -> Void
@@ -102,7 +131,7 @@ private struct OptionRow: View {
     /// The download that is this row's rendition, whatever it was asked for as: a video that stops at 144p downloaded as
     /// "up to 720p" (from the context menu) is the 144p row's download.
     private var item: DownloadItem? {
-        env.downloads.item(for: option, videoID: video.id)
+        env.downloads.item(for: option, videoID: videoID)
     }
 
     var body: some View {
@@ -110,7 +139,8 @@ private struct OptionRow: View {
             existing(item)
         } else {
             Button {
-                env.downloads.enqueue(video: video, quality: option.quality)
+                guard let downloadable else { return }
+                env.downloads.enqueue(video: downloadable, quality: option.quality)
                 onStarted()
             } label: {
                 HStack {
@@ -123,6 +153,7 @@ private struct OptionRow: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .disabled(downloadable == nil)
             .accessibilityLabel("Download \(option.label)")
             // Spoken after the label: "Download 1080p, About 268 MB, button". Without it the size is only on screen.
             .accessibilityValue(sizeText)
@@ -221,6 +252,19 @@ private struct OptionRow: View {
         default:
             let percent = Int((min(1, max(0, item.progress)) * 100).rounded())
             return "\(percent)%"
+        }
+    }
+}
+
+/// "Loading video details…": shown by the sheets that save a video while it has no title yet (see
+/// `VideoSummary.savableCopy`), in place of the actions that wait for it.
+struct LoadingVideoDetailsNote: View {
+    var body: some View {
+        HStack(spacing: 8) {
+            ProgressView()
+                .accessibilityHidden(true)
+            Text("Loading video details…")
+                .foregroundStyle(.secondary)
         }
     }
 }
