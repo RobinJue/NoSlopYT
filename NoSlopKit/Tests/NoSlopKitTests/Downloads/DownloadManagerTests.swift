@@ -1312,6 +1312,7 @@ func mediaDurationAndTracks(of url: URL) async throws -> (seconds: Double, video
 
         // A paused item shows what is really on disk: 100000 video bytes and all 117495 audio bytes of 312773.
         #expect(await awaitDownloadCondition { manager.items.first?.bytesDownloaded == 217_495 })
+        #expect(await manager.diskUsage() >= 217_495, "what a paused download holds is part of the space used")
         #expect(manager.items.first?.bytesTotal == 312_773)
         #expect(abs((manager.items.first?.progress ?? 0) - 217_495.0 / 312_773.0) < 0.0001)
 
@@ -1513,6 +1514,10 @@ func mediaDurationAndTracks(of url: URL) async throws -> (seconds: Double, video
         #expect(item.errorMessage == "There isn't enough free space on this device.")
         #expect(FileManager.default.fileExists(atPath: work.appendingPathComponent("job.json").path), "the plan stays")
         #expect(FileManager.default.fileExists(atPath: work.appendingPathComponent("audio.1.part").path), "so do the parts")
+        // And the space they take is reported: the failed row used to add up to nothing, so nothing said what filled the phone.
+        let planSize = Int64(try work.appendingPathComponent("job.json").resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0)
+        #expect(await harness.manager.diskUsage() == ZooFixture.audioBytes + planSize)
+        #expect(harness.manager.bytesOnDisk == 0, "bytesOnDisk is the finished downloads only")
 
         // Space is back (and the video server too): the retry fetches only what is missing.
         harness.server.clearFaults()

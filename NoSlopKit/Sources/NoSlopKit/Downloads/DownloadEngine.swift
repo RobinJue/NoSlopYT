@@ -430,6 +430,34 @@ enum DownloadAssembler {
         provider(url)
     }
 
+    /// The bytes of every file under the downloads folder, measured on disk off the main actor: the finished downloads
+    /// and the work directories of the ones that are not finished (parts, concatenated streams, plans). Not counted are
+    /// the trash (directories that are being deleted) and the list of downloads with its saved copy of a damaged one,
+    /// which are not downloads. A file that is deleted while the walk is on it is simply not counted.
+    @concurrent
+    static func diskUsage(under root: URL) async -> Int64 {
+        sizeOfFiles(under: root)
+    }
+
+    static func sizeOfFiles(under root: URL) -> Int64 {
+        let keys: [URLResourceKey] = [.isRegularFileKey, .fileSizeKey]
+        guard let walker = FileManager.default.enumerator(at: root, includingPropertiesForKeys: keys, options: [], errorHandler: { _, _ in true }) else {
+            return 0
+        }
+        var total: Int64 = 0
+        while let url = walker.nextObject() as? URL {
+            let name = url.lastPathComponent
+            if walker.level == 2, name == ".trash", url.deletingLastPathComponent().lastPathComponent == ".work" {
+                walker.skipDescendants()
+                continue
+            }
+            if walker.level == 1, name.hasPrefix("downloads.json") { continue }
+            guard let values = try? url.resourceValues(forKeys: Set(keys)), values.isRegularFile == true, let size = values.fileSize else { continue }
+            total += Int64(size)
+        }
+        return total
+    }
+
     /// The chunks that need no download: parts of exactly the right size, and every chunk of a stream whose
     /// concatenated file is complete. With `cleanUp`, everything else in the directory (short parts, temp files,
     /// an unfinished merge) is deleted.

@@ -42,7 +42,8 @@ private struct VideoContextMenuModifier: ViewModifier {
 
         Menu {
             // Named by the cap, not by a height: the download takes the tallest rendition the video has up to that
-            // height, which may be a lower one (a video that stops at 480p downloads as 480p under both).
+            // height, which may be a lower one (a video that stops at 480p is the 480p file for "up to 720p", and "up to
+            // 360p" gives its 360p one). The Downloads list and the quality sheet name the rendition it really got.
             Button("Download up to 720p") { env.downloads.enqueue(video: video, quality: .video(maxHeight: 720)) }
             Button("Download up to 360p") { env.downloads.enqueue(video: video, quality: .video(maxHeight: 360)) }
             Button("Audio only") { env.downloads.enqueue(video: video, quality: .audioOnly) }

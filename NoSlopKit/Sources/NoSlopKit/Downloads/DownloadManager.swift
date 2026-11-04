@@ -265,15 +265,42 @@ public final class DownloadManager {
         items.first { $0.video.id == videoID && $0.state == .completed }
     }
 
+    /// The download that a row of the quality sheet stands for: the item of this video whose rendition is the one the row
+    /// names, whatever it was asked for as (a download asked for as "up to 720p" of a video that stops at 144p is the
+    /// 144p row's download). When several qualify, the one that works wins: finished, then running, then paused, then
+    /// failed.
+    public func item(for option: DownloadOption, videoID: String) -> DownloadItem? {
+        func rank(_ state: DownloadState) -> Int {
+            switch state {
+            case .completed: return 0
+            case .queued, .downloading, .merging: return 1
+            case .paused: return 2
+            case .failed: return 3
+            }
+        }
+        return items
+            .filter { $0.video.id == videoID && $0.effectiveQuality == option.quality }
+            .min { rank($0.state) < rank($1.state) }
+    }
+
     /// The file of a finished item, resolved against the downloads root; nil while it has no file (or its file was
     /// deleted from outside the app).
     public func fileURL(for item: DownloadItem) -> URL? {
         Self.finishedFile(of: item, in: rootDirectory)
     }
 
-    /// Total size of the finished downloads.
+    /// Total size of the finished downloads. It does not count what downloads that are not finished have fetched; that is
+    /// `diskUsage()`.
     public var bytesOnDisk: Int64 {
         items.filter { $0.state == .completed }.reduce(0) { $0 + ($1.bytesTotal ?? $1.bytesDownloaded) }
+    }
+
+    /// Everything the downloads take on disk, in bytes: the finished files, and what downloads that are not finished
+    /// have fetched so far, whether they are running, paused, or failed with their parts kept for a retry. This is the
+    /// number to show as "space used". Measured on disk, off the main actor, so ask for it from a task, not from a
+    /// view's body.
+    public func diskUsage() async -> Int64 {
+        await DownloadAssembler.diskUsage(under: rootDirectory)
     }
 
     /// Called from the app delegate when iOS relaunches the app for finished background transfers. `completionHandler`
@@ -286,6 +313,11 @@ public final class DownloadManager {
 
     private static func itemID(video: VideoSummary, quality: DownloadQuality) -> String {
         "\(video.id)-\(quality.key)"
+    }
+
+    /// The height of the video rendition `plan` fetches, as the quality sheet names it; nil for audio only.
+    private static func renditionHeight(of plan: DownloadJobPlan) -> Int? {
+        plan.video.flatMap(FormatSelector.resolution(of:))
     }
 
     /// Begins (or begins again) the item: resolve fresh stream URLs, plan, prepare the directory, start the tasks.
@@ -377,6 +409,7 @@ public final class DownloadManager {
             jobs[id] = job
             update(id) { item in
                 item.state = .downloading
+                item.renditionHeight = Self.renditionHeight(of: plan)
                 item.bytesTotal = plan.totalBytes
                 item.bytesDownloaded = present.bytes
                 item.progress = plan.totalBytes > 0 ? Double(present.bytes) / Double(plan.totalBytes) : 0
@@ -604,6 +637,7 @@ public final class DownloadManager {
         update(itemID) { item in
             item.state = .downloading
             item.errorMessage = nil
+            item.renditionHeight = Self.renditionHeight(of: plan)
             item.bytesTotal = plan.totalBytes
             item.bytesDownloaded = max(item.bytesDownloaded, present.bytes)
             item.progress = plan.totalBytes > 0 ? min(1, Double(item.bytesDownloaded) / Double(plan.totalBytes)) : 0
@@ -642,6 +676,7 @@ public final class DownloadManager {
                 } else if plan.totalBytes > 0 {
                     // A paused item shows how much of it is on disk, not what the last save happened to say.
                     update(id) { item in
+                        item.renditionHeight = Self.renditionHeight(of: plan)
                         item.bytesTotal = plan.totalBytes
                         item.bytesDownloaded = present.bytes
                         item.progress = min(1, Double(present.bytes) / Double(plan.totalBytes))
@@ -741,7 +776,7 @@ public final class DownloadManager {
             in: root,
             baseName: DownloadFileNaming.baseName(title: plan.title, videoID: plan.videoID),
             fileExtension: plan.fileExtension,
-            qualityLabel: item.quality.label
+            qualityLabel: item.qualityLabel
         ) { name in
             claimed.contains(name.lowercased()) || FileManager.default.fileExists(atPath: root.appendingPathComponent(name).path)
         }

@@ -95,9 +95,10 @@ private struct OptionRow: View {
 
     @Environment(AppEnvironment.self) private var env
 
+    /// The download that is this row's rendition, whatever it was asked for as: a video that stops at 144p downloaded as
+    /// "up to 720p" (from the context menu) is the 144p row's download.
     private var item: DownloadItem? {
-        let id = "\(video.id)-\(option.quality.key)"
-        return env.downloads.items.first { $0.id == id }
+        env.downloads.item(for: option, videoID: video.id)
     }
 
     var body: some View {

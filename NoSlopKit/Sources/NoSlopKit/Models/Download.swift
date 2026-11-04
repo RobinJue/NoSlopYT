@@ -26,9 +26,11 @@ public enum DownloadState: String, Codable, Sendable {
 }
 
 public struct DownloadItem: Codable, Hashable, Sendable, Identifiable {
-    /// "<videoID>-<quality.key>"
+    /// "<videoID>-<quality.key>" of the quality that was asked for, fixed when the item is created.
     public var id: String
     public var video: VideoSummary
+    /// What was asked for: a cap, not a file. "720p" of a video that stops at 144p downloads the 144p rendition, which
+    /// is what `renditionHeight` says. A retry picks again within this cap.
     public var quality: DownloadQuality
     public var state: DownloadState
     public var progress: Double
@@ -38,6 +40,21 @@ public struct DownloadItem: Codable, Hashable, Sendable, Identifiable {
     public var relativeFilePath: String?
     public var createdAt: Date
     public var errorMessage: String?
+    /// The height of the video rendition that was actually fetched (the real "480p" of a download asked for as "up to
+    /// 720p"). Set once the item has picked its streams; nil for audio only, for an item that has not got that far, and
+    /// for items saved before this was recorded.
+    public var renditionHeight: Int?
+
+    /// What to call the download: the rendition it fetched when that is known, else what was asked for.
+    public var qualityLabel: String {
+        renditionHeight.map { "\($0)p" } ?? quality.label
+    }
+
+    /// The quality the download really is: the rendition it fetched when that is known, else what was asked for. The
+    /// quality sheet lists renditions, so this is what its rows are matched against.
+    public var effectiveQuality: DownloadQuality {
+        renditionHeight.map { .video(maxHeight: $0) } ?? quality
+    }
 
     public init(
         id: String,
@@ -49,7 +66,8 @@ public struct DownloadItem: Codable, Hashable, Sendable, Identifiable {
         bytesTotal: Int64? = nil,
         relativeFilePath: String? = nil,
         createdAt: Date = Date(),
-        errorMessage: String? = nil
+        errorMessage: String? = nil,
+        renditionHeight: Int? = nil
     ) {
         self.id = id
         self.video = video
@@ -61,6 +79,7 @@ public struct DownloadItem: Codable, Hashable, Sendable, Identifiable {
         self.relativeFilePath = relativeFilePath
         self.createdAt = createdAt
         self.errorMessage = errorMessage
+        self.renditionHeight = renditionHeight
     }
 
     /// Persisted JSON may come from an older build: `id`, `video` and `quality` are required.
@@ -76,6 +95,7 @@ public struct DownloadItem: Codable, Hashable, Sendable, Identifiable {
         self.relativeFilePath = try c.decodeIfPresent(String.self, forKey: .relativeFilePath)
         self.createdAt = try c.decodeIfPresent(Date.self, forKey: .createdAt) ?? Date(timeIntervalSince1970: 0)
         self.errorMessage = try c.decodeIfPresent(String.self, forKey: .errorMessage)
+        self.renditionHeight = try c.decodeIfPresent(Int.self, forKey: .renditionHeight)
     }
 }
 

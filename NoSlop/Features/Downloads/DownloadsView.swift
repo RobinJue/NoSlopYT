@@ -6,6 +6,8 @@ import SwiftUI
 struct DownloadsView: View {
     @Environment(AppEnvironment.self) private var env
     @State private var itemToDelete: DownloadItem?
+    /// What the downloads really take on disk, unfinished ones included; nil until it has been measured.
+    @State private var usedBytes: Int64?
 
     var body: some View {
         let items = env.downloads.items
@@ -51,9 +53,9 @@ struct DownloadsView: View {
                     }
 
                     Section {
-                        LabeledContent("Space used", value: StorageSizeText.string(env.downloads.bytesOnDisk))
+                        LabeledContent("Space used", value: usedBytes.map { StorageSizeText.string($0) } ?? "–")
                     } footer: {
-                        Text("Downloaded videos are also in the Files app, in the No Slop folder.")
+                        Text("Includes downloads that are not finished. Downloaded videos are also in the Files app, in the No Slop folder.")
                     }
                 }
                 .miniPlayerClearance()
@@ -61,6 +63,9 @@ struct DownloadsView: View {
         }
         .navigationTitle("Downloads")
         .navigationBarTitleDisplayMode(.inline)
+        .task(id: env.downloads.diskUsageKey) {
+            usedBytes = await env.downloads.diskUsage()
+        }
         // An alert, shown from the list itself: a swipe action closes its row, and a dialog attached to that row
         // would be lost with it.
         .alert(
@@ -159,7 +164,7 @@ private struct RunningDownloadRow: View {
 
     /// "720p · 12.3 MB of 45.6 MB", "720p · Waiting to start", "720p · Finishing up"
     private var statusText: String {
-        let quality = item.quality.label
+        let quality = item.qualityLabel
         switch item.state {
         case .queued:
             return "\(quality) · Waiting to start"
@@ -194,7 +199,7 @@ private struct StoppedDownloadRow: View {
             .buttonStyle(.bordered)
             .controlSize(.small)
         } detail: {
-            Text(item.quality.label)
+            Text(item.qualityLabel)
                 .font(.caption)
                 .foregroundStyle(.secondary)
             Text(reason)
@@ -253,7 +258,7 @@ private struct FinishedDownloadRow: View {
     /// "720p · 45.6 MB"
     private var sizeLine: String {
         let bytes = item.bytesTotal ?? item.bytesDownloaded
-        return bytes > 0 ? "\(item.quality.label) · \(StorageSizeText.string(bytes))" : item.quality.label
+        return bytes > 0 ? "\(item.qualityLabel) · \(StorageSizeText.string(bytes))" : item.qualityLabel
     }
 }
 
