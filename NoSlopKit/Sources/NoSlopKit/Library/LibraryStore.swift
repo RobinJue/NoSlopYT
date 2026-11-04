@@ -12,6 +12,11 @@ import Observation
 /// If only some entries of a list cannot be read, the others are kept and written back to a clean file at once (the
 /// original, damaged entries included, still goes to `.corrupt`).
 ///
+/// ## What is kept of a video
+/// A video is stored as it was when it was saved (Watch Later, a playlist) or watched (the history), minus what was
+/// only true on that day: the relative age becomes a date, a stream that was live or a premiere that was upcoming is
+/// neither any more, and the count of people watching or waiting is dropped (`VideoSummary.forLibrary`).
+///
 /// Changes are written in the background: the first change after a write starts a 0.5 s timer, and everything
 /// that changed until it fires goes to disk together, encoded and written off the main thread. Writes happen in
 /// the order they were started. `flush()` writes immediately and returns once the data is on disk, so call it
@@ -61,10 +66,25 @@ public final class LibraryStore {
         self.now = now
 
         subscriptions = Self.unique(files.loadList(LibraryFile.subscriptions.rawValue), by: \SubscribedChannel.id)
+        // Videos that earlier builds stored with text that was only true on the day (see `VideoSummary.forLibrary`) are
+        // corrected as they are read; the files are not rewritten for it. A history entry knows the day: it was
+        // watched. Watch Later and the playlists keep no date per video, so their relative ages cannot be counted back
+        // and are dropped.
         history = Array(Self.unique(files.loadList(LibraryFile.history.rawValue), by: \HistoryEntry.id).prefix(Self.historyLimit))
+            .map { entry in
+                var entry = entry
+                entry.video = entry.video.forLibrary(savedAt: entry.lastWatchedAt)
+                return entry
+            }
         historyByID = Dictionary(history.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         watchLater = Self.unique(files.loadList(LibraryFile.watchLater.rawValue), by: \VideoSummary.id)
+            .map { $0.forLibrary(savedAt: nil) }
         playlists = Self.unique(files.loadList(LibraryFile.playlists.rawValue), by: \LocalPlaylist.id)
+            .map { playlist in
+                var playlist = playlist
+                playlist.videos = playlist.videos.map { $0.forLibrary(savedAt: nil) }
+                return playlist
+            }
         searchHistory = Self.cleaned(files.loadList(LibraryFile.searchHistory.rawValue))
     }
 
@@ -169,9 +189,10 @@ public final class LibraryStore {
         let seconds = seconds.isFinite ? max(0, seconds) : 0
         let duration = duration.flatMap { $0.isFinite && $0 > 0 ? $0 : nil }
         let previous = historyByID[video.id]
+        let watchedAt = now()
         let entry = HistoryEntry(
-            video: video,
-            lastWatchedAt: now(),
+            video: video.forLibrary(savedAt: watchedAt),
+            lastWatchedAt: watchedAt,
             progressSeconds: seconds,
             durationSeconds: duration ?? previous?.durationSeconds
         )
@@ -226,7 +247,7 @@ public final class LibraryStore {
         if let index = watchLater.firstIndex(where: { $0.id == video.id }) {
             watchLater.remove(at: index)
         } else {
-            watchLater.insert(video, at: 0)
+            watchLater.insert(video.forLibrary(savedAt: now()), at: 0)
         }
         markDirty(.watchLater)
     }
@@ -288,8 +309,9 @@ public final class LibraryStore {
     public func add(_ video: VideoSummary, toPlaylist id: UUID) {
         guard let index = playlists.firstIndex(where: { $0.id == id }),
               !playlists[index].videos.contains(where: { $0.id == video.id }) else { return }
-        playlists[index].videos.append(video)
-        playlists[index].updatedAt = now()
+        let savedAt = now()
+        playlists[index].videos.append(video.forLibrary(savedAt: savedAt))
+        playlists[index].updatedAt = savedAt
         markDirty(.playlists)
     }
 
