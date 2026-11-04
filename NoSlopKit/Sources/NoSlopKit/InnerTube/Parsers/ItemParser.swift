@@ -92,7 +92,14 @@ public enum ItemParser {
             let label = text?.uppercased() ?? ""
             if label == "LIVE" || style.hasSuffix("_LIVE") { isLive = true }
             if label == "UPCOMING" || label == "PREMIERE" || style.hasSuffix("_UPCOMING") { isUpcoming = true }
-            if label.contains("MEMBERS ONLY") || style.contains("MEMBERS") { isMembersOnly = true }
+            if isMembersOnlyMark(label: label, style: style) { isMembersOnly = true }
+        }
+        // The members-only mark of a video in a list is not over the thumbnail but a status chip under the title.
+        isMembersOnly = isMembersOnly || statusChips(of: metadata).contains {
+            isMembersOnlyMark(
+                label: clean(InnerTubeText.text($0["badgeText"]))?.uppercased() ?? "",
+                style: $0["badgeStyle"]?.string?.uppercased() ?? ""
+            )
         }
 
         // Metadata rows: [channel] then [views, age]; a channel tab has only the second kind of row. The first row
@@ -385,6 +392,21 @@ public enum ItemParser {
                 )
             }
         }
+    }
+
+    /// The status chips of a lockup ("New", "CC", "Fundraiser", "Members only"): `badges[].badgeViewModel` in rows of
+    /// their own among the metadata rows, next to the rows with `metadataParts`. They carry no views or age, which is
+    /// why `metadataRows(of:)` (parts only) leaves them out and the statistics are read as before.
+    private static func statusChips(of metadata: JSON?) -> [JSON] {
+        let rows = metadata?["metadata"]?["contentMetadataViewModel"]?["metadataRows"]?.array ?? []
+        return rows.flatMap { row in (row["badges"]?.array ?? []).compactMap { $0["badgeViewModel"] } }
+    }
+
+    /// Whether a badge (a chip, or one over the thumbnail) says that only members of the channel can watch the video.
+    /// The style is what counts (`BADGE_MEMBERS_ONLY`, the same in every language); the text is translated, so the
+    /// English "Members only" is only a fallback. Both are upper-cased by the caller.
+    private static func isMembersOnlyMark(label: String, style: String) -> Bool {
+        style.contains("MEMBERS") || label.contains("MEMBERS ONLY")
     }
 
     /// The channel of a video lockup: its name is the first part of the first row, its id and avatar are on the

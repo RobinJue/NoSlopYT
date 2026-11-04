@@ -198,11 +198,32 @@ private func resolve(_ text: String) -> ResolvedURL? {
         #expect(resolve("NOSLOP://watch?v=dQw4w9WgXcQ") == .video(id: "dQw4w9WgXcQ", startSeconds: nil))
     }
 
+    @Test func noslopChannelLinksTakeChannelIDs() {
+        #expect(resolve("noslop://channel/UCSMOQeBJ2RAnuFungnQOxLg") == .channel(id: "UCSMOQeBJ2RAnuFungnQOxLg"))
+        #expect(resolve("noslop://channel?id=UCSMOQeBJ2RAnuFungnQOxLg") == .channel(id: "UCSMOQeBJ2RAnuFungnQOxLg"))
+        #expect(resolve("noslop://channel/UCOKHwx1VCdgnxwbjyb9Iu1g") == .channel(id: "UCOKHwx1VCdgnxwbjyb9Iu1g"))
+    }
+
+    /// The app's own channel link and the web link read the same ids as channels (and refuse the same others).
+    @Test(arguments: ["notachannel", "notAChannelId", "UC", "uc12345678", "VLPLsGl9GczcgBumq6fLmmR1ZYYn4EDkIg5B", "UC%20bad", "UCSMOQeBJ2RAnuFungnQOxLg", "UCx"])
+    func appAndWebChannelLinksAgreeOnWhatIsAChannelID(id: String) {
+        let web = resolve("https://www.youtube.com/channel/\(id)")
+        #expect(resolve("noslop://channel/\(id)") == web)
+        #expect(resolve("noslop://channel?id=\(id)") == web)
+    }
+
     @Test(arguments: [
         "noslop://watch",
         "noslop://watch?v=",
         "noslop://channel",
         "noslop://channel/",
+        "noslop://channel/notachannel",
+        "noslop://channel/notAChannelId",
+        "noslop://channel/UC",
+        "noslop://channel/UC%20bad",
+        "noslop://channel/VLPLsGl9GczcgBumq6fLmmR1ZYYn4EDkIg5B",
+        "noslop://channel?id=notachannel",
+        "noslop://channel?id=UC",
         "noslop://playlist",
         "noslop://search",
         "noslop://search?q=",
