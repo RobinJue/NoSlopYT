@@ -18,8 +18,10 @@ Design: [`docs/superpowers/specs/2026-11-03-noslop-design.md`](docs/superpowers/
 - Keeps playing with the screen locked or the app in the background, in Picture in Picture, on AirPlay, with the
   lock-screen controls. It resumes where you left off. While VoiceOver or Switch Control runs, the player's controls
   stay on screen instead of fading out, and a skipped segment is announced, with its Undo left up for ten seconds.
-- Plays a playlist from its page with "Play all" (or from a tap on one of its rows), also a long one: the next part
-  of the playlist is fetched while the queue runs low.
+- Plays a public YouTube playlist (from search, a channel or a link) with "Play all" on its page, or from a tap on one
+  of its rows, also a long one: the next part of the playlist is fetched while the queue runs low. Your YouTube
+  playlists and liked videos (signed in) have "Play all" too, but they load 50 videos at a time as you scroll and
+  queue only those loaded so far; the playlists on the device and Watch Later queue everything.
 - Downloads videos (pick a quality, or audio only) for offline viewing. Downloads continue while the app is in the
   background, and the files show up in the Files app.
 - Skips sponsor, self-promotion and interaction-reminder segments (SponsorBlock; each category can also be shown in
@@ -211,7 +213,10 @@ xcrun simctl launch booted com.robinjungerich.noslopyt -mockServices YES \
 ```
 
 There are more Debug-only launch arguments (slow or offline mock connections, seeded history and downloads, scripted
-player and UI steps). They are documented in `NoSlop/DesignSystem/DebugLaunchHooks.swift` and not listed here.
+player and UI steps). They are documented in the source and not listed here. Most are in
+`NoSlop/DesignSystem/DebugLaunchHooks.swift`; the steps of the player script (`-playerScript`) are in
+`NoSlop/Player/PlayerDebugScript.swift`, those of the UI script (`-uiScript`) in
+`NoSlop/DesignSystem/DebugUIScript.swift`.
 
 The app understands the links below. It registers the `noslop://` scheme, so those links also open No Slop from other
 apps (iOS asks to confirm), and the YouTube ones open when you paste them into the Search field:
