@@ -16,7 +16,7 @@ import NoSlopKit
 ///   jumps to the end (2 s before it unless told otherwise), waits up to 25 s for another video to start and logs the
 ///   state (`hop <n>`). It stops at the first hop that no video follows.
 /// - `next` is the Next button of the lock screen (`playNext`), `watched=<video id>[,<video id>...]` records a minute of
-///   each sample video in the history, so that autoplay passes it over
+///   each sample video in the history, so that autoplay passes it over, `scrollPage=<points>` scrolls the watch page
 /// - `quality=<auto|1080|720|480|360>` (a pick), `capQuality=<...>` (only the cap, as the connection sets it),
 ///   `rate=<speed>`, `pause`, `play`
 /// - `systemPause`, `systemPlay` reach the `AVPlayer` directly, as the Picture in Picture window or an AirPlay remote
@@ -82,6 +82,8 @@ enum PlayerDebugScript {
                 }
             case "next":
                 _ = player.playNext()
+            case "scrollPage":
+                if let points = Double(value) { DebugLaunchHooks.scrollWatchPage(to: points) }
             case "watched":
                 for id in value.split(separator: ",") { player.debugMarkWatched(String(id)) }
             case "quality":
