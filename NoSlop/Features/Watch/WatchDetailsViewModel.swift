@@ -212,10 +212,12 @@ final class WatchDetailsViewModel {
         publishToPlayer(env)
     }
 
-    /// Hands the player what it needs from the page: chapters for the seek bar and the autoplay candidates.
+    /// Hands the player what it needs from the page: what it knows about the video itself (the title, channel, views and
+    /// age of a video that was opened from a bare link), the chapters for the seek bar and the autoplay candidates.
     /// Only for the video that is playing, so a slow answer for an earlier video never lands on the current one.
     private func publishToPlayer(_ env: AppEnvironment) {
         guard let details, env.player.currentVideo?.id == video.id else { return }
+        env.player.complete(with: details.summary)
         env.player.setChapters(details.chapters)
         env.player.setUpNext(related)
     }

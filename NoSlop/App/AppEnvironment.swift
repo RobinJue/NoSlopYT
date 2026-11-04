@@ -349,7 +349,7 @@ final class AppEnvironment {
         switch url.scheme?.lowercased() {
         case AppLink.scheme:
             if let link = AppLink(url: url) {
-                await perform(link)
+                perform(link)
             } else {
                 linkError = Self.unopenableLinkMessage
             }
@@ -370,13 +370,13 @@ final class AppEnvironment {
 
     private func openWebLink(_ url: URL) async {
         if let resolved = YouTubeURL.resolveLocally(url) {
-            await openResolved(resolved)
+            openResolved(resolved)
             return
         }
         // A `/@handle` or a custom channel address: only YouTube can say which channel that is.
         do {
             if let resolved = try await youTube.resolve(url: url) {
-                await openResolved(resolved)
+                openResolved(resolved)
             } else {
                 linkError = Self.unopenableLinkMessage
             }
@@ -389,7 +389,7 @@ final class AppEnvironment {
         }
     }
 
-    private func perform(_ link: AppLink) async {
+    private func perform(_ link: AppLink) {
         switch link {
         case .tab(let tab):
             if player.presentation == .expanded {
@@ -399,11 +399,14 @@ final class AppEnvironment {
         case .route(let route):
             show(route)
         case .resolved(let resolved):
-            await openResolved(resolved)
+            openResolved(resolved)
         }
     }
 
-    private func openResolved(_ resolved: ResolvedURL) async {
+    /// Opens what a resolved link points at. A video opens at once and without waiting for anything: the player fills
+    /// in its title and channel as they arrive (see `knownSummary`), so no late answer can replace what the viewer
+    /// chose in the meantime.
+    private func openResolved(_ resolved: ResolvedURL) {
         switch resolved {
         case .video(let id, let startSeconds):
             // YouTube's resolver hands back whatever the link said (`watch?v=abc` resolves to the video "abc"), so a
@@ -412,8 +415,7 @@ final class AppEnvironment {
                 linkError = Self.unopenableLinkMessage
                 return
             }
-            let video = await videoSummary(forID: id)
-            open(video, startAt: startSeconds.map(Double.init))
+            open(knownSummary(forID: id) ?? VideoSummary(id: id, title: ""), startAt: startSeconds.map(Double.init))
         case .channel(let id):
             show(.channel(id: id))
         case .playlist(let id):
@@ -425,29 +427,15 @@ final class AppEnvironment {
         }
     }
 
-    /// A link only carries the video id, but the player, the history and the mini player need a title and channel.
-    /// Uses what the library already knows, else asks YouTube for a few seconds, else falls back to the bare id.
-    private func videoSummary(forID id: String) async -> VideoSummary {
-        if let known = library.history.first(where: { $0.id == id })?.video
+    /// A link only carries the video id, but the player, the history and the mini player want a title and a channel. What
+    /// the library already knows about the video (history, Watch Later, downloads) is used as it is. For any other video
+    /// the player opens a bare summary with an empty title: it shows a placeholder, and the title, the channel, the views
+    /// and the age arrive with the stream (`PlayerController.accept`) and the watch details
+    /// (`PlayerController.complete(with:)`).
+    private func knownSummary(forID id: String) -> VideoSummary? {
+        library.history.first(where: { $0.id == id })?.video
             ?? library.watchLater.first(where: { $0.id == id })
-            ?? downloads.items.first(where: { $0.video.id == id })?.video {
-            return known
-        }
-        return await Self.fetchSummary(id: id, from: youTube) ?? VideoSummary(id: id, title: "")
-    }
-
-    private static func fetchSummary(id: String, from service: any YouTubeService) async -> VideoSummary? {
-        await withTaskGroup(of: VideoSummary?.self) { group in
-            group.addTask { try? await service.videoDetails(id: id).summary }
-            group.addTask {
-                try? await Task.sleep(for: .seconds(4))
-                return nil
-            }
-            // Whichever finishes first wins: the details, a failed lookup (nil), or the timeout (nil).
-            let first = await group.next() ?? nil
-            group.cancelAll()
-            return first
-        }
+            ?? downloads.items.first(where: { $0.video.id == id })?.video
     }
 
     // MARK: Helpers

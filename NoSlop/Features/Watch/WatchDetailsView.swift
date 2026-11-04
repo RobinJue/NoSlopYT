@@ -138,7 +138,12 @@ private struct WatchDetailsContent: View {
     // MARK: Title
 
     private var titleBlock: some View {
-        let shown = model.summary
+        var shown = model.summary
+        // A video opened from a bare link: the player has its title from the stream (`video` is the player's copy) while
+        // the details are still on their way, or cannot be loaded.
+        if shown.title.isEmpty {
+            shown.title = video.title
+        }
         return VStack(alignment: .leading, spacing: 4) {
             if shown.title.isEmpty {
                 // A bare id from a link: the title arrives with the details, unless they cannot be loaded.

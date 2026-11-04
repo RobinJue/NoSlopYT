@@ -303,6 +303,18 @@ final class PlayerController {
         detailsHandedOverFor = currentVideo?.id
     }
 
+    /// Completes the current video with what its watch page says (`VideoSummary.filledIn(from:)`). A video opened from a
+    /// link starts as a bare id: the stream brings its title and the channel's name (`accept`), the page brings the
+    /// channel's picture and handle, the views and the age, which the history and the lists then show. Whatever is there
+    /// already stays; a page of another video does nothing.
+    func complete(with details: VideoSummary) {
+        guard let video = currentVideo, video.id == details.id else { return }
+        let completed = video.filledIn(from: details)
+        guard completed != video else { return }
+        currentVideo = completed
+        updateNowPlaying()
+    }
+
     /// Asks for the chapters and the up-next list of a video that nobody is going to hand over, because no watch page is
     /// on screen to do it (see `requestDetailsIfNoPageShows`). Set by `AppEnvironment`, which loads the details and
     /// answers with `setChapters` and `setUpNext`.
