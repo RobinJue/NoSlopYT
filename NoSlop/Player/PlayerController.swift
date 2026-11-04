@@ -857,7 +857,9 @@ final class PlayerController {
             recoveryAttempts += 1
             beginReload(at: at, waitForConnection: true)
         case .showError:
-            fail(message: failure.message, isWorthRetrying: PlayerFailureAdvice.isWorthRetrying(failure))
+            // `isPlayingOffline` is still set here (only `beginReload` clears it): a download that cannot be played has a
+            // Retry that streams the video instead.
+            fail(message: failure.message, isWorthRetrying: PlayerFailureAdvice.isWorthRetrying(failure, isPlayingOffline: isPlayingOffline))
         }
     }
 
@@ -897,7 +899,7 @@ final class PlayerController {
 
     private func fail(with error: any Error) {
         let message = (error as? LocalizedError)?.errorDescription ?? Self.classify(error: error, item: nil).message
-        fail(message: message, isWorthRetrying: PlayerFailureAdvice.isWorthRetrying(error, video: currentVideo))
+        fail(message: message, isWorthRetrying: PlayerFailureAdvice.isWorthRetrying(error))
     }
 
     /// Ends the video with the error screen. `isWorthRetrying` says whether that screen has a Retry button.
@@ -2040,6 +2042,18 @@ extension PlayerController {
     /// screen of a video YouTube will not hand out: the reason and "Open on YouTube", without Retry.
     func debugFail(message: String = "Failed on purpose by the player script.", isWorthRetrying: Bool = true) {
         fail(message: message, isWorthRetrying: isWorthRetrying)
+    }
+
+    /// Ends the video with the error screen the way a stream that could not be loaded does (`fail(with:)`): whether the
+    /// screen has a Retry is `PlayerFailureAdvice`'s answer for `error`.
+    func debugFail(with error: any Error) {
+        fail(with: error)
+    }
+
+    /// Reacts to a failure of the item that plays as `recover` does: the silent recovery, or the error screen, whose Retry
+    /// follows `PlayerFailureAdvice` for the failure and for whether the video plays from a download.
+    func debugFailPlayback(_ failure: PlaybackFailure) {
+        recover(from: failure, position: currentPositionForRecovery())
     }
 
     /// Opens the video that is current once more, the way a link to it does.

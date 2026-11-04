@@ -457,6 +457,7 @@ import Testing
     @Test func errorMessagesAreShortPlainSentences() {
         #expect(NoSlopError.botCheck.errorDescription == "YouTube asked to confirm you're not a bot. Try again in a minute, or open the video on YouTube.")
         #expect(NoSlopError.unplayable(reason: "This video is private.").errorDescription == "This video is private.")
+        #expect(NoSlopError.notPlayableYet(reason: "This live event will begin in 2 hours.").errorDescription == "This live event will begin in 2 hours.")
         #expect(NoSlopError.notSignedIn.errorDescription == "Sign in with Google to use this.")
         #expect(NoSlopError.googleNotConfigured.errorDescription == "Add your Google OAuth client ID in Settings \u{2192} Account first.")
         #expect(NoSlopError.quotaExceeded.errorDescription == "YouTube's daily API quota for your Google project is used up. Try again tomorrow.")

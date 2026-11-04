@@ -28,6 +28,10 @@ import UIKit
 ///   video; `failGone`: for a video YouTube will not hand out, whose screen has no Retry), `retry` is its Retry button, `reopen` opens the current video again
 ///   (a link to it), `openStaleLive=<video id>` opens a video whose saved copy still says live and upcoming (a row
 ///   of Watch Later after the broadcast ended)
+/// - `failNotYet` and `failVerdict` end the video with the error that YouTube's `player` endpoint gives for a live event that
+///   has not begun (`notPlayableYet`: Retry) and for a video it will not hand out (`unplayable`: no Retry), whatever copy of the
+///   video was opened. `failDecode` is a playback failure of the item that cannot be decoded (`PlaybackFailure.decode`: no
+///   Retry, except for a download, whose Retry streams the video instead)
 /// - `seek=<seconds>`, `seekEnd=<seconds before the end>`, `undo` (the skip notice's Undo)
 /// - `playerServices=<on|off>` switches the connection of the services the player asks (stream info, SponsorBlock,
 ///   captions; see `-offlinePlayerServices`), for example to let the live answers arrive while a download plays with the
@@ -125,6 +129,12 @@ enum PlayerDebugScript {
                 )
             case "failGone":
                 player.debugFail(message: "This video is private.", isWorthRetrying: false)
+            case "failNotYet":
+                player.debugFail(with: NoSlopError.notPlayableYet(reason: "This live event will begin in 2 hours."))
+            case "failVerdict":
+                player.debugFail(with: NoSlopError.unplayable(reason: "This video is private."))
+            case "failDecode":
+                player.debugFailPlayback(.decode)
             case "retry":
                 player.retry()
             case "reopen":

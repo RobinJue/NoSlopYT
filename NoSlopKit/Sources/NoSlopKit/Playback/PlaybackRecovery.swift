@@ -8,7 +8,8 @@ public enum PlaybackFailure: Equatable, Sendable {
     case httpStatus(Int)
     /// The connection is gone or unusable (offline, timed out, connection lost, DNS).
     case network
-    /// The media is there but cannot be decoded or parsed; fresh URLs would not help.
+    /// The media is there but cannot be decoded or parsed; fresh URLs would not help. (A download is the exception to the
+    /// Retry that follows: it streams the video instead, see `PlayerFailureAdvice`.)
     case decode
     /// Anything else AVFoundation reported.
     case unknown
