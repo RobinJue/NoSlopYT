@@ -2,10 +2,11 @@ import NoSlopKit
 import SwiftUI
 
 /// The downloads, in three groups: running (progress, cancel), stopped (failed or paused: retry, delete) and
-/// finished (tap to play offline, swipe to delete), with the space they use at the bottom.
+/// finished (tap to play offline, swipe to delete), with the space they use at the bottom. Cancelling a running
+/// download and deleting one both ask first: they throw away what was downloaded.
 struct DownloadsView: View {
     @Environment(AppEnvironment.self) private var env
-    @State private var itemToDelete: DownloadItem?
+    @State private var removal: DownloadRemoval?
     /// What the downloads really take on disk, unfinished ones included; nil until it has been measured.
     @State private var usedBytes: Int64?
 
@@ -27,7 +28,9 @@ struct DownloadsView: View {
                     if !running.isEmpty {
                         Section("Downloading") {
                             ForEach(running) { item in
-                                RunningDownloadRow(item: item)
+                                RunningDownloadRow(item: item) {
+                                    removal = DownloadRemoval(kind: .cancel, item: item)
+                                }
                             }
                         }
                     }
@@ -36,7 +39,7 @@ struct DownloadsView: View {
                         Section("Failed or paused") {
                             ForEach(stopped) { item in
                                 StoppedDownloadRow(item: item) {
-                                    itemToDelete = item
+                                    removal = DownloadRemoval(kind: .delete, item: item)
                                 }
                             }
                         }
@@ -46,7 +49,7 @@ struct DownloadsView: View {
                         Section("Downloaded") {
                             ForEach(finished) { item in
                                 FinishedDownloadRow(item: item) {
-                                    itemToDelete = item
+                                    removal = DownloadRemoval(kind: .delete, item: item)
                                 }
                             }
                         }
@@ -68,21 +71,7 @@ struct DownloadsView: View {
         }
         // An alert, shown from the list itself: a swipe action closes its row, and a dialog attached to that row
         // would be lost with it.
-        .alert(
-            "Delete this download?",
-            isPresented: Binding(
-                get: { itemToDelete != nil },
-                set: { if !$0 { itemToDelete = nil } }
-            ),
-            presenting: itemToDelete
-        ) { item in
-            Button("Delete", role: .destructive) {
-                env.downloads.delete(id: item.id)
-            }
-            Button("Cancel", role: .cancel) {}
-        } message: { item in
-            Text(item.state == .completed ? "You can download the video again later." : "The partial download is discarded.")
-        }
+        .confirmingDownloadRemoval($removal)
     }
 
     private static let runningStates: [DownloadState] = [.queued, .downloading, .merging]
@@ -133,16 +122,14 @@ private struct DownloadRowLayout<Trailing: View, Detail: View>: View {
     }
 }
 
-/// Queued, downloading or merging: a progress bar, how much is done, and Cancel.
+/// Queued, downloading or merging: a progress bar, how much is done, and Cancel (which asks first).
 private struct RunningDownloadRow: View {
     let item: DownloadItem
-    @Environment(AppEnvironment.self) private var env
+    let onCancel: () -> Void
 
     var body: some View {
         DownloadRowLayout(item: item) {
-            Button {
-                env.downloads.cancel(id: item.id)
-            } label: {
+            Button(action: onCancel) {
                 Image(systemName: "xmark.circle.fill")
                     .font(.title2)
                     .foregroundStyle(.secondary)
@@ -151,7 +138,7 @@ private struct RunningDownloadRow: View {
             }
             // Plain, not borderless: the borderless style would tint the symbol with the accent colour.
             .buttonStyle(.plain)
-            .accessibilityLabel("Cancel download")
+            .accessibilityLabel(item.video.title.isEmpty ? "Cancel download" : "Cancel download of \(item.video.title)")
         } detail: {
             ProgressView(value: min(1, max(0, item.progress)))
                 .tint(Theme.accent)
@@ -198,6 +185,7 @@ private struct StoppedDownloadRow: View {
             }
             .buttonStyle(.bordered)
             .controlSize(.small)
+            .accessibilityLabel(item.video.title.isEmpty ? "Retry download" : "Retry download of \(item.video.title)")
         } detail: {
             Text(item.qualityLabel)
                 .font(.caption)

@@ -3,13 +3,15 @@ import SwiftUI
 
 /// Picks the quality of a download. The choices come from the formats the video offers
 /// (`downloads.availableOptions(for:)`) with their estimated sizes; a quality that was already started shows its
-/// progress, or "Downloaded", and can be cancelled, retried or removed from here.
+/// progress, or "Downloaded", and can be cancelled, retried or removed from here (cancelling and removing ask first,
+/// as they do on the Downloads screen).
 struct DownloadOptionsSheet: View {
     let video: VideoSummary
 
     @Environment(AppEnvironment.self) private var env
     @Environment(\.dismiss) private var dismiss
     @State private var phase: Phase = .loading
+    @State private var removal: DownloadRemoval?
 
     private enum Phase {
         case loading
@@ -58,9 +60,7 @@ struct DownloadOptionsSheet: View {
         List {
             Section {
                 ForEach(options) { option in
-                    OptionRow(video: video, option: option) {
-                        dismiss()
-                    }
+                    OptionRow(video: video, option: option, onStarted: { dismiss() }, onRemove: { removal = $0 })
                 }
             } header: {
                 Text(video.title.isEmpty ? "Choose a quality" : video.title)
@@ -71,6 +71,8 @@ struct DownloadOptionsSheet: View {
                 Text("Downloads play offline in the No Slop player, even without a connection. Sizes are estimates. The files are also in the Files app, in the No Slop folder.")
             }
         }
+        // From the list, like the Downloads screen does: the row that asked may have changed by the time it is answered.
+        .confirmingDownloadRemoval($removal)
     }
 
     private func loadOptions() async {
@@ -92,6 +94,8 @@ private struct OptionRow: View {
     let option: DownloadOption
     /// Called after a download was started or restarted, to close the sheet.
     let onStarted: () -> Void
+    /// Cancelling and deleting ask first: the row hands the question to the sheet, which shows it.
+    let onRemove: (DownloadRemoval) -> Void
 
     @Environment(AppEnvironment.self) private var env
 
@@ -120,7 +124,14 @@ private struct OptionRow: View {
             }
             .buttonStyle(.plain)
             .accessibilityLabel("Download \(option.label)")
+            // Spoken after the label: "Download 1080p, About 268 MB, button". Without it the size is only on screen.
+            .accessibilityValue(sizeText)
         }
+    }
+
+    /// What a button of this row acts on, for VoiceOver: "720p", "audio-only".
+    private var downloadName: String {
+        option.quality == .audioOnly ? "audio-only" : option.label
     }
 
     private var titleAndSize: some View {
@@ -155,9 +166,10 @@ private struct OptionRow: View {
                 }
                 Spacer(minLength: 8)
                 Button("Delete", role: .destructive) {
-                    env.downloads.delete(id: item.id)
+                    onRemove(DownloadRemoval(kind: .delete, item: item))
                 }
                 .buttonStyle(.borderless)
+                .accessibilityLabel("Delete \(downloadName) download")
             }
 
         case .queued, .downloading, .merging:
@@ -167,9 +179,10 @@ private struct OptionRow: View {
                         .font(.body)
                     Spacer(minLength: 8)
                     Button("Cancel", role: .destructive) {
-                        env.downloads.cancel(id: item.id)
+                        onRemove(DownloadRemoval(kind: .cancel, item: item))
                     }
                     .buttonStyle(.borderless)
+                    .accessibilityLabel("Cancel \(downloadName) download")
                 }
                 ProgressView(value: min(1, max(0, item.progress)))
                     .tint(Theme.accent)
@@ -194,6 +207,7 @@ private struct OptionRow: View {
                     onStarted()
                 }
                 .buttonStyle(.borderless)
+                .accessibilityLabel("Retry \(downloadName) download")
             }
         }
     }
