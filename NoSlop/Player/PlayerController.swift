@@ -679,11 +679,19 @@ final class PlayerController {
         start(step.next, startAt: nil, queue: [], more: nil, upNext: step.remaining, expand: false)
     }
 
-    /// The first up-next suggestion the viewer has not watched, and the suggestions that stay up next behind it.
+    /// The first up-next suggestion the viewer has not watched and the viewer's filters allow, and the suggestions that
+    /// stay up next behind it.
     private func autoplayStep(after video: VideoSummary) -> AutoplayPlanner.Step? {
-        AutoplayPlanner.step(after: video.id, upNext: upNext) { [library] id in
-            library.progress(for: id)?.progressSeconds
-        }
+        // The filters as they are now, not as they were when the list was published: a channel blocked since (on Home
+        // while the mini player showed, or between two videos of a run that carries the list along) counts, whatever
+        // the watch page did or did not get to hear about it.
+        let filter = ContentFilter(settings: settings)
+        return AutoplayPlanner.step(
+            after: video.id,
+            upNext: upNext,
+            progress: { [library] id in library.progress(for: id)?.progressSeconds },
+            allows: { filter.allows($0) }
+        )
     }
 
     // MARK: Failures and recovery

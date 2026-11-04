@@ -62,6 +62,11 @@ private struct WatchDetailsContent: View {
         #endif
         .task { await model.load(using: env) }
         .task(id: env.googleAccount?.id) { await model.loadRating(using: env) }
+        // "Don't show this channel" on a row of the Up next list (or any other feed filter) takes effect on the list and on
+        // the player's autoplay list at once, like on the other lists, not after the page is loaded again.
+        .onChange(of: env.settings) {
+            model.filtersChanged(using: env)
+        }
         .sheet(isPresented: $isShowingComments) {
             CommentsSheet(
                 video: model.summary,
