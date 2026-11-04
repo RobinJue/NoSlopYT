@@ -90,19 +90,25 @@ import Testing
         #expect(await gate.availablePermits == 1)
     }
 
-    @Test func aMergeThatFailsGivesItsPermitBack() async throws {
+    @Test func aMergeWhoseExportFailsGivesItsPermitBack() async throws {
         let directory = try DownloadTestDirectory.make()
         defer { directory.remove() }
-        let garbage = directory.url.appendingPathComponent("audio.m4a")
-        try Data(repeating: 0x42, count: 4_096).write(to: garbage)
+        // Readable input, so the merge gets as far as the gate; an output whose folder does not exist, so that the export
+        // itself fails once it has its permit.
+        let audio = try Fixture.url("zoo_audio.m4a")
+        let output = directory.url.appendingPathComponent("no-such-folder/out.m4a")
 
         let gate = ExportGate(permits: 1)
-        await #expect(throws: (any Error).self) {
-            try await MediaMuxer.mux(
-                videoFile: nil, audioFile: garbage, durationSeconds: 10,
-                output: directory.url.appendingPathComponent("out.m4a"), gate: gate
-            )
+        try await gate.acquire()   // the test holds the only permit: the merge can only fail after it was let in
+        let merge = Task {
+            try await MediaMuxer.mux(videoFile: nil, audioFile: audio, durationSeconds: Self.trueDuration, output: output, gate: gate)
         }
-        #expect(await gate.availablePermits == 1)
+        #expect(await eventually(timeout: .seconds(5)) { await gate.waitingCount == 1 }, "the merge got as far as the gate")
+
+        await gate.release()   // the permit goes straight to the merge, and the export fails inside it
+        await #expect(throws: DownloadFailure.self) { try await merge.value }   // a failed merge, not a cancelled one
+        #expect(await gate.availablePermits == 1, "the permit is back after a failed export")
+        #expect(await gate.waitingCount == 0)
+        #expect(!FileManager.default.fileExists(atPath: output.path))
     }
 }
