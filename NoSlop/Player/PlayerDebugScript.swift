@@ -1,5 +1,6 @@
 #if DEBUG
 import Foundation
+import MediaAccessibility
 import NoSlopKit
 
 /// Checks in the simulator that links cannot reach, driven by a launch argument. Debug builds only.
@@ -26,7 +27,9 @@ import NoSlopKit
 ///   `highlight=<seconds>` adds a highlight (a moment, `poi_highlight`) at that second
 /// - `log=<tag>` writes the state of the player to the log, `watch=<seconds>` does so every second meanwhile,
 ///   `axdump=<tag>` writes the accessibility elements of this moment to `<Documents>/ax-<tag>.txt` (see
-///   `AccessibilityDump`), `axescape` is the two-finger scrub of VoiceOver with the focus on the video
+///   `AccessibilityDump`), `axescape` is the two-finger scrub of VoiceOver with the focus on the video,
+///   `captionStyle=<parts separated by |>` changes the caption style the way Settings does while the app runs (see
+///   `-captionStyle`: `captionStyle=size=2|text=yellow`), `captionStyle=` puts the standard look back
 @MainActor
 enum PlayerDebugScript {
     static func runIfRequested(on player: PlayerController) {
@@ -126,6 +129,16 @@ enum PlayerDebugScript {
                 }
             case "axdump":
                 AccessibilityDump.write(tag: value)
+            case "captionStyle":
+                // What Settings does: the style changes and the system tells the apps with this notification.
+                UserDefaults.standard.set(value.replacingOccurrences(of: "|", with: ";"), forKey: "captionStyle")
+                CFNotificationCenterPostNotification(
+                    CFNotificationCenterGetLocalCenter(),
+                    CFNotificationName(kMACaptionAppearanceSettingsChangedNotification),
+                    nil,
+                    nil,
+                    true
+                )
             case "axescape":
                 _ = AccessibilityDump.performEscape(startingAtLabel: value.isEmpty ? "Video" : value)
             case "log":
