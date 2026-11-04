@@ -137,6 +137,24 @@ enum DebugLaunchHooks {
         return scroll
     }
 
+    /// Scrolls the watch page (the biggest scroll view that starts below the player, 200 pt down the screen) to `offset`,
+    /// through UIKit: nothing keeps the position afterwards, so what the page does by itself shows.
+    static func scrollWatchPage(to offset: Double) {
+        let windows = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.flatMap(\.windows)
+        var best: UIScrollView?
+        func visit(_ view: UIView) {
+            if view.isHidden || view.alpha < 0.01 { return }
+            if let scrollView = view as? UIScrollView, scrollView.isScrollEnabled,
+               scrollView.convert(scrollView.bounds, to: nil).minY > 200,
+               scrollView.bounds.width * scrollView.bounds.height > (best.map { $0.bounds.width * $0.bounds.height } ?? 0) {
+                best = scrollView
+            }
+            view.subviews.forEach(visit)
+        }
+        windows.forEach(visit)
+        best?.setContentOffset(CGPoint(x: 0, y: offset), animated: false)
+    }
+
     /// Scrolls the biggest scroll view on screen to its very end, room for the content margins included.
     static func scrollBiggestScrollViewToEnd() {
         let windows = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.flatMap(\.windows)

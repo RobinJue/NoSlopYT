@@ -28,6 +28,8 @@ private struct WatchDetailsContent: View {
     @State private var isShowingDownloads = false
     @State private var isShowingPlaylists = false
     @State private var isExplainingSignIn = false
+    @State private var scrollPosition = ScrollPosition()
+    @State private var scrollMemory = PageScrollMemory()
 
     init(video: VideoSummary) {
         self.video = video
@@ -45,6 +47,12 @@ private struct WatchDetailsContent: View {
             .padding(.bottom, 24)
         }
         .scrollBounceBehavior(.basedOnSize)
+        .scrollPosition($scrollPosition)
+        .onScrollGeometryChange(for: PageScroll.self) { geometry in
+            PageScroll(offset: geometry.contentOffset.y, height: geometry.containerSize.height)
+        } action: { _, page in
+            pageScrolled(page)
+        }
         #if DEBUG
         .debugWatchPageSteps(
             isLoaded: debugIsLoaded,
@@ -90,6 +98,30 @@ private struct WatchDetailsContent: View {
             Text(model.ratingFailure ?? "")
         }
     }
+
+    // MARK: Scroll position
+
+    /// Full screen collapses the page to no height and turning the phone lays it out again, and SwiftUI does not keep
+    /// the scroll offset through that: the page comes back scrolled somewhere else (a few rows further down, in the
+    /// simulator). So the page remembers where it was while it had room to be seen, and puts the offset back when it
+    /// has room again.
+    private func pageScrolled(_ page: PageScroll) {
+        if page.height < Self.collapsedHeight {
+            scrollMemory.isCollapsed = true
+            return
+        }
+        if scrollMemory.isCollapsed {
+            scrollMemory.isCollapsed = false
+            if let offset = scrollMemory.offset {
+                scrollPosition.scrollTo(y: offset)
+            }
+            return
+        }
+        scrollMemory.offset = page.offset
+    }
+
+    /// A page with less height than this is collapsed (full screen), not scrolled by the viewer.
+    private static let collapsedHeight: CGFloat = 100
 
     #if DEBUG
     private var debugIsLoaded: Bool {
@@ -416,6 +448,19 @@ private struct WatchDetailsContent: View {
     }
 }
 
+/// How far the page is scrolled and how tall it is, as the scroll view reports it.
+private struct PageScroll: Equatable {
+    var offset: CGFloat
+    var height: CGFloat
+}
+
+/// What the page remembers about its scroll position. A plain object, not state: remembering must not redraw the page
+/// at every frame of a scroll.
+private final class PageScrollMemory {
+    var offset: CGFloat?
+    var isCollapsed = false
+}
+
 /// A rounded action chip: an icon and a short label on a soft background, in the primary colour or a tint.
 private struct ChipLabel: View {
     let title: String
@@ -467,11 +512,8 @@ private struct DebugWatchPageModifier: ViewModifier {
     @Binding var isTitleExpanded: Bool
     @Binding var isShowingComments: Bool
 
-    @State private var position = ScrollPosition()
-
     func body(content: Content) -> some View {
         content
-            .scrollPosition($position)
             .task(id: isLoaded) {
                 guard isLoaded else { return }
                 // Lists below the description are still being measured for a moment after the page has loaded.
@@ -480,7 +522,7 @@ private struct DebugWatchPageModifier: ViewModifier {
                     isTitleExpanded = true
                 }
                 if let points = DebugLaunchHooks.takeWatchPageStep("scroll").flatMap(Double.init) {
-                    position.scrollTo(y: points)
+                    DebugLaunchHooks.scrollWatchPage(to: points)
                 }
                 if DebugLaunchHooks.takeWatchPageStep("comments") != nil {
                     try? await Task.sleep(for: .seconds(1))

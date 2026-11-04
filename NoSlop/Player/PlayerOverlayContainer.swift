@@ -83,9 +83,10 @@ struct PlayerOverlayContainer: View {
                     .gesture(minimizeGesture(player), including: fullscreen ? .subviews : .all)
 
                 // Full screen only collapses the page: it stays in the view tree, without any height, so that turning
-                // the phone or tapping Full screen does not throw away how far the viewer had scrolled, the expanded
-                // title and description and an open Comments sheet (they live in the page's own state). The player
-                // is as tall as the panel then, so the two still add up to the whole of it.
+                // the phone or tapping Full screen does not throw away the expanded title and description and an
+                // open Comments sheet (they live in the page's own state), nor how far the viewer had scrolled (the
+                // page puts its offset back itself when it has room again). The player is as tall as the panel then,
+                // so the two still add up to the whole of it.
                 WatchDetailsView(video: video)
                     .id(video.id)
                     .frame(width: columnWidth, height: fullscreen ? 0 : nil)
