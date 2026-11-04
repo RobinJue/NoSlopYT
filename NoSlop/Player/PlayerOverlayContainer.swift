@@ -62,6 +62,10 @@ struct PlayerOverlayContainer: View {
                 player.isFullscreen = true
             }
         }
+        .onChange(of: env.settings.deArrowTitles) { _, _ in
+            // The lock screen and the spoken label of the mini player show the title the setting picks.
+            player.deArrowSettingChanged()
+        }
     }
 
     // MARK: Expanded

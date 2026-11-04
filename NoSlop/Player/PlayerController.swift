@@ -43,6 +43,7 @@ final class PlayerController {
 
     private let streams: any StreamResolving
     private let sponsorBlock: any SponsorBlockProviding
+    private let deArrow: any DeArrowProviding
     private let captions: any CaptionsProviding
     private let library: LibraryStore
     private let settingsStore: SettingsStore
@@ -91,6 +92,8 @@ final class PlayerController {
     private(set) var isLive = false
     /// The first frame has played at least once for this video (until then the thumbnail is shown as a poster).
     private(set) var hasStartedPlayback = false
+    /// The community title DeArrow has for the current video; nil while it is not known, and when there is none.
+    private(set) var betterTitle: String?
     /// Recovery is waiting for the device to come back online.
     private(set) var isWaitingForConnection = false
 
@@ -118,6 +121,7 @@ final class PlayerController {
     @ObservationIgnored private var loadTask: Task<Void, Never>?
     @ObservationIgnored private var recoveryTask: Task<Void, Never>?
     @ObservationIgnored private var segmentsTask: Task<Void, Never>?
+    @ObservationIgnored private var titleTask: Task<Void, Never>?
     @ObservationIgnored private var captionTask: Task<Void, Never>?
     @ObservationIgnored private var skipNoticeTask: Task<Void, Never>?
     @ObservationIgnored private var stallTask: Task<Void, Never>?
@@ -162,6 +166,7 @@ final class PlayerController {
     /// The video whose segments were asked for and not given up on: set when the lookup starts, cleared when every
     /// attempt failed, so that the next chance (Retry, a reload, the connection coming back) asks again.
     @ObservationIgnored private var segmentsRequestedFor: String?
+    @ObservationIgnored private var betterTitleRequestedFor: String?
     @ObservationIgnored private var declinedSkips: Set<String> = []
     @ObservationIgnored private var lastSkip: (id: String, at: Date)?
 
@@ -175,6 +180,7 @@ final class PlayerController {
     init(
         streams: any StreamResolving,
         sponsorBlock: any SponsorBlockProviding,
+        deArrow: any DeArrowProviding,
         captions: any CaptionsProviding,
         library: LibraryStore,
         settingsStore: SettingsStore,
@@ -182,6 +188,7 @@ final class PlayerController {
     ) {
         self.streams = streams
         self.sponsorBlock = sponsorBlock
+        self.deArrow = deArrow
         self.captions = captions
         self.library = library
         self.settingsStore = settingsStore
@@ -223,7 +230,8 @@ final class PlayerController {
         !queue.isEmpty
     }
 
-    /// The thumbnail covers the picture: nothing has played yet, or the file has no picture.
+    /// The thumbnail shows where the picture is not (yet): nothing has played yet, or the file has no picture. The video
+    /// surface is transparent (`VideoSurfaceView`), so the thumbnail drawn below it is what shows until the first frame.
     var showsPoster: Bool {
         !hasStartedPlayback || isAudioOnlyPlayback
     }
@@ -232,6 +240,14 @@ final class PlayerController {
     var failureMessage: String? {
         if case .failed(let message) = state { return message }
         return nil
+    }
+
+    /// The title of the current video as the app shows it: DeArrow's community title when "De-clickbait titles" is on
+    /// and one is known, else the original. The lock screen and Control Center get this one, and so does the spoken
+    /// label of the mini player. Nil when no video is loaded.
+    var displayTitle: String? {
+        guard let video = currentVideo else { return nil }
+        return DisplayTitle.resolve(original: video.title, better: betterTitle, deArrowEnabled: settings.deArrowTitles)
     }
 
     // MARK: Loading
@@ -334,6 +350,9 @@ final class PlayerController {
         qualityIsManual = false
         applyDefaultQuality()
         rate = Self.clampedRate(settings.defaultPlaybackRate)
+        betterTitle = nil
+        betterTitleRequestedFor = nil
+        ensureBetterTitle(for: video.id)
 
         if expand {
             presentation = .expanded
@@ -548,11 +567,13 @@ final class PlayerController {
         loadTask?.cancel()
         recoveryTask?.cancel()
         segmentsTask?.cancel()
+        titleTask?.cancel()
         captionTask?.cancel()
         skipNoticeTask?.cancel()
         loadTask = nil
         recoveryTask = nil
         segmentsTask = nil
+        titleTask = nil
         captionTask = nil
         skipNoticeTask = nil
     }
@@ -945,6 +966,8 @@ final class PlayerController {
         planner = nil
         plannerLength = nil
         segmentsRequestedFor = nil
+        betterTitle = nil
+        betterTitleRequestedFor = nil
         cueTimeline = CueTimeline(cues: [])
         selectedCaption = nil
         isFullscreen = false
@@ -1320,6 +1343,37 @@ final class PlayerController {
         }
     }
 
+    // MARK: De-clickbait title
+
+    /// Looks up the community title of the video once, when "De-clickbait titles" is on. A title the lists already
+    /// asked for (`DeArrowTitleCache`) is taken at once; otherwise it arrives a moment later and the lock screen is
+    /// told. No answer, and a failed lookup, leave the original title.
+    private func ensureBetterTitle(for videoID: String) {
+        guard settings.deArrowTitles, betterTitleRequestedFor != videoID else { return }
+        betterTitleRequestedFor = videoID
+        titleTask?.cancel()
+        if let known = DeArrowTitleCache.shared.lookup(videoID) {
+            betterTitle = known.title
+            return
+        }
+        titleTask = Task { [weak self] in
+            guard let self else { return }
+            let title = await self.deArrow.betterTitle(videoID: videoID)
+            guard !Task.isCancelled, self.currentVideo?.id == videoID else { return }
+            DeArrowTitleCache.shared.store(title, for: videoID)
+            self.betterTitle = title
+            self.updateNowPlaying()
+        }
+    }
+
+    /// The viewer switched "De-clickbait titles" while a video is loaded: the lock screen follows, and the community
+    /// title is looked up if it never was (the setting was off when the video started).
+    func deArrowSettingChanged() {
+        guard let id = currentVideo?.id else { return }
+        ensureBetterTitle(for: id)
+        updateNowPlaying()
+    }
+
     // MARK: Captions
 
     func toggleCaptions() {
@@ -1589,6 +1643,7 @@ final class PlayerController {
         let playing = state == .playing
         nowPlaying.update(
             video: video,
+            title: displayTitle ?? video.title,
             duration: duration,
             elapsed: currentTime,
             rate: playing ? Double(avPlayer.rate) : 0,
@@ -1686,6 +1741,7 @@ extension PlayerController {
             videoUpcoming=\(self.currentVideo?.isUpcoming ?? false) \
             history=\(self.library.history.map(\.id).joined(separator: ","), privacy: .public) \
             nowPlaying=\(self.nowPlaying.debugPublished, privacy: .public) \
+            displayTitle=\(self.displayTitle ?? "-", privacy: .public) \
             presentation=\(String(describing: self.presentation), privacy: .public) fullscreen=\(self.isFullscreen) \
             window=\(Int(bounds.width))x\(Int(bounds.height)) safeTop=\(insets.top) safeBottom=\(insets.bottom)
             """)

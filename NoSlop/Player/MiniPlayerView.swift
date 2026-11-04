@@ -144,8 +144,9 @@ struct MiniPlayerView: View {
     }
 
     private func accessibilityTitle(_ player: PlayerController) -> String {
-        guard let video = player.currentVideo else { return "Player" }
-        let title = video.title.isEmpty ? "Video" : video.title
+        // The title the visible text shows: with De-clickbait titles on, the community title.
+        guard let video = player.currentVideo, let shown = player.displayTitle else { return "Player" }
+        let title = shown.isEmpty ? "Video" : shown
         if let channel = video.channel?.name, !channel.isEmpty {
             return "\(title), \(channel)"
         }

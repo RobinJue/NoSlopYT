@@ -33,6 +33,7 @@ final class NowPlayingCenter {
 
     private struct Update {
         var video: VideoSummary
+        var title: String
         var duration: Double
         var elapsed: Double
         var rate: Double
@@ -43,10 +44,27 @@ final class NowPlayingCenter {
     // MARK: Publishing
 
     /// Publishes the current state. Cheap; call it on every state change, seek and rate change (not on every tick:
-    /// the system extrapolates the position from `rate`).
-    func update(video: VideoSummary, duration: Double, elapsed: Double, rate: Double, isLive: Bool, canPlayNext: Bool) {
+    /// the system extrapolates the position from `rate`). `title` is what the lock screen, Control Center and AirPlay
+    /// show: the same title the app shows (`PlayerController.displayTitle`), not necessarily `video.title`.
+    func update(
+        video: VideoSummary,
+        title: String,
+        duration: Double,
+        elapsed: Double,
+        rate: Double,
+        isLive: Bool,
+        canPlayNext: Bool
+    ) {
         installCommandsIfNeeded()
-        lastUpdate = Update(video: video, duration: duration, elapsed: elapsed, rate: rate, isLive: isLive, canPlayNext: canPlayNext)
+        lastUpdate = Update(
+            video: video,
+            title: title,
+            duration: duration,
+            elapsed: elapsed,
+            rate: rate,
+            isLive: isLive,
+            canPlayNext: canPlayNext
+        )
         loadArtworkIfNeeded(for: video)
         publish()
 
@@ -80,7 +98,7 @@ final class NowPlayingCenter {
     private func publish() {
         guard let update = lastUpdate else { return }
         var info: [String: Any] = [
-            MPMediaItemPropertyTitle: update.video.title,
+            MPMediaItemPropertyTitle: update.title,
             MPNowPlayingInfoPropertyElapsedPlaybackTime: max(0, update.elapsed),
             MPNowPlayingInfoPropertyPlaybackRate: update.rate,
             MPNowPlayingInfoPropertyDefaultPlaybackRate: 1.0,

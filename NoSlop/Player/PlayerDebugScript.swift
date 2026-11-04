@@ -18,8 +18,8 @@ import NoSlopKit
 ///   (a link to it), `openStaleLive=<video id>` opens a video whose saved copy still says live and upcoming (a row
 ///   of Watch Later after the broadcast ended)
 /// - `seek=<seconds>`, `seekEnd=<seconds before the end>`, `undo` (the skip notice's Undo)
-/// - `captions=<on|off>`, `fullscreen`, `minimize`, `expand`, `autoplay=<on|off>`, `sponsorBlock=<on|off>`, `notice`
-///   (shows the skip notice and leaves it up)
+/// - `captions=<on|off>`, `fullscreen`, `minimize`, `expand`, `autoplay=<on|off>`, `sponsorBlock=<on|off>`,
+///   `deArrow=<on|off>` ("De-clickbait titles"), `notice` (shows the skip notice and leaves it up)
 /// - `segment=<start>-<end>[@<length>]` adds a SponsorBlock segment (`@` is the length of the video it was submitted
 ///   for), `endSegment=<seconds before the end>[,<seconds past it>]` adds one that runs to the end of the video
 /// - `log=<tag>` writes the state of the player to the log, `watch=<seconds>` does so every second meanwhile
@@ -100,6 +100,8 @@ enum PlayerDebugScript {
                 player.debugSettingsStore.settings.autoplayNext = value == "on"
             case "sponsorBlock":
                 player.debugSettingsStore.settings.sponsorBlockEnabled = value == "on"
+            case "deArrow":
+                player.debugSettingsStore.settings.deArrowTitles = value == "on"
             case "segment":
                 let parts = value.split(separator: "@", maxSplits: 1)
                 let range = (parts.first ?? "").split(separator: "-").compactMap { Double($0) }

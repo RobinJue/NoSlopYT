@@ -76,6 +76,7 @@ final class AppEnvironment {
         self.player = PlayerController(
             streams: streams,
             sponsorBlock: sponsorBlock,
+            deArrow: deArrow,
             captions: captions,
             library: library,
             settingsStore: settingsStore,
