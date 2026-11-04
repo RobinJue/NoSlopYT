@@ -5,6 +5,7 @@ import SwiftUI
 /// "Manage" opens the subscriptions manager.
 struct SubscriptionsView: View {
     @Environment(AppEnvironment.self) private var env
+    @Environment(\.scenePhase) private var scenePhase
     @State private var model = SubscriptionsViewModel()
 
     var body: some View {
@@ -24,10 +25,19 @@ struct SubscriptionsView: View {
             }
         }
         .task { model.loadIfNeeded(using: env) }
-        // Back from the full-screen player: something may have been watched, which the filters can hide.
+        // Back from the full-screen player: something may have been watched, which the filters can hide, and the feed
+        // may have grown old while the video played.
         .onChange(of: env.player.presentation) { _, presentation in
             if presentation != .expanded {
-                model.applyFilter(using: env)
+                model.loadIfNeeded(using: env)
+            }
+        }
+        // Coming back to the app after hours in the background (it stays alive for days): the feed is looked at again,
+        // and refreshed when it is past its age, as it is when the tab is opened. While a video is on screen it waits for
+        // the player to go away (above); a tab that is not showing waits for its `.task`.
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active, env.router.selectedTab == .subscriptions, env.player.presentation != .expanded {
+                model.loadIfNeeded(using: env)
             }
         }
         // "Don't show this channel" (or any other feed filter) takes effect on what is on screen, not after a reload.
