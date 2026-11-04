@@ -8,6 +8,11 @@ import UIKit
 ///
 /// Several surfaces can exist at once (the expanded player and the mini player during a transition); they all show
 /// the same `AVPlayer`.
+///
+/// The surface is transparent. Until the first frame is drawn, and wherever the picture does not reach (the bars of a
+/// video that is not 16:9), what the caller put underneath shows: the thumbnail as a poster, on a black base. So every
+/// caller draws its own black base below the surface; an opaque black surface would hide the poster for the seconds a
+/// video takes to load.
 struct VideoSurfaceView: UIViewRepresentable {
     let player: AVPlayer
     /// Without it the surface just shows the player (no Picture in Picture, no background detaching).
@@ -16,7 +21,8 @@ struct VideoSurfaceView: UIViewRepresentable {
 
     func makeUIView(context: Context) -> PlayerLayerView {
         let view = PlayerLayerView()
-        view.backgroundColor = .black
+        view.backgroundColor = .clear
+        view.isOpaque = false
         // Touches belong to the SwiftUI controls drawn on top of the video.
         view.isUserInteractionEnabled = false
         view.isAccessibilityElement = false

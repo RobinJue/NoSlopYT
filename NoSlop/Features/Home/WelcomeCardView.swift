@@ -24,7 +24,7 @@ struct WelcomeCardView: View {
 
             VStack(spacing: 10) {
                 Button {
-                    env.router.selectedTab = .search
+                    env.router.showRoot(of: .search)
                 } label: {
                     Label("Search", systemImage: "magnifyingglass")
                         .frame(maxWidth: .infinity)
@@ -33,7 +33,7 @@ struct WelcomeCardView: View {
 
                 if env.googleAccount == nil {
                     Button {
-                        env.router.selectedTab = .library
+                        env.router.showRoot(of: .library)
                     } label: {
                         Label("Sign in with Google", systemImage: "person.crop.circle")
                             .frame(maxWidth: .infinity)

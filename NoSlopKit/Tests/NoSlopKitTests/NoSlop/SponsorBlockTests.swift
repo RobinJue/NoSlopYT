@@ -40,9 +40,11 @@ private func rawSegment(
     category: String = "sponsor",
     action: String = "skip",
     start: Double = 10,
-    end: Double = 20
+    end: Double = 20,
+    videoDuration: String? = "300"
 ) -> String {
-    #"{"category":"\#(category)","actionType":"\#(action)","segment":[\#(start),\#(end)],"UUID":"\#(uuid)","videoDuration":300,"locked":0,"votes":1,"description":""}"#
+    let length = videoDuration.map { #""videoDuration":\#($0),"# } ?? ""
+    return #"{"category":"\#(category)","actionType":"\#(action)","segment":[\#(start),\#(end)],"UUID":"\#(uuid)",\#(length)"locked":0,"votes":1,"description":""}"#
 }
 
 /// An `HTTPClient` that answers every request with the same body after a delay and counts the requests, so that tests
@@ -104,7 +106,8 @@ private final class SlowHTTPClient: HTTPClient, @unchecked Sendable {
                 category: .sponsor,
                 actionType: .skip,
                 start: 3.662,
-                end: 36.322
+                end: 36.322,
+                videoDuration: 1224.241
             ),
         ])
         #expect(segments.first?.id.hasPrefix("e366ae05") == true)
@@ -139,6 +142,64 @@ private final class SlowHTTPClient: HTTPClient, @unchecked Sendable {
         let client = SponsorBlockClient(http: http)
 
         #expect(try await client.segments(videoID: "dQw4w9WgXcQ").isEmpty)
+    }
+
+    // MARK: Submitted length
+
+    @Test func theSubmittedLengthIsKept() async throws {
+        let http = MockHTTPClient()
+        http.enqueue("api/skipSegments/", body: response(videoID: "v", segments: [rawSegment(uuid: "x")]))
+
+        let result = try await SponsorBlockClient(http: http).segments(videoID: "v")
+
+        #expect(result.first?.videoDuration == 300)
+    }
+
+    @Test func aLengthThatIsMissingZeroOrNotUsableIsUnknown() async throws {
+        let segments = [
+            rawSegment(uuid: "missing", start: 10, end: 20, videoDuration: nil),
+            rawSegment(uuid: "zero", start: 30, end: 40, videoDuration: "0"),
+            rawSegment(uuid: "negative", start: 50, end: 60, videoDuration: "-12.5"),
+            rawSegment(uuid: "text", start: 70, end: 80, videoDuration: #""long""#),
+            rawSegment(uuid: "null", start: 90, end: 100, videoDuration: "null"),
+            rawSegment(uuid: "fraction", start: 110, end: 120, videoDuration: "33.181"),
+        ]
+        let http = MockHTTPClient()
+        http.enqueue("api/skipSegments/", body: response(videoID: "v", segments: segments))
+
+        let result = try await SponsorBlockClient(http: http).segments(videoID: "v")
+
+        #expect(result.map(\.id) == ["missing", "zero", "negative", "text", "null", "fraction"])
+        #expect(result.map(\.videoDuration) == [nil, nil, nil, nil, nil, 33.181])
+    }
+
+    @Test func theFixtureSegmentsCarryTheLengthTheyWereSubmittedFor() async throws {
+        let http = MockHTTPClient()
+        http.enqueue("api/skipSegments/", body: try Fixture.data("sponsorblock_prefix.json"))
+        let client = SponsorBlockClient(http: http)
+
+        let known = try await client.segments(videoID: "1H8_tk_dMLw")
+        #expect(known.map(\.videoDuration) == [1224.241])
+
+        // This video's segments were submitted with a length of 0 (unknown).
+        let unknown = try await client.segments(videoID: "5t6saOlOTZE")
+        #expect(unknown.map(\.start) == [171.933, 438.051])
+        #expect(unknown.map(\.category) == [.sponsor, .selfpromo])
+        #expect(unknown.map(\.videoDuration) == [nil, nil])
+    }
+
+    @Test func aSegmentDecodesWithoutALengthAndKeepsItWhenSaved() throws {
+        let withoutLength = Data(#"{"id":"u","category":"sponsor","actionType":"skip","start":1,"end":2}"#.utf8)
+        let decoded = try JSONDecoder().decode(SponsorSegment.self, from: withoutLength)
+        #expect(decoded == SponsorSegment(id: "u", category: .sponsor, actionType: .skip, start: 1, end: 2))
+        #expect(decoded.videoDuration == nil)
+
+        let withLength = SponsorSegment(id: "u", category: .sponsor, actionType: .skip, start: 1, end: 2, videoDuration: 600.5)
+        let roundTripped = try JSONDecoder().decode(SponsorSegment.self, from: JSONEncoder().encode(withLength))
+        #expect(roundTripped == withLength)
+        #expect(roundTripped.videoDuration == 600.5)
+        // The length is part of what makes two segments equal.
+        #expect(withLength != decoded)
     }
 
     // MARK: More lookups

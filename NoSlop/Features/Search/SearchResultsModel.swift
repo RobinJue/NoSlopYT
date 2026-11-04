@@ -7,6 +7,10 @@ import Observation
 /// Shared by the Search tab (`SearchView`) and the pushed results screen (`SearchResultsView`). Searches run in a
 /// task of the model's own, so a screen that disappears and returns does not restart them; a newer search (another
 /// query or filter) cancels the older one and its late answer is ignored (`generation`).
+///
+/// A pull to refresh keeps the results on screen until the new first page is there, and when it cannot be fetched
+/// (offline) for good, with `refreshFailure` saying so, like the other lists of the app. A new query, another filter and
+/// Retry start from nothing.
 @MainActor
 @Observable
 final class SearchResultsModel {
@@ -22,6 +26,9 @@ final class SearchResultsModel {
     private(set) var phase: Phase = .idle
     /// The results, page by page.
     let list = FeedPages<SearchItem>()
+    /// Set when a pull to refresh failed while the results of the search are still on screen: they stay, and this says why
+    /// they were not refreshed. Cleared by the next search.
+    private(set) var refreshFailure: Error?
 
     /// There is a search to show (one was started and not cleared).
     var hasSearch: Bool { !query.isEmpty }
@@ -32,14 +39,27 @@ final class SearchResultsModel {
     // MARK: Searching
 
     /// Starts a search, replacing the current one. `filter` nil keeps the current filter.
-    func search(_ newQuery: String, filter newFilter: SearchFilter? = nil, using env: AppEnvironment) {
+    ///
+    /// `keepingResults` is for running the same search again (a pull to refresh): the results on screen stay until the new
+    /// first page replaces them, and stay for good when it cannot be fetched. Without results to keep it is an ordinary
+    /// search.
+    func search(
+        _ newQuery: String,
+        filter newFilter: SearchFilter? = nil,
+        keepingResults: Bool = false,
+        using env: AppEnvironment
+    ) {
         searchTask?.cancel()
         generation += 1
         let thisGeneration = generation
         query = newQuery
         if let newFilter { filter = newFilter.normalized }
-        list.removeAll()
-        phase = .loading
+        let keeping = keepingResults && !list.items.isEmpty
+        refreshFailure = nil
+        if !keeping {
+            list.removeAll()
+            phase = .loading
+        }
 
         let currentFilter = filter
         searchTask = Task { [weak self] in
@@ -55,6 +75,12 @@ final class SearchResultsModel {
             } catch {
                 guard let self, self.generation == thisGeneration else { return }
                 self.searchTask = nil
+                if keeping {
+                    // The results stay as they are, a cancellation included (it must not leave placeholders behind). A
+                    // real failure is reported above them.
+                    if !FeedError.isCancellation(error) { self.refreshFailure = error }
+                    return
+                }
                 self.phase = FeedError.isCancellation(error) ? .idle : .failed(error)
             }
         }
@@ -77,10 +103,11 @@ final class SearchResultsModel {
         search(query, using: env)
     }
 
-    /// Pull to refresh: runs the search again and suspends until the first page is there.
+    /// Pull to refresh: runs the search again and suspends until the first page is there (or the refresh has failed).
+    /// The results on screen stay meanwhile.
     func refresh(using env: AppEnvironment) async {
         guard hasSearch else { return }
-        search(query, using: env)
+        search(query, keepingResults: true, using: env)
         await searchTask?.value
     }
 
@@ -100,6 +127,7 @@ final class SearchResultsModel {
         searchTask = nil
         generation += 1
         query = ""
+        refreshFailure = nil
         list.removeAll()
         phase = .idle
     }

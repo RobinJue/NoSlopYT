@@ -8,10 +8,13 @@ import NoSlopKit
 ///   ("watchLater", "watch-later" and "watch_later" are the same name)
 /// - `noslop://watch?v=<id>[&t=<seconds>]`, `noslop://channel/<id>`, `noslop://playlist/<id>` and
 ///   `noslop://search?q=<text>` mean what the same YouTube link means, and are read by the same parser
-///   (`YouTubeURL`), so the two cannot disagree about what an id or a time looks like.
+///   (`YouTubeURL`), so a start time is read the same way in both.
 ///
-/// A link that is incomplete or malformed (a video id of the wrong length, a time that is not a number, an unknown
-/// name) is not a link at all: `init` returns nil and the app says so instead of guessing.
+/// A link that is incomplete or malformed (a video id that is not eleven id characters, a missing channel or playlist
+/// id or search text, an unknown tab or route name, an unknown host) is not a link at all: `init` returns nil and the
+/// app says so instead of guessing. A start time that cannot be read (`t=abc`, `t=1.5`, `t=-5`, a value too large)
+/// is not an error: it is ignored and the video opens from its saved position (or from the start), as it does for
+/// the same YouTube link.
 nonisolated enum AppLink: Equatable, Sendable {
     case tab(AppTab)
     case route(Route)

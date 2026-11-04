@@ -111,6 +111,16 @@ public actor SponsorBlockClient: SponsorBlockProviding {
               start.isFinite, end.isFinite, start >= 0, end >= start else { return nil }
         // A highlight is a single moment (start == end); anything else needs a length.
         guard end > start || actionType == .poi else { return nil }
-        return SponsorSegment(id: id, category: category, actionType: actionType, start: start, end: end)
+        // The length of the video the segment was submitted for. The service sends 0 when it does not know; that and
+        // anything unusable is "unknown".
+        let submittedLength = raw["videoDuration"]?.double.flatMap { $0.isFinite && $0 > 0 ? $0 : nil }
+        return SponsorSegment(
+            id: id,
+            category: category,
+            actionType: actionType,
+            start: start,
+            end: end,
+            videoDuration: submittedLength
+        )
     }
 }

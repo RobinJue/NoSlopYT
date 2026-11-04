@@ -12,6 +12,16 @@ enum PlayerLayout {
     static func isLandscapePhone(verticalSizeClass: UserInterfaceSizeClass?) -> Bool {
         UIDevice.current.userInterfaceIdiom == .phone && verticalSizeClass == .compact
     }
+
+    /// The tab bar is at the top only for an iPad in a regular-width window. An iPhone has it at the bottom (a Plus or
+    /// Max held sideways is regular width too), and so does an iPad window of compact width: Slide Over, a narrow Split
+    /// View, a narrowed window.
+    static func tabBarIsAtTop(horizontalSizeClass: UserInterfaceSizeClass?) -> Bool {
+        MiniPlayerPlacement.tabBarIsAtTop(
+            isPad: UIDevice.current.userInterfaceIdiom == .pad,
+            isRegularWidth: horizontalSizeClass == .regular
+        )
+    }
 }
 
 /// The player itself: the video, its thumbnail until the first frame, captions, the controls, the "skipped sponsor"
@@ -65,6 +75,11 @@ struct PlayerHostView: View {
 }
 
 /// What the player area shows when the video cannot be played: the reason, Retry, and the way out to YouTube.
+///
+/// The area is the 16:9 frame of the player, which does not grow with the text. So the text follows the viewer's text
+/// size only as far as the player controls do, and the content makes room as the reason gets longer: first it sits
+/// below the top bar (whose chevron stays usable), then the warning icon goes, and then the reason scrolls. Retry and
+/// Open on YouTube are never pushed out of the frame.
 private struct PlayerFailureView: View {
     let message: String
     let video: VideoSummary?
@@ -75,30 +90,62 @@ private struct PlayerFailureView: View {
     var body: some View {
         ZStack {
             Color.black.opacity(0.82)
-            VStack(spacing: 10) {
-                Image(systemName: "exclamationmark.triangle")
-                    .font(.title2)
-                    .foregroundStyle(.white.opacity(0.9))
-                Text(message)
-                    .font(.footnote)
-                    .multilineTextAlignment(.center)
-                    .foregroundStyle(.white)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .frame(maxWidth: 420)
-                HStack(spacing: 10) {
-                    Button("Retry", action: retry)
-                        .buttonStyle(.borderedProminent)
-                    if let video {
-                        Button("Open on YouTube") { openURL(video.watchURL) }
-                            .buttonStyle(.bordered)
-                            .tint(.white)
-                    }
+            ViewThatFits(in: .vertical) {
+                // The usual look, in the middle of the frame (clear of the top bar and, to stay centred, of the bottom).
+                VStack(spacing: 10) {
+                    icon
+                    reason
+                    buttons
                 }
-                .controlSize(.small)
+                .padding(.vertical, ControlsFootprint.topBarHeight)
+
+                VStack(spacing: 10) {
+                    reason
+                    buttons
+                }
+                .padding(.top, ControlsFootprint.topBarHeight)
+
+                VStack(spacing: 10) {
+                    ScrollView { reason }
+                        .scrollBounceBehavior(.basedOnSize)
+                    buttons
+                }
+                .padding(.top, ControlsFootprint.topBarHeight)
+                .padding(.bottom, 8)
+                .frame(maxHeight: .infinity)
             }
+            .dynamicTypeSize(...PlayerControlsView.largestTextSize)
             .padding(.horizontal, 24)
         }
         .accessibilityElement(children: .contain)
+    }
+
+    private var icon: some View {
+        Image(systemName: "exclamationmark.triangle")
+            .font(.title2)
+            .foregroundStyle(.white.opacity(0.9))
+    }
+
+    private var reason: some View {
+        Text(message)
+            .font(.footnote)
+            .multilineTextAlignment(.center)
+            .foregroundStyle(.white)
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: 420)
+    }
+
+    private var buttons: some View {
+        HStack(spacing: 10) {
+            Button("Retry", action: retry)
+                .buttonStyle(.borderedProminent)
+            if let video {
+                Button("Open on YouTube") { openURL(video.watchURL) }
+                    .buttonStyle(.bordered)
+                    .tint(.white)
+            }
+        }
+        .controlSize(.small)
     }
 }
 

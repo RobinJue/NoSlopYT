@@ -28,6 +28,8 @@ private struct WatchDetailsContent: View {
     @State private var isShowingDownloads = false
     @State private var isShowingPlaylists = false
     @State private var isExplainingSignIn = false
+    @State private var scrollPosition = ScrollPosition()
+    @State private var scrollMemory = PageScrollMemory()
 
     init(video: VideoSummary) {
         self.video = video
@@ -45,27 +47,44 @@ private struct WatchDetailsContent: View {
             .padding(.bottom, 24)
         }
         .scrollBounceBehavior(.basedOnSize)
+        .scrollPosition($scrollPosition)
+        .onScrollGeometryChange(for: PageScroll.self) { geometry in
+            PageScroll(offset: geometry.contentOffset.y, height: geometry.containerSize.height)
+        } action: { _, page in
+            pageScrolled(page)
+        }
+        #if DEBUG
+        .debugWatchPageSteps(
+            isLoaded: debugIsLoaded,
+            isTitleExpanded: $isTitleExpanded,
+            isShowingComments: $isShowingComments
+        )
+        #endif
         .task { await model.load(using: env) }
         .task(id: env.googleAccount?.id) { await model.loadRating(using: env) }
+        // "Don't show this channel" on a row of the Up next list (or any other feed filter) takes effect on the list and on
+        // the player's autoplay list at once, like on the other lists, not after the page is loaded again.
+        .onChange(of: env.settings) {
+            model.filtersChanged(using: env)
+        }
         .sheet(isPresented: $isShowingComments) {
             CommentsSheet(
-                video: model.summary,
+                video: summary,
                 continuation: model.details?.commentsContinuation,
                 firstPage: model.commentsFirstPage
             )
         }
         .sheet(isPresented: $isShowingDownloads) {
-            DownloadOptionsSheet(video: model.summary)
+            DownloadOptionsSheet(video: summary)
         }
         .sheet(isPresented: $isShowingPlaylists) {
-            AddToPlaylistSheet(video: model.summary)
+            AddToPlaylistSheet(video: summary)
         }
         .alert("Sign in to like videos", isPresented: $isExplainingSignIn) {
             Button("Go to Library") {
                 env.player.minimize()
                 // The sign-in card is at the top of the Library tab, which may still be showing a screen from earlier.
-                env.router.popToRoot(.library)
-                env.router.selectedTab = .library
+                env.router.showRoot(of: .library)
             }
             Button("Not now", role: .cancel) {}
         } message: {
@@ -84,10 +103,58 @@ private struct WatchDetailsContent: View {
         }
     }
 
+    // MARK: The video as the page knows it
+
+    /// The video as this page shows and saves it: the page's own copy (`model.summary`: the video the page was opened for,
+    /// with what the details say) filled in from the player's (`video`).
+    ///
+    /// A video opened from a link starts as a bare id, and the page keeps that copy as long as it lives. Its title and
+    /// channel come from whichever answers first: the details of the page, or the stream of the player, which completes
+    /// its own copy as it arrives (`PlayerController.accept`, `complete(with:)`). What is saved (Watch Later, a playlist,
+    /// a download) and what is shown therefore takes this copy and not the page's alone: a chip tapped after the stream
+    /// has answered but before the details have must not put the bare video into the library, where nothing would ever
+    /// complete it. Nothing that is there is replaced, and the live state is left as it is (`VideoSummary.filledIn(from:)`).
+    private var summary: VideoSummary {
+        model.summary.filledIn(from: video)
+    }
+
+    // MARK: Scroll position
+
+    /// Full screen collapses the page to no height and turning the phone lays it out again, and SwiftUI does not keep
+    /// the scroll offset through that: the page comes back scrolled somewhere else (a few rows further down, in the
+    /// simulator). So the page remembers where it was while it had room to be seen, and puts the offset back when it
+    /// has room again.
+    private func pageScrolled(_ page: PageScroll) {
+        if page.height < Self.collapsedHeight {
+            scrollMemory.isCollapsed = true
+            return
+        }
+        if scrollMemory.isCollapsed {
+            scrollMemory.isCollapsed = false
+            if let offset = scrollMemory.offset {
+                scrollPosition.scrollTo(y: offset)
+            }
+            return
+        }
+        scrollMemory.offset = page.offset
+    }
+
+    /// A page with less height than this is collapsed (full screen), not scrolled by the viewer.
+    private static let collapsedHeight: CGFloat = 100
+
+    #if DEBUG
+    private var debugIsLoaded: Bool {
+        if case .loaded = model.phase { return true }
+        return false
+    }
+    #endif
+
     // MARK: Title
 
     private var titleBlock: some View {
-        let shown = model.summary
+        // A video opened from a bare link has the title the player got from the stream while the details are still on
+        // their way, or cannot be loaded.
+        let shown = summary
         return VStack(alignment: .leading, spacing: 4) {
             if shown.title.isEmpty {
                 // A bare id from a link: the title arrives with the details, unless they cannot be loaded.
@@ -222,8 +289,12 @@ private struct WatchDetailsContent: View {
 
     private var watchLaterChip: some View {
         let saved = env.library.isInWatchLater(video.id)
+        // A video from a link is only an id until the stream or the page has told its title, and a row saved without
+        // one stays blank in the list: nothing fills it in later. So the chip waits for that (a moment, or for good when
+        // neither can be loaded). A saved video can always be taken out again.
+        let canSave = saved || !summary.title.isEmpty
         return Button {
-            env.library.toggleWatchLater(model.summary)
+            env.library.toggleWatchLater(summary)
         } label: {
             ChipLabel(
                 title: saved ? "Saved" : "Watch Later",
@@ -232,6 +303,7 @@ private struct WatchDetailsContent: View {
             )
         }
         .buttonStyle(.plain)
+        .disabled(!canSave)
         .accessibilityLabel(saved ? "Remove from Watch Later" : "Save to Watch Later")
     }
 
@@ -290,15 +362,29 @@ private struct WatchDetailsContent: View {
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 48)
         case .failed(let error):
-            ErrorStateView(error: error, openURL: video.watchURL) {
-                await model.reload(using: env)
+            if isOfflineDownloadPage(failedWith: error) {
+                OfflinePageNote {
+                    await model.reload(using: env)
+                }
+            } else {
+                ErrorStateView(error: error, openURL: video.watchURL) {
+                    await model.reload(using: env)
+                }
+                .padding(.top, 24)
             }
-            .padding(.top, 24)
         case .loaded:
             if let details = model.details {
                 loadedContent(details)
             }
         }
+    }
+
+    /// The page could not be loaded for lack of a connection, but this video plays from a download on the device: the
+    /// player works, and only what comes from YouTube is missing. A genuine failure, or a download that fell back to
+    /// streaming (`isPlayingOffline` is false then), keeps the full error card.
+    private func isOfflineDownloadPage(failedWith error: Error) -> Bool {
+        guard let known = error as? NoSlopError, case .network = known else { return false }
+        return env.player.isPlayingOffline && env.player.currentVideo?.id == video.id
     }
 
     @ViewBuilder
@@ -402,6 +488,44 @@ private struct WatchDetailsContent: View {
     }
 }
 
+/// What the page says under a video that plays from a download when YouTube cannot be reached: a quiet note and Retry in
+/// the footnote size of the list footers, not the error card of a screen that failed. The video itself is fine.
+private struct OfflinePageNote: View {
+    let retry: @MainActor () async -> Void
+
+    var body: some View {
+        VStack(spacing: 8) {
+            Label("Can't reach YouTube", systemImage: "wifi.slash")
+                .font(.footnote.weight(.semibold))
+            Text("The description, comments and related videos need a connection.")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+            Button("Retry") {
+                Task { await retry() }
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+        }
+        .padding(.horizontal, Theme.padding)
+        .padding(.top, 28)
+        .frame(maxWidth: .infinity)
+    }
+}
+
+/// How far the page is scrolled and how tall it is, as the scroll view reports it.
+private struct PageScroll: Equatable {
+    var offset: CGFloat
+    var height: CGFloat
+}
+
+/// What the page remembers about its scroll position. A plain object, not state: remembering must not redraw the page
+/// at every frame of a scroll.
+private final class PageScrollMemory {
+    var offset: CGFloat?
+    var isCollapsed = false
+}
+
 /// A rounded action chip: an icon and a short label on a soft background, in the primary colour or a tint.
 private struct ChipLabel: View {
     let title: String
@@ -427,6 +551,49 @@ extension View {
     /// than the Rick Astley one. Compiled out of Release builds.
     func debugWatchDetailsSheet() -> some View {
         modifier(DebugWatchDetailsModifier())
+    }
+}
+
+extension View {
+    /// Simulator checks: with the launch argument `-watchPage '<steps>'` the watch page scrolls, expands its title and
+    /// opens the Comments sheet by itself, once the page has loaded (see `DebugLaunchHooks`). Compiled out of Release
+    /// builds.
+    @ViewBuilder
+    fileprivate func debugWatchPageSteps(
+        isLoaded: Bool,
+        isTitleExpanded: Binding<Bool>,
+        isShowingComments: Binding<Bool>
+    ) -> some View {
+        if DebugLaunchHooks.watchPageSteps.isEmpty {
+            self
+        } else {
+            modifier(DebugWatchPageModifier(isLoaded: isLoaded, isTitleExpanded: isTitleExpanded, isShowingComments: isShowingComments))
+        }
+    }
+}
+
+private struct DebugWatchPageModifier: ViewModifier {
+    let isLoaded: Bool
+    @Binding var isTitleExpanded: Bool
+    @Binding var isShowingComments: Bool
+
+    func body(content: Content) -> some View {
+        content
+            .task(id: isLoaded) {
+                guard isLoaded else { return }
+                // Lists below the description are still being measured for a moment after the page has loaded.
+                try? await Task.sleep(for: .seconds(1.5))
+                if DebugLaunchHooks.takeWatchPageStep("title") != nil {
+                    isTitleExpanded = true
+                }
+                if let points = DebugLaunchHooks.takeWatchPageStep("scroll").flatMap(Double.init) {
+                    DebugLaunchHooks.scrollWatchPage(to: points)
+                }
+                if DebugLaunchHooks.takeWatchPageStep("comments") != nil {
+                    try? await Task.sleep(for: .seconds(1))
+                    isShowingComments = true
+                }
+            }
     }
 }
 

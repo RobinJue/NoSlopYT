@@ -485,4 +485,125 @@ private func settle() async {
         let feed = await service.homeFeed(history: [], subscriptionVideos: [])
         #expect(feed.forYou.isEmpty && feed.continueWatching.isEmpty)
     }
+
+    // MARK: When YouTube cannot be asked
+    //
+    // "For you" with nothing in it is either "nothing more to suggest" (YouTube answered) or "could not load" (it did
+    // not): the screen has to tell the two apart, so the feed says which one it is.
+
+    @Test func relatedVideosAreUnavailableWhenNoSeedAnswers() async {
+        let service = makeService(RelatedSource(failing: ["h1", "h2"]))
+
+        let feed = await service.homeFeed(history: [makeEntry("h1"), makeEntry("h2")], subscriptionVideos: [])
+
+        #expect(feed.relatedUnavailable)
+        #expect(feed.forYou.isEmpty)
+        // "Continue watching" needs no network.
+        #expect(feed.continueWatching.map(\.id) == ["h1", "h2"])
+    }
+
+    @Test(.timeLimit(.minutes(1)))
+    func relatedVideosAreUnavailableWhenNoSeedAnswersBeforeTheDeadline() async {
+        let source = RelatedSource(hanging: ["h1", "h2"])
+        let timeIsUp = UncancellableGate()
+        let service = makeService(source, timeIsUp: timeIsUp)
+
+        let call = Task { await service.homeFeed(history: [makeEntry("h1"), makeEntry("h2")], subscriptionVideos: []) }
+        #expect(await eventually { await source.requested.sorted() == ["h1", "h2"] })
+        timeIsUp.open()
+        let feed = await call.value
+
+        #expect(feed.relatedUnavailable)
+        #expect(feed.forYou.isEmpty)
+    }
+
+    @Test func subscriptionUploadsStillFillTheFeedWhenRelatedVideosAreUnavailable() async {
+        let service = makeService(RelatedSource(failing: ["h1"]))
+
+        let feed = await service.homeFeed(history: [makeEntry("h1")], subscriptionVideos: [makeVideo("s1", daysAgo: 30)])
+
+        #expect(feed.relatedUnavailable)
+        #expect(feed.forYou.map(\.id) == ["s1"])
+    }
+
+    @Test func relatedVideosAreAvailableWithoutAHistory() async {
+        let source = RelatedSource()
+        let service = makeService(source)
+
+        let feed = await service.homeFeed(history: [], subscriptionVideos: [makeVideo("s1", daysAgo: 1)])
+
+        #expect(!feed.relatedUnavailable)
+        #expect(await source.requested.isEmpty)
+    }
+
+    @Test func aHistoryOfShortsAloneHasNothingToAskAbout() async {
+        let service = makeService(RelatedSource())
+        let feed = await service.homeFeed(history: [makeEntry("s1", isShort: true)], subscriptionVideos: [])
+        #expect(!feed.relatedUnavailable)
+    }
+
+    @Test func nothingWasAskedWithoutASeedBudgetEither() async {
+        let service = makeService(RelatedSource(), maxSeeds: 0)
+        let feed = await service.homeFeed(history: [makeEntry("h1")], subscriptionVideos: [])
+        #expect(!feed.relatedUnavailable)
+    }
+
+    @Test func seedsThatAnswerWithNoRelatedVideosHaveAnswered() async {
+        // YouTube was reached; it just had nothing to suggest. That is "that is everything", not "could not load".
+        let service = makeService(RelatedSource(related: ["h1": [], "h2": []]))
+
+        let feed = await service.homeFeed(history: [makeEntry("h1"), makeEntry("h2")], subscriptionVideos: [])
+
+        #expect(!feed.relatedUnavailable)
+        #expect(feed.forYou.isEmpty)
+    }
+
+    @Test func oneSeedFailingWhileAnotherAnswersIsNotUnavailable() async {
+        let service = makeService(RelatedSource(related: ["h2": [makeVideo("c")]], failing: ["h1"]))
+
+        let feed = await service.homeFeed(history: [makeEntry("h1"), makeEntry("h2")], subscriptionVideos: [])
+
+        #expect(!feed.relatedUnavailable)
+        #expect(feed.forYou.map(\.id) == ["c"])
+    }
+
+    @Test(.timeLimit(.minutes(1)))
+    func oneSeedAnsweringBeforeTheDeadlineIsEnough() async {
+        let source = RelatedSource(related: ["h2": [makeVideo("c")]], hanging: ["h1"])
+        let timeIsUp = UncancellableGate()
+        let service = makeService(source, timeIsUp: timeIsUp)
+
+        let call = Task { await service.homeFeed(history: [makeEntry("h1"), makeEntry("h2")], subscriptionVideos: []) }
+        #expect(await eventually { await source.finished == ["h2"] })
+        await settle()
+        timeIsUp.open()
+        let feed = await call.value
+
+        #expect(!feed.relatedUnavailable)
+        #expect(feed.forYou.map(\.id) == ["c"])
+    }
+
+    // MARK: Continue watching without the service
+
+    @Test func continueWatchingIsTheSameRuleWithOrWithoutTheService() async {
+        var history: [HistoryEntry] = [
+            makeEntry("too-short", progress: 29.9),
+            makeEntry("exactly-30", progress: 30),
+            makeEntry("finished", progress: 595, duration: 600),
+            makeEntry("short-video", progress: 100, isShort: true),
+            makeEntry("unknown-duration", progress: 500, duration: nil),
+        ]
+        history += (1...12).map { makeEntry("keep-\($0)", progress: 60 + Double($0)) }
+        let expected = ["exactly-30", "unknown-duration"] + (1...8).map { "keep-\($0)" }
+
+        let early = HomeFeed.continueWatching(in: history)
+        let built = await makeService(RelatedSource()).homeFeed(history: history, subscriptionVideos: []).continueWatching
+
+        #expect(early.map(\.id) == expected)
+        #expect(built == early)
+    }
+
+    @Test func continueWatchingOfNoHistoryIsEmpty() {
+        #expect(HomeFeed.continueWatching(in: []).isEmpty)
+    }
 }

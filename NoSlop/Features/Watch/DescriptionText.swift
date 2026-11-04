@@ -47,8 +47,8 @@ nonisolated enum DescriptionText {
         return youTubeHosts.contains(host)
     }
 
-    /// The `noslop://watch?v=<id>&t=<seconds>` link the app's own URL handling understands; it looks up the video's
-    /// title and channel, which a description link does not carry.
+    /// The `noslop://watch?v=<id>&t=<seconds>` link the app's own URL handling understands. The player opens the video
+    /// at once and fills in its title and channel as they arrive, which a description link does not carry.
     static func watchLink(id: String, startSeconds: Int?) -> URL? {
         var components = URLComponents()
         components.scheme = "noslop"

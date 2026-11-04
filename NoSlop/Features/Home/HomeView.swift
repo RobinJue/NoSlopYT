@@ -5,6 +5,7 @@ import SwiftUI
 /// videos and fresh uploads of the subscriptions. Nothing to show yet → a welcome card with topic chips.
 struct HomeView: View {
     @Environment(AppEnvironment.self) private var env
+    @Environment(\.scenePhase) private var scenePhase
     @State private var model = HomeViewModel()
 
     var body: some View {
@@ -40,6 +41,14 @@ struct HomeView: View {
                 model.loadIfNeeded(using: env)
             }
         }
+        // Coming back to the app after hours in the background (it stays alive for days): the feed is looked at again, and
+        // rebuilt when it is past its age, as it is when the tab is opened. While a video is on screen it waits for the
+        // player to go away (above); a tab that is not showing waits for its `.task`.
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active, env.router.selectedTab == .home, env.player.presentation != .expanded {
+                model.loadIfNeeded(using: env)
+            }
+        }
         // "Don't show this channel" (or any other feed filter) takes effect on what is on screen, not after a reload.
         .onChange(of: env.settings) {
             model.applyFilter(using: env)
@@ -53,13 +62,25 @@ struct HomeView: View {
                 if !model.continueWatching.isEmpty {
                     ContinueWatchingRow(entries: model.continueWatching)
                 }
-                if model.forYou.isEmpty {
+                if !model.forYou.isEmpty {
+                    feed
+                } else if model.phase != .loaded {
+                    // "Continue watching" is from the device; the feed is still being built.
+                    PlaceholderList(style: .cards, count: 2)
+                } else if model.relatedUnavailable {
+                    // Nothing to suggest because YouTube could not be asked, which is not the same as being done.
+                    RefreshFailureBanner(
+                        title: "Couldn't reach YouTube",
+                        message: "Suggestions need a connection. Showing what is on this device."
+                    ) {
+                        await model.refresh(using: env)
+                    }
+                    .padding(.horizontal, Theme.padding)
+                } else {
                     Text("That's everything for now. Search for something or subscribe to channels to fill this feed.")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                         .padding(.horizontal, Theme.padding)
-                } else {
-                    feed
                 }
             }
         } else if model.phase == .loaded {
@@ -126,7 +147,7 @@ private struct AccountButton: View {
 
     var body: some View {
         Button {
-            env.router.selectedTab = .library
+            env.router.showRoot(of: .library)
         } label: {
             if let pictureURL = env.googleAccount?.pictureURL {
                 ChannelAvatarView(url: pictureURL, size: 30)

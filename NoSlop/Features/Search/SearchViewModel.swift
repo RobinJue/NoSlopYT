@@ -136,8 +136,8 @@ final class SearchViewModel {
         text = ""
         submittedQuery = nil
         results.clear()
-        // In a task of its own: emptying the field cancels `submitTask`, which must not cancel the lookup of the
-        // video's title that opening it starts.
+        // In a task of its own (`handleOpenURL` is async): emptying the field cancels `submitTask`, which must not
+        // cancel the open that follows.
         Task { await env.handleOpenURL(link) }
     }
 

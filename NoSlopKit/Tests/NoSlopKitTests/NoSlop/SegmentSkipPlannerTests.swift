@@ -7,9 +7,10 @@ private func segment(
     _ category: SponsorCategory = .sponsor,
     _ start: Double,
     _ end: Double,
-    action: SegmentActionType = .skip
+    action: SegmentActionType = .skip,
+    videoDuration: Double? = nil
 ) -> SponsorSegment {
-    SponsorSegment(id: id, category: category, actionType: action, start: start, end: end)
+    SponsorSegment(id: id, category: category, actionType: action, start: start, end: end, videoDuration: videoDuration)
 }
 
 @Suite struct SegmentSkipPlannerTests {
@@ -186,5 +187,91 @@ private func segment(
         let planner = SegmentSkipPlanner(segments: [], behaviors: AppSettings.defaultSegmentBehaviors)
         #expect(planner.segmentToSkip(at: 12, alreadySkipped: []) == nil)
         #expect(planner.visibleSegments.isEmpty)
+    }
+
+    // MARK: Another cut of the video
+
+    /// A segment submitted for a video of another length is from another cut of it (trimmed or re-edited under the
+    /// same id): its times point somewhere else now, so it is neither skipped nor drawn.
+    @Test func aSegmentOfAnotherCutIsNeitherSkippedNorDrawn() {
+        let old = segment("old", .sponsor, 100, 160, videoDuration: 600)
+        let planner = SegmentSkipPlanner(segments: [old], behaviors: [.sponsor: .autoSkip], videoLength: 540)
+
+        #expect(planner.segmentToSkip(at: 120, alreadySkipped: []) == nil)
+        #expect(planner.visibleSegments.isEmpty)
+    }
+
+    @Test func aSegmentOfAnotherCutIsNotDrawnWhateverItsBehaviour() {
+        let old = segment("old", .intro, 0, 15, videoDuration: 600)
+        let planner = SegmentSkipPlanner(segments: [old], behaviors: [.intro: .showInBar], videoLength: 540)
+        #expect(planner.visibleSegments.isEmpty)
+
+        let highlight = segment("point", .poiHighlight, 50, 50, action: .poi, videoDuration: 600)
+        let pointPlanner = SegmentSkipPlanner(segments: [highlight], behaviors: [.poiHighlight: .showInBar], videoLength: 540)
+        #expect(pointPlanner.visibleSegments.isEmpty)
+    }
+
+    @Test func aLengthWithinTwoSecondsIsTheSameCut() {
+        let s = segment("a", .sponsor, 100, 160, videoDuration: 600)
+        // Exactly two seconds apart, in both directions, is still the same cut; so is anything closer.
+        for length in [598.0, 598.5, 600, 601.5, 602] {
+            let planner = SegmentSkipPlanner(segments: [s], behaviors: [.sponsor: .autoSkip], videoLength: length)
+            #expect(planner.segmentToSkip(at: 120, alreadySkipped: []) == s, "length \(length)")
+            #expect(planner.visibleSegments == [s], "length \(length)")
+        }
+    }
+
+    @Test func aLengthMoreThanTwoSecondsApartIsAnotherCut() {
+        let s = segment("a", .sponsor, 100, 160, videoDuration: 600)
+        for length in [597.9, 597, 602.1, 603, 585, 1200] {
+            let planner = SegmentSkipPlanner(segments: [s], behaviors: [.sponsor: .autoSkip], videoLength: length)
+            #expect(planner.segmentToSkip(at: 120, alreadySkipped: []) == nil, "length \(length)")
+            #expect(planner.visibleSegments.isEmpty, "length \(length)")
+        }
+    }
+
+    @Test func withoutAKnownLengthNothingIsDropped() {
+        let s = segment("a", .sponsor, 100, 160, videoDuration: 600)
+        // Not known yet (nil), or not usable (zero, negative, not a number).
+        for length in [nil, 0, -5, Double.nan, Double.infinity] as [Double?] {
+            let planner = SegmentSkipPlanner(segments: [s], behaviors: [.sponsor: .autoSkip], videoLength: length)
+            #expect(planner.segmentToSkip(at: 120, alreadySkipped: []) == s, "length \(String(describing: length))")
+            #expect(planner.visibleSegments == [s], "length \(String(describing: length))")
+        }
+        // The default: no length given.
+        let planner = SegmentSkipPlanner(segments: [s], behaviors: [.sponsor: .autoSkip])
+        #expect(planner.segmentToSkip(at: 120, alreadySkipped: []) == s)
+    }
+
+    @Test func aSegmentWithoutASubmittedLengthIsNeverDropped() {
+        // Nil and zero mean "unknown" (older submissions carry 0); not a different cut.
+        let unknown = segment("unknown", .sponsor, 100, 160)
+        let zero = segment("zero", .sponsor, 200, 260, videoDuration: 0)
+        let negative = segment("negative", .sponsor, 300, 360, videoDuration: -1)
+        let notANumber = segment("nan", .sponsor, 400, 460, videoDuration: .nan)
+        let planner = SegmentSkipPlanner(
+            segments: [unknown, zero, negative, notANumber],
+            behaviors: [.sponsor: .autoSkip],
+            videoLength: 540
+        )
+
+        #expect(planner.visibleSegments.map(\.id) == ["unknown", "zero", "negative", "nan"])
+        #expect(planner.segmentToSkip(at: 120, alreadySkipped: []) == unknown)
+        #expect(planner.segmentToSkip(at: 220, alreadySkipped: []) == zero)
+    }
+
+    @Test func onlyTheSegmentsOfAnotherCutAreDroppedFromAMixedList() {
+        let current = segment("current", .sponsor, 100, 160, videoDuration: 540.4)
+        let old = segment("old", .selfpromo, 200, 230, videoDuration: 600)
+        let unknown = segment("unknown", .interaction, 300, 310)
+        let planner = SegmentSkipPlanner(
+            segments: [old, unknown, current],
+            behaviors: [.sponsor: .autoSkip, .selfpromo: .autoSkip, .interaction: .showInBar],
+            videoLength: 540
+        )
+
+        #expect(planner.visibleSegments.map(\.id) == ["current", "unknown"])
+        #expect(planner.segmentToSkip(at: 120, alreadySkipped: []) == current)
+        #expect(planner.segmentToSkip(at: 210, alreadySkipped: []) == nil)
     }
 }

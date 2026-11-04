@@ -43,6 +43,7 @@ final class PlayerController {
 
     private let streams: any StreamResolving
     private let sponsorBlock: any SponsorBlockProviding
+    private let deArrow: any DeArrowProviding
     private let captions: any CaptionsProviding
     private let library: LibraryStore
     private let settingsStore: SettingsStore
@@ -86,10 +87,13 @@ final class PlayerController {
     private(set) var isPictureInPicturePossible = false
     /// Playing a downloaded audio-only file: there is no picture, the thumbnail stays up.
     private(set) var isAudioOnlyPlayback = false
-    /// A live stream: no duration, no scrubbing.
+    /// A live stream: no duration, no scrubbing. The copy of the video the player was opened with sets it first; the
+    /// resolved stream has the last word (see `accept`).
     private(set) var isLive = false
     /// The first frame has played at least once for this video (until then the thumbnail is shown as a poster).
     private(set) var hasStartedPlayback = false
+    /// The community title DeArrow has for the current video; nil while it is not known, and when there is none.
+    private(set) var betterTitle: String?
     /// Recovery is waiting for the device to come back online.
     private(set) var isWaitingForConnection = false
 
@@ -117,6 +121,7 @@ final class PlayerController {
     @ObservationIgnored private var loadTask: Task<Void, Never>?
     @ObservationIgnored private var recoveryTask: Task<Void, Never>?
     @ObservationIgnored private var segmentsTask: Task<Void, Never>?
+    @ObservationIgnored private var titleTask: Task<Void, Never>?
     @ObservationIgnored private var captionTask: Task<Void, Never>?
     @ObservationIgnored private var skipNoticeTask: Task<Void, Never>?
     @ObservationIgnored private var stallTask: Task<Void, Never>?
@@ -126,8 +131,9 @@ final class PlayerController {
     @ObservationIgnored private var itemNotifications: [any NSObjectProtocol] = []
     @ObservationIgnored private var lifecycleNotifications: [any NSObjectProtocol] = []
 
-    /// The viewer's intent: open and play set it, pause clears it. It decides whether the item starts once it is ready
-    /// (and the play/pause button while loading), so it is observed.
+    /// The viewer's intent: open and play set it, pause clears it, and so do the pause and play buttons that reach the
+    /// player without going through here (see `playerRateDidChange`). It decides whether the item starts once it is
+    /// ready (and the play/pause button while loading), so it is observed.
     private var shouldPlayWhenReady = true
     @ObservationIgnored private var isItemReady = false
     @ObservationIgnored private var awaitingInitialStart = false
@@ -145,6 +151,15 @@ final class PlayerController {
     @ObservationIgnored private var forceStreaming = false
 
     @ObservationIgnored private var upNext: [VideoSummary] = []
+    /// The video whose chapters and up-next list were handed over (`setUpNext`), the page's or the owner's.
+    @ObservationIgnored private var detailsHandedOverFor: String?
+    /// What follows `queue`: the rest of the list it came from (a playlist), which arrives in pages. The next page is
+    /// asked for when the queue runs low and when it runs out. Nil for a queue that is all there is.
+    @ObservationIgnored private var queueSource: QueueSource?
+    /// The request for the next page of `queueSource` that is on its way.
+    @ObservationIgnored private var refillTask: Task<Void, Never>?
+    /// Set while the player waits for that page because nothing was queued: what to do when it arrives.
+    @ObservationIgnored private var pendingAdvance: QueueAdvance.Request?
     @ObservationIgnored private var progressThrottle = ProgressSaveThrottle()
     @ObservationIgnored private var wasPlayingBeforeInterruption = false
     @ObservationIgnored private var didDetachSurfaces = false
@@ -155,7 +170,12 @@ final class PlayerController {
     @ObservationIgnored private var planner: SegmentSkipPlanner?
     @ObservationIgnored private var plannerEnabled = true
     @ObservationIgnored private var plannerBehaviors: [SponsorCategory: SegmentBehavior] = [:]
+    /// The length of the video the planner was built for; nil when it was not known then.
+    @ObservationIgnored private var plannerLength: Double?
+    /// The video whose segments were asked for and not given up on: set when the lookup starts, cleared when every
+    /// attempt failed, so that the next chance (Retry, a reload, the connection coming back) asks again.
     @ObservationIgnored private var segmentsRequestedFor: String?
+    @ObservationIgnored private var betterTitleRequestedFor: String?
     @ObservationIgnored private var declinedSkips: Set<String> = []
     @ObservationIgnored private var lastSkip: (id: String, at: Date)?
 
@@ -169,6 +189,7 @@ final class PlayerController {
     init(
         streams: any StreamResolving,
         sponsorBlock: any SponsorBlockProviding,
+        deArrow: any DeArrowProviding,
         captions: any CaptionsProviding,
         library: LibraryStore,
         settingsStore: SettingsStore,
@@ -176,6 +197,7 @@ final class PlayerController {
     ) {
         self.streams = streams
         self.sponsorBlock = sponsorBlock
+        self.deArrow = deArrow
         self.captions = captions
         self.library = library
         self.settingsStore = settingsStore
@@ -212,12 +234,14 @@ final class PlayerController {
         streamInfo?.captions ?? []
     }
 
-    /// Whether `playNext` has a queued video to start.
+    /// Whether `playNext` has a video to start: a queued one, or the first of the next page of the list the queue came
+    /// from.
     var canPlayNext: Bool {
-        !queue.isEmpty
+        !queue.isEmpty || queueSource?.hasMore == true
     }
 
-    /// The thumbnail covers the picture: nothing has played yet, or the file has no picture.
+    /// The thumbnail shows where the picture is not (yet): nothing has played yet, or the file has no picture. The video
+    /// surface is transparent (`VideoSurfaceView`), so the thumbnail drawn below it is what shows until the first frame.
     var showsPoster: Bool {
         !hasStartedPlayback || isAudioOnlyPlayback
     }
@@ -228,13 +252,25 @@ final class PlayerController {
         return nil
     }
 
+    /// The title of the current video as the app shows it: DeArrow's community title when "De-clickbait titles" is on
+    /// and one is known, else the original. The lock screen and Control Center get this one, and so does the spoken
+    /// label of the mini player. Nil when no video is loaded.
+    var displayTitle: String? {
+        guard let video = currentVideo else { return nil }
+        return DisplayTitle.resolve(original: video.title, better: betterTitle, deArrowEnabled: settings.deArrowTitles)
+    }
+
     // MARK: Loading
 
-    /// Starts `video` (resuming at `startAt` or the saved position) and expands the player. `queue` plays afterwards.
-    /// Opening the video that is already loaded only expands the player (and seeks when `startAt` is given).
-    func open(_ video: VideoSummary, startAt: Double?, queue: [VideoSummary]) {
+    /// Starts `video` (resuming at `startAt` or the saved position) and expands the player. `queue` plays afterwards,
+    /// and `more` supplies what follows the queue when it comes from a list that is not loaded to its end (a long
+    /// playlist): the next page is taken from it when the queue runs low. A video opened without a `more` plays on
+    /// with `queue` alone.
+    /// Opening the video that is already loaded only expands the player (and seeks when `startAt` is given); after a
+    /// failure it starts over, keeping what the watch page published for it (see `start`).
+    func open(_ video: VideoSummary, startAt: Double?, queue: [VideoSummary], more: QueueSource? = nil) {
         if let current = currentVideo, current.id == video.id, canReuseCurrentPlayback {
-            self.queue = queue
+            adoptQueue(queue, more: more)
             presentation = .expanded
             if let startAt {
                 seek(to: startAt)
@@ -244,7 +280,7 @@ final class PlayerController {
             updateNowPlaying()
             return
         }
-        start(video, startAt: startAt, queue: queue, expand: true)
+        start(video, startAt: startAt, queue: queue, more: more, expand: true)
     }
 
     private var canReuseCurrentPlayback: Bool {
@@ -254,24 +290,65 @@ final class PlayerController {
         }
     }
 
-    /// The chapters of the current video (from the watch page); the seek bar draws them.
+    /// The chapters of the current video (from the watch details); the seek bar draws them.
     func setChapters(_ chapters: [Chapter]) {
         self.chapters = chapters
     }
 
-    /// The related videos the watch page found, for autoplay once the queue is empty. The watch page calls this only
-    /// while it is on screen; it replaces whatever list autoplay carried over (see `start`).
+    /// The related videos of the current video, for autoplay once the queue is empty. The watch page hands them over
+    /// while it is on screen, and `detailsNeeded` has them loaded while it is not. They replace whatever list autoplay
+    /// carried over, and a restart of the same video keeps them (see `start`).
     func setUpNext(_ videos: [VideoSummary]) {
         upNext = videos
+        detailsHandedOverFor = currentVideo?.id
     }
 
-    /// Starts `video`. A video opened from outside starts with an empty up-next list (the watch page fills it); when
-    /// autoplay moves on by itself, `upNext` is what remains of the list, so it can keep going with the player minimized
-    /// and no watch page to hand over the next list.
+    /// Completes the current video with what its watch page says (`VideoSummary.filledIn(from:)`). A video opened from a
+    /// link starts as a bare id: the stream brings its title and the channel's name (`accept`), the page brings the
+    /// channel's picture and handle, the views and the age, which the history and the lists then show. Whatever is there
+    /// already stays; a page of another video does nothing.
+    func complete(with details: VideoSummary) {
+        guard let video = currentVideo, video.id == details.id else { return }
+        let completed = video.filledIn(from: details)
+        guard completed != video else { return }
+        currentVideo = completed
+        updateNowPlaying()
+    }
+
+    /// Asks for the chapters and the up-next list of a video that nobody is going to hand over, because no watch page is
+    /// on screen to do it (see `requestDetailsIfNoPageShows`). Set by `AppEnvironment`, which loads the details and
+    /// answers with `setChapters` and `setUpNext`.
+    @ObservationIgnored var detailsNeeded: ((VideoSummary) -> Void)?
+
+    /// The watch page loads and hands over the details of the video when the player is expanded and the app is on
+    /// screen. In every other case (the player is minimized, so there is no page, or the app is in the background,
+    /// where a page for a video that autoplay just started may not be built) the owner of the player is asked to load
+    /// them, unless they were handed over already. Without them the new video has no chapters, and autoplay has only
+    /// what was left of the list of the video before.
+    private func requestDetailsIfNoPageShows(for video: VideoSummary) {
+        let pageShows = presentation == .expanded && UIApplication.shared.applicationState == .active
+        guard !pageShows, detailsHandedOverFor != video.id else { return }
+        Self.log.info("no watch page shows: loading the details of \(video.id, privacy: .public) for the player")
+        detailsNeeded?(video)
+    }
+
+    /// Starts `video`. A video opened from outside starts with an empty up-next list (the watch page fills it, or the
+    /// owner of the player when no page shows: `detailsNeeded`); when autoplay moves on by itself, `upNext` is what
+    /// remains of the list, so it can keep going until the new video's own list has arrived, or when that cannot be
+    /// loaded (offline).
+    ///
+    /// `queue` and `more` are what follows the video (see `adoptQueue`): the queue moving on to its next video passes
+    /// the source it has, an open from outside brings its own, and autoplay leaves the queue behind.
+    ///
+    /// Starting the video that is already current (a link to it opened from the error screen, a queue that repeats it)
+    /// keeps the chapters and the up-next list the watch page published for it. They belong to the video, not to the
+    /// item, and the page, still on screen, publishes them only once. `close` forgets them, so a video opened after
+    /// that is published afresh.
     private func start(
         _ video: VideoSummary,
         startAt: Double?,
         queue: [VideoSummary],
+        more: QueueSource?,
         upNext: [VideoSummary] = [],
         expand: Bool
     ) {
@@ -282,15 +359,21 @@ final class PlayerController {
         generation += 1
         let token = generation
 
+        let isSameVideo = currentVideo?.id == video.id
         currentVideo = video
-        self.queue = queue
-        self.upNext = upNext
+        adoptQueue(queue, more: more)
+        if !(isSameVideo && upNext.isEmpty) {
+            self.upNext = upNext
+        }
         streamInfo = nil
         currentTime = max(0, startAt ?? 0)
         duration = Double(video.durationSeconds ?? 0)
         bufferedTime = 0
         segments = []
-        chapters = []
+        if !isSameVideo {
+            chapters = []
+            detailsHandedOverFor = nil
+        }
         skipNotice = nil
         captionText = nil
         isPlayingOffline = false
@@ -305,6 +388,7 @@ final class PlayerController {
         lastSkip = nil
         rawSegments = []
         planner = nil
+        plannerLength = nil
         segmentsRequestedFor = nil
         cueTimeline = CueTimeline(cues: [])
         selectedCaption = nil
@@ -315,6 +399,9 @@ final class PlayerController {
         qualityIsManual = false
         applyDefaultQuality()
         rate = Self.clampedRate(settings.defaultPlaybackRate)
+        betterTitle = nil
+        betterTitleRequestedFor = nil
+        ensureBetterTitle(for: video.id)
 
         if expand {
             presentation = .expanded
@@ -323,6 +410,9 @@ final class PlayerController {
         audioSession.activate()
         updateNowPlaying()
         Self.log.info("open \(video.id, privacy: .public)")
+        if !isSameVideo {
+            requestDetailsIfNoPageShows(for: video)
+        }
 
         loadTask = Task { [weak self] in
             await self?.load(video, startAt: startAt, token: token)
@@ -338,6 +428,12 @@ final class PlayerController {
         if let local = localSource(for: video.id) {
             isPlayingOffline = true
             isAudioOnlyPlayback = local.isAudioOnly
+            // A download is never live, whatever the copy of the video it was opened from says, and offline there is no
+            // stream info to correct it.
+            isLive = false
+            if let current = currentVideo, current.isLive || current.isUpcoming {
+                currentVideo = current.settingLiveState(to: false)
+            }
             Self.log.info("playing the download of \(video.id, privacy: .public)")
             attach(AVPlayerItem(url: local.url))
             loadStreamInfoForOfflinePlayback(of: video.id, token: token)
@@ -412,17 +508,27 @@ final class PlayerController {
 
     /// Takes over the facts of the resolved stream: expiry, length, live, and the title and channel when the video
     /// was opened from a bare link.
+    ///
+    /// The stream is the truth about live and upcoming; the copy of the video the player was opened with, made earlier
+    /// by a list, is not. A card saved while a broadcast was live says so long after it became an ordinary video, and
+    /// would play without a scrubber, without a place in the history and with the lock screen announcing a live stream.
+    /// The copy that goes to the history and to the lock screen is corrected as well.
     private func accept(_ info: StreamInfo) {
         streamInfo = info
+        isLive = info.isLive
         if info.isLive {
-            isLive = true
             pendingStart = 0
         }
         if duration <= 0, info.lengthSeconds > 0 {
             duration = Double(info.lengthSeconds)
         }
+        rebuildPlannerIfLengthChanged()
         guard var video = currentVideo, video.id == info.videoID else { return }
         var changed = false
+        if video.isLive != info.isLive || video.isUpcoming {
+            video = video.settingLiveState(to: info.isLive)
+            changed = true
+        }
         if video.title.isEmpty, !info.title.isEmpty {
             video.title = info.title
             changed = true
@@ -513,11 +619,13 @@ final class PlayerController {
         loadTask?.cancel()
         recoveryTask?.cancel()
         segmentsTask?.cancel()
+        titleTask?.cancel()
         captionTask?.cancel()
         skipNoticeTask?.cancel()
         loadTask = nil
         recoveryTask = nil
         segmentsTask = nil
+        titleTask = nil
         captionTask = nil
         skipNoticeTask = nil
     }
@@ -529,6 +637,17 @@ final class PlayerController {
             guard !isItemReady else { return }
             isItemReady = true
             refreshDuration()
+            rebuildPlannerIfLengthChanged()
+            #if DEBUG
+            if DebugLaunchHooks.silentPlayback {
+                Task { [weak self] in
+                    await self?.debugDropAudio(of: item)
+                    guard let self, avPlayer.currentItem === item, isItemReady else { return }
+                    beginPlayback()
+                }
+                return
+            }
+            #endif
             beginPlayback()
         case .failed:
             handleFailure(error: item.error, item: item)
@@ -583,19 +702,33 @@ final class PlayerController {
         updateNowPlaying()
         Self.log.info("ended \(video.id, privacy: .public)")
 
-        if playNext() { return }
-        if settings.autoplayNext, let step = autoplayStep(after: video) {
-            // What stays up next goes along: with the player minimized the watch page is not on screen to replace the
-            // list, and the next hop would find it empty.
-            start(step.next, startAt: nil, queue: [], upNext: step.remaining, expand: false)
-        }
+        // The queue first. With nothing queued but more of the list behind it, the next video is in the page that is
+        // asked for now (`refillFinished`).
+        if advanceQueue(as: .whenEnded) { return }
+        autoplayAfterQueue(of: video)
     }
 
-    /// The first up-next suggestion the viewer has not watched, and the suggestions that stay up next behind it.
+    /// The queue is over: autoplay chooses the next video, when the viewer turned it on.
+    private func autoplayAfterQueue(of video: VideoSummary) {
+        guard settings.autoplayNext, let step = autoplayStep(after: video) else { return }
+        // What stays up next goes along: with the player minimized the watch page is not on screen to replace the
+        // list, and the next hop would find it empty. Autoplay leaves the list of the queue behind.
+        start(step.next, startAt: nil, queue: [], more: nil, upNext: step.remaining, expand: false)
+    }
+
+    /// The first up-next suggestion the viewer has not watched and the viewer's filters allow, and the suggestions that
+    /// stay up next behind it.
     private func autoplayStep(after video: VideoSummary) -> AutoplayPlanner.Step? {
-        AutoplayPlanner.step(after: video.id, upNext: upNext) { [library] id in
-            library.progress(for: id)?.progressSeconds
-        }
+        // The filters as they are now, not as they were when the list was published: a channel blocked since (on Home
+        // while the mini player showed, or between two videos of a run that carries the list along) counts, whatever
+        // the watch page did or did not get to hear about it.
+        let filter = ContentFilter(settings: settings)
+        return AutoplayPlanner.step(
+            after: video.id,
+            upNext: upNext,
+            progress: { [library] id in library.progress(for: id)?.progressSeconds },
+            allows: { filter.allows($0) }
+        )
     }
 
     // MARK: Failures and recovery
@@ -715,6 +848,7 @@ final class PlayerController {
 
     /// The video buffers for a long time: nothing is coming. Offline, wait for the connection; online, try fresh URLs.
     private func watchForStall() {
+        Self.log.debug("watching for a stall (state \(String(describing: self.state), privacy: .public), online \(self.network.isOnline))")
         stallTask?.cancel()
         let token = generation
         stallTask = Task { [weak self] in
@@ -806,12 +940,101 @@ final class PlayerController {
         seek(to: notice.segment.start)
     }
 
-    /// Starts the next queued video; returns false when the queue is empty.
+    /// Starts the next queued video (the Next button of the lock screen); returns false when there is none to start,
+    /// now or once the next page of the list behind the queue has arrived.
     @discardableResult
     func playNext() -> Bool {
-        guard let next = queue.first else { return false }
-        start(next, startAt: nil, queue: Array(queue.dropFirst()), expand: false)
+        advanceQueue(as: .now)
+    }
+
+    // MARK: Queue
+
+    /// Starts the first queued video. With nothing queued but more of the list behind the queue, asks for the next page
+    /// instead and starts its first video when it arrives (`refillFinished`). Returns false when there is nothing to
+    /// start, now or later.
+    private func advanceQueue(as request: QueueAdvance.Request) -> Bool {
+        if let next = queue.first {
+            start(next, startAt: nil, queue: Array(queue.dropFirst()), more: queueSource, expand: false)
+            return true
+        }
+        guard let source = queueSource, source.hasMore else { return false }
+        // A viewer who pressed Next keeps asking for the next video, whether or not the one that plays has ended since.
+        if pendingAdvance != .now {
+            pendingAdvance = request
+        }
+        refill(from: source)
         return true
+    }
+
+    /// Takes over the queue a list handed in: the videos that follow the current one, and the source of the rest of the
+    /// list. A source other than the one in hand ends the wait for a page of the old one.
+    private func adoptQueue(_ videos: [VideoSummary], more: QueueSource?) {
+        queue = videos
+        if more !== queueSource {
+            refillTask?.cancel()
+            refillTask = nil
+            pendingAdvance = nil
+            queueSource = more
+        }
+        refillQueueIfNeeded()
+    }
+
+    /// Asks the source for its next page when the queue is running low, so that it is there before the queue runs out.
+    private func refillQueueIfNeeded() {
+        guard let source = queueSource, source.needsRefill(queued: queue.count) else { return }
+        refill(from: source)
+    }
+
+    /// Asks `source` for its next page, unless one is on its way already.
+    ///
+    /// A page that arrives for a source the player has left (another list was opened, or the player was closed) is
+    /// dropped: the identity of the source is the guard here, not the video, because the queue goes on from video to
+    /// video with the same source.
+    private func refill(from source: QueueSource) {
+        guard refillTask == nil else { return }
+        refillTask = Task { [weak self] in
+            let page: [VideoSummary]?
+            do {
+                page = try await source.next()
+            } catch {
+                if !Task.isCancelled {
+                    Self.log.error("the next page of the queue could not be loaded: \(String(describing: error), privacy: .public)")
+                }
+                page = nil
+            }
+            guard let self, self.queueSource === source else { return }
+            self.refillTask = nil
+            self.refillFinished(with: page, from: source)
+        }
+    }
+
+    /// The page the queue asked for has come in (`nil` when it could not be loaded).
+    private func refillFinished(with page: [VideoSummary]?, from source: QueueSource) {
+        let added = page ?? []
+        queue += added
+        Self.log.info("queue: +\(added.count), \(self.queue.count) queued, more: \(source.hasMore)")
+        // The list is over: nothing is left to ask for.
+        if !source.hasMore {
+            queueSource = nil
+        }
+
+        let request = pendingAdvance
+        pendingAdvance = nil
+        switch QueueAdvance.action(for: request, queued: queue.count, isEnded: state == .ended) {
+        case .startNext:
+            _ = advanceQueue(as: .now)
+        case .autoplay:
+            if let video = currentVideo {
+                autoplayAfterQueue(of: video)
+            }
+        case .nothing:
+            // A page can hold a video or two only (the filter hid the rest): still low, so the next one is asked for. A
+            // page that failed or brought nothing waits for the next chance (the next video, the end of the queue).
+            if !added.isEmpty {
+                refillQueueIfNeeded()
+            }
+        }
+        updateNowPlaying()
     }
 
     private func seekPlayer(to seconds: Double) {
@@ -862,6 +1085,10 @@ final class PlayerController {
             requestOrientation(landscape: false)
         }
         presentation = .minimized
+        // The watch page goes away with the expanded player, perhaps before it had loaded the details.
+        if let video = currentVideo {
+            requestDetailsIfNoPageShows(for: video)
+        }
     }
 
     /// Stops playback and hides the player.
@@ -880,7 +1107,12 @@ final class PlayerController {
         streamInfo = nil
         state = .idle
         queue = []
+        refillTask?.cancel()
+        refillTask = nil
+        pendingAdvance = nil
+        queueSource = nil
         upNext = []
+        detailsHandedOverFor = nil
         segments = []
         chapters = []
         skipNotice = nil
@@ -896,7 +1128,10 @@ final class PlayerController {
         isRecovering = false
         rawSegments = []
         planner = nil
+        plannerLength = nil
         segmentsRequestedFor = nil
+        betterTitle = nil
+        betterTitleRequestedFor = nil
         cueTimeline = CueTimeline(cues: [])
         selectedCaption = nil
         isFullscreen = false
@@ -971,6 +1206,8 @@ final class PlayerController {
         ]
 
         let center = NotificationCenter.default
+        // Read here, on the main actor: `AVPlayer`'s constants are main-actor isolated, the observer below is not.
+        let reasonKey = AVPlayer.rateDidChangeReasonKey
         lifecycleNotifications = [
             center.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main) { [weak self] _ in
                 MainActor.assumeIsolated { self?.appDidEnterBackground() }
@@ -981,7 +1218,51 @@ final class PlayerController {
             center.addObserver(forName: UIApplication.willTerminateNotification, object: nil, queue: .main) { [weak self] _ in
                 MainActor.assumeIsolated { self?.saveProgress(force: true) }
             },
+            center.addObserver(forName: AVPlayer.rateDidChangeNotification, object: avPlayer, queue: .main) { [weak self] note in
+                let reason = note.userInfo?[reasonKey] as? String
+                MainActor.assumeIsolated { self?.playerRateDidChange(reasonNamed: reason) }
+            },
         ]
+    }
+
+    /// The rate of the player changed. When someone *set* it, that someone is the viewer or AVKit acting for the viewer,
+    /// and the wish follows: the pause and play buttons of the Picture in Picture window and the remote of an AirPlay
+    /// receiver reach `AVPlayer` directly, and `pause()` and `play()` here never run for them. Left alone, the wish would
+    /// still say "playing" after a pause in the Picture in Picture window, and the next quality change, or the end of a
+    /// phone call, would start the video again by itself.
+    ///
+    /// What the system does on its own (an interruption, the background) is not the viewer's doing and leaves the wish
+    /// alone: `audioInterruptionBegan` and the background handling rely on it. So does the controller's own `pause()` of
+    /// an item that is going away, which arrives while nothing is ready (`PlaybackIntent` has the rule).
+    private func playerRateDidChange(reasonNamed name: String?) {
+        let isSettled: Bool
+        switch state {
+        case .loading, .playing, .paused, .buffering: isSettled = true
+        case .idle, .ended, .failed: isSettled = false
+        }
+        let wanted = PlaybackIntent.wantsPlayback(
+            afterRateChangeTo: avPlayer.rate,
+            reason: Self.rateChangeReason(named: name),
+            wasWanted: shouldPlayWhenReady,
+            isSettled: isSettled && currentVideo != nil && isItemReady && !isRecovering
+        )
+        if wanted != shouldPlayWhenReady {
+            Self.log.info("the viewer \(wanted ? "resumed" : "paused", privacy: .public) outside the app's own buttons")
+            shouldPlayWhenReady = wanted
+        }
+    }
+
+    /// Why the rate changed, by the name the notification carries (nil when it names none, or one this app does not
+    /// know).
+    private static func rateChangeReason(named name: String?) -> PlaybackIntent.RateChangeReason? {
+        guard let name else { return nil }
+        switch AVPlayer.RateDidChangeReason(rawValue: name) {
+        case .setRateCalled: return .setRateCalled
+        case .setRateFailed: return .setRateFailed
+        case .audioSessionInterrupted: return .audioSessionInterrupted
+        case .appBackgrounded: return .appBackgrounded
+        default: return nil
+        }
     }
 
     private func timeControlStatusChanged() {
@@ -996,11 +1277,12 @@ final class PlayerController {
             }
             state = .playing
         case .waitingToPlayAtSpecifiedRate:
-            // A seek or a stall; a deliberate pause never lands here.
-            if state != .buffering {
-                state = .buffering
-                watchForStall()
-            }
+            // A seek or a stall; a deliberate pause never lands here. The watch starts at every entry into waiting, not
+            // only when the state turns to buffering: a reload (`beginReload`), a replay and a seek from the end set
+            // `.buffering` before the item starts to wait, and an item that hangs there must end in the error screen
+            // after the second failure just like the first one did.
+            if state != .buffering { state = .buffering }
+            watchForStall()
         case .paused:
             stallTask?.cancel()
             if state != .ended, !awaitingInitialStart {
@@ -1021,6 +1303,7 @@ final class PlayerController {
             setCurrentTime(max(0, time.seconds))
         }
         refreshDuration()
+        rebuildPlannerIfLengthChanged()
         refreshBufferedTime()
         if let item = avPlayer.currentItem { logPresentationSizeChange(of: item) }
         refreshCaption()
@@ -1122,16 +1405,27 @@ final class PlayerController {
     }
 
     /// Fetches the segments once per video, when SponsorBlock is on.
+    ///
+    /// A lookup that fails is tried again a few times (`SegmentLookup`), all inside this one task. Only an answer keeps
+    /// the video marked as asked for, and "no segments" is an answer. When every try failed the mark is cleared, so the
+    /// next chance asks again: Retry or a reload (`load` comes by here), a change of the SponsorBlock settings, the
+    /// connection coming back (`networkChanged`).
     private func ensureSegments(for videoID: String) {
         guard settings.sponsorBlockEnabled, segmentsRequestedFor != videoID else { return }
         segmentsRequestedFor = videoID
         segmentsTask?.cancel()
         segmentsTask = Task { [weak self] in
             guard let self else { return }
-            let loaded = (try? await self.sponsorBlock.segments(videoID: videoID)) ?? []
+            let outcome = await SegmentLookup.fetch(videoID: videoID, from: self.sponsorBlock)
             guard !Task.isCancelled, self.currentVideo?.id == videoID else { return }
-            self.rawSegments = loaded
-            self.rebuildPlanner()
+            switch outcome {
+            case .loaded(let loaded):
+                self.rawSegments = loaded
+                self.rebuildPlanner()
+            case .failed:
+                Self.log.info("SponsorBlock lookup for \(videoID, privacy: .public) failed, will ask again later")
+                self.segmentsRequestedFor = nil
+            }
         }
     }
 
@@ -1139,15 +1433,42 @@ final class PlayerController {
         let current = settings
         plannerEnabled = current.sponsorBlockEnabled
         plannerBehaviors = current.segmentBehaviors
+        let length = knownLength
+        plannerLength = length
         guard current.sponsorBlockEnabled, !rawSegments.isEmpty else {
             planner = nil
             if !segments.isEmpty { segments = [] }
             return
         }
-        let built = SegmentSkipPlanner(segments: rawSegments, behaviors: current.segmentBehaviors)
+        let built = SegmentSkipPlanner(segments: rawSegments, behaviors: current.segmentBehaviors, videoLength: length)
         planner = built
         let visible = built.visibleSegments
         if visible != segments { segments = visible }
+    }
+
+    /// How long the video is, as far as the player is sure: what the item reports once it is ready (`duration`), before
+    /// that the length of the resolved stream. Not the length of the copy of the video the player was opened with: the
+    /// video may have been trimmed since that was made. Nil for a live stream and while nothing is known.
+    private var knownLength: Double? {
+        guard !isLive else { return nil }
+        if isItemReady, duration > 0 { return duration }
+        if let length = streamInfo?.lengthSeconds, length > 0 { return Double(length) }
+        return nil
+    }
+
+    /// The planner drops segments of another cut of the video once it knows the length, and the length comes after the
+    /// segments may have (with the stream, then with the item). Builds the planner again when the length first becomes
+    /// known or moves.
+    private func rebuildPlannerIfLengthChanged() {
+        guard !rawSegments.isEmpty else { return }
+        switch (plannerLength, knownLength) {
+        case (nil, nil):
+            return
+        case let (old?, new?) where abs(old - new) <= 0.25:
+            return
+        default:
+            rebuildPlanner()
+        }
     }
 
     /// The viewer changed the SponsorBlock settings while a video plays.
@@ -1179,11 +1500,51 @@ final class PlayerController {
         skipNotice = SkipNotice(id: segment.id, segment: segment)
         skipNoticeTask?.cancel()
         let id = segment.id
+        let duration = PlayerAccessibility.skipNoticeDuration(assistiveTechnologyOn: assistiveTechnologyIsRunning)
         skipNoticeTask = Task { [weak self] in
-            try? await Task.sleep(for: .seconds(4))
+            try? await Task.sleep(for: duration)
             guard !Task.isCancelled, let self, self.skipNotice?.id == id else { return }
             self.skipNotice = nil
         }
+    }
+
+    /// VoiceOver or Switch Control is running (in a Debug build `-assistiveTechnology YES` stands in).
+    private var assistiveTechnologyIsRunning: Bool {
+        #if DEBUG
+        if DebugLaunchHooks.assistiveTechnology { return true }
+        #endif
+        return UIAccessibility.isVoiceOverRunning || UIAccessibility.isSwitchControlRunning
+    }
+
+    // MARK: De-clickbait title
+
+    /// Looks up the community title of the video once, when "De-clickbait titles" is on. A title the lists already
+    /// asked for (`DeArrowTitleCache`) is taken at once; otherwise it arrives a moment later and the lock screen is
+    /// told. No answer, and a failed lookup, leave the original title.
+    private func ensureBetterTitle(for videoID: String) {
+        guard settings.deArrowTitles, betterTitleRequestedFor != videoID else { return }
+        betterTitleRequestedFor = videoID
+        titleTask?.cancel()
+        if let known = DeArrowTitleCache.shared.lookup(videoID) {
+            betterTitle = known.title
+            return
+        }
+        titleTask = Task { [weak self] in
+            guard let self else { return }
+            let title = await self.deArrow.betterTitle(videoID: videoID)
+            guard !Task.isCancelled, self.currentVideo?.id == videoID else { return }
+            DeArrowTitleCache.shared.store(title, for: videoID)
+            self.betterTitle = title
+            self.updateNowPlaying()
+        }
+    }
+
+    /// The viewer switched "De-clickbait titles" while a video is loaded: the lock screen follows, and the community
+    /// title is looked up if it never was (the setting was off when the video started).
+    func deArrowSettingChanged() {
+        guard let id = currentVideo?.id else { return }
+        ensureBetterTitle(for: id)
+        updateNowPlaying()
     }
 
     // MARK: Captions
@@ -1357,6 +1718,11 @@ final class PlayerController {
         if !qualityIsManual {
             applyDefaultQuality()
         }
+        // A SponsorBlock lookup that failed for good asks again now that there may be a connection. Nothing happens
+        // unless one did.
+        if network.isOnline, let id = currentVideo?.id {
+            ensureSegments(for: id)
+        }
     }
 
     // MARK: Audio interruptions
@@ -1450,6 +1816,7 @@ final class PlayerController {
         let playing = state == .playing
         nowPlaying.update(
             video: video,
+            title: displayTitle ?? video.title,
             duration: duration,
             elapsed: currentTime,
             rate: playing ? Double(avPlayer.rate) : 0,
@@ -1470,9 +1837,52 @@ extension PlayerController {
     }
 
     /// Adds a SponsorBlock segment to the loaded ones, for example an outro that runs to the end of the video.
-    func debugAddSegment(start: Double, end: Double) {
-        rawSegments.append(SponsorSegment(id: "debug-\(start)-\(end)", category: .sponsor, actionType: .skip, start: start, end: end))
+    /// `videoDuration` is the length of the video the segment claims to have been submitted for.
+    func debugAddSegment(start: Double, end: Double, videoDuration: Double? = nil) {
+        rawSegments.append(
+            SponsorSegment(
+                id: "debug-\(start)-\(end)",
+                category: .sponsor,
+                actionType: .skip,
+                start: start,
+                end: end,
+                videoDuration: videoDuration
+            )
+        )
         rebuildPlanner()
+    }
+
+    /// `-silentPlayback`: plays the item without its audio rendition, so no audio queue has to start.
+    func debugDropAudio(of item: AVPlayerItem) async {
+        guard let group = try? await item.asset.loadMediaSelectionGroup(for: .audible) else { return }
+        item.select(nil, in: group)
+    }
+
+    /// Adds a highlight (`poi_highlight`: a moment, start and end are the same second) to the loaded segments.
+    func debugAddHighlight(at time: Double) {
+        rawSegments.append(SponsorSegment(id: "debug-highlight-\(time)", category: .poiHighlight, actionType: .poi, start: time, end: time))
+        rebuildPlanner()
+    }
+
+    /// Ends the video with the error screen, as a stream that cannot be played would.
+    func debugFail(message: String = "Failed on purpose by the player script.") {
+        fail(message: message)
+    }
+
+    /// Opens the video that is current once more, the way a link to it does.
+    func debugReopen() {
+        guard let video = currentVideo else { return }
+        open(video, startAt: nil, queue: [])
+    }
+
+    /// Opens `id` the way a row of Watch Later does for a broadcast that has ended since it was saved: the saved copy
+    /// still says live and upcoming, and has no length.
+    func debugOpenStaleLive(id: String) {
+        var video = SampleData.video(id: id) ?? VideoSummary(id: id, title: "Saved while it was live")
+        video.isLive = true
+        video.isUpcoming = true
+        video.durationSeconds = nil
+        open(video, startAt: nil, queue: [])
     }
 
     /// Sets the quality the way the connection does (Wi-Fi or cellular): only the cap, no new item. That is also how a
@@ -1481,6 +1891,12 @@ extension PlayerController {
         isApplyingDefaultQuality = true
         self.quality = quality
         isApplyingDefaultQuality = false
+    }
+
+    /// Records a minute of the sample video `id` in the history, so that autoplay treats it as watched.
+    func debugMarkWatched(_ id: String) {
+        guard let video = SampleData.video(id: id) else { return }
+        library.recordProgress(video: video, seconds: 60, duration: video.durationSeconds.map(Double.init))
     }
 
     /// Shows the skip notice of the first segment and leaves it up (it has no timer), for screenshots.
@@ -1504,7 +1920,15 @@ extension PlayerController {
             quality=\(self.quality.label, privacy: .public) size=\(Int(size.width))x\(Int(size.height)) \
             captions=\(self.selectedCaption?.id ?? "off", privacy: .public) caption=\(caption, privacy: .public) \
             notice=\(notice, privacy: .public) segments=\(self.segments.count) upNext=\(self.upNext.count) \
-            queue=\(self.queue.count) video=\(self.currentVideo?.id ?? "-", privacy: .public) \
+            upNextHead=\(self.upNext.first?.id ?? "-", privacy: .public) \
+            chapters=\(self.chapters.count) queue=\(self.queue.count) more=\(self.queueSource?.hasMore ?? false) \
+            blocked=\(self.settings.blockedChannels.count) \
+            video=\(self.currentVideo?.id ?? "-", privacy: .public) \
+            live=\(self.isLive) videoLive=\(self.currentVideo?.isLive ?? false) \
+            videoUpcoming=\(self.currentVideo?.isUpcoming ?? false) \
+            history=\(self.library.history.map(\.id).joined(separator: ","), privacy: .public) \
+            nowPlaying=\(self.nowPlaying.debugPublished, privacy: .public) \
+            displayTitle=\(self.displayTitle ?? "-", privacy: .public) \
             presentation=\(String(describing: self.presentation), privacy: .public) fullscreen=\(self.isFullscreen) \
             window=\(Int(bounds.width))x\(Int(bounds.height)) safeTop=\(insets.top) safeBottom=\(insets.bottom)
             """)

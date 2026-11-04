@@ -49,6 +49,10 @@ final class FeedPages<Item: Identifiable & Sendable> {
 
     var hasMore: Bool { continuation != nil }
 
+    /// The ids of every item that arrived, whether the filter let it through or not. Not observed: it is for code that
+    /// takes over where the list stopped (the play queue), not for drawing.
+    var arrivedIDs: Set<Item.ID> { seen }
+
     // MARK: Replacing the content
 
     /// Replaces everything with a first page. A page that is still loading is abandoned.

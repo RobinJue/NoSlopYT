@@ -41,7 +41,8 @@ private struct ContinueWatchingCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            ThumbnailView(video: entry.video)
+            // "12 min left" under the title says how much is watched; the thumbnail need not say it a second time.
+            ThumbnailView(video: entry.video, speaksProgress: false)
                 .clipShape(RoundedRectangle(cornerRadius: Theme.cornerRadius, style: .continuous))
 
             VStack(alignment: .leading, spacing: 2) {

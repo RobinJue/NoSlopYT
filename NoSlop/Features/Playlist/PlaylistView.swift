@@ -2,7 +2,8 @@ import NoSlopKit
 import SwiftUI
 
 /// A public YouTube playlist: header with "Play all", then the videos as rows that page in as you scroll. Tapping a
-/// video plays it with the videos after it queued, like "Play all" from there.
+/// video plays it with the videos after it queued, like "Play all" from there. Both queue the whole playlist: the part
+/// that is not loaded yet (a playlist of 250 videos has loaded about 100) follows page by page while the queue plays.
 struct PlaylistView: View {
     let playlistID: String
 
@@ -31,6 +32,17 @@ struct PlaylistView: View {
             }
         }
         .task { model.loadIfNeeded(using: env) }
+        #if DEBUG
+        .debugPlaylistPlay(isLoaded: debugIsLoaded) { choice in
+            switch choice {
+            case .all:
+                playAll()
+            case .row(let number):
+                let items = model.list.items
+                if number <= items.count { play(items[number - 1]) }
+            }
+        }
+        #endif
         // "Don't show this channel" (or any other feed filter) takes effect on the videos on screen, not after a
         // reload. Also when the screen comes back: the filter may have changed on a screen above it.
         .onChange(of: env.settings) {
@@ -83,7 +95,7 @@ struct PlaylistView: View {
         if !list.items.isEmpty {
             ForEach(list.items) { video in
                 Button {
-                    env.open(video, queue: model.videos(after: video))
+                    play(video)
                 } label: {
                     VideoRowView(video: video)
                         .padding(.horizontal, Theme.padding)
@@ -120,11 +132,24 @@ struct PlaylistView: View {
         }
     }
 
-    /// Plays the first video and queues the others.
+    /// Plays `video` and queues the videos after it, like "Play all" from there. What the playlist has behind the
+    /// loaded part is queued page by page as the queue runs low.
+    private func play(_ video: VideoSummary) {
+        env.open(video, queue: model.videos(after: video), more: model.queueSource(using: env))
+    }
+
+    /// Plays the first video and queues the others, the whole playlist and not only the part that is loaded.
     private func playAll() {
         guard let first = model.list.items.first else { return }
-        env.open(first, queue: Array(model.list.items.dropFirst()))
+        env.open(first, queue: Array(model.list.items.dropFirst()), more: model.queueSource(using: env))
     }
+
+    #if DEBUG
+    private var debugIsLoaded: Bool {
+        if case .loaded = model.phase { return true }
+        return false
+    }
+    #endif
 }
 
 #Preview {

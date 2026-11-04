@@ -107,6 +107,10 @@ private struct RecentSearchesList: View {
             }
             .listStyle(.plain)
             .scrollDismissesKeyboard(.immediately)
+            .miniPlayerClearance()
+            #if DEBUG
+            .debugSearchScroll()
+            #endif
         }
     }
 }
@@ -151,6 +155,10 @@ private struct SuggestionsList: View {
         }
         .listStyle(.plain)
         .scrollDismissesKeyboard(.immediately)
+        .miniPlayerClearance()
+        #if DEBUG
+        .debugSearchScroll()
+        #endif
     }
 
     private struct Row {

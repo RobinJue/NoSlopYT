@@ -1,5 +1,6 @@
 #if DEBUG
 import Foundation
+import MediaAccessibility
 import NoSlopKit
 
 /// Checks in the simulator that links cannot reach, driven by a launch argument. Debug builds only.
@@ -9,15 +10,32 @@ import NoSlopKit
 ///
 /// The steps run in order, separated by `;`, once the first video plays:
 ///
-/// - `wait=<seconds>`, `waitPlaying` (until the video plays), `waitVideo` (until another video is the current one)
+/// - `wait=<seconds>`, `waitPlaying` (until the video plays), `waitVideo` (until another video is the current one;
+///   `waitVideo=<seconds>` gives up after that long)
+/// - `hops=<count>[,<seconds before the end>]` plays on from video to video: for each hop it waits until the video plays,
+///   jumps to the end (2 s before it unless told otherwise), waits up to 25 s for another video to start and logs the
+///   state (`hop <n>`). It stops at the first hop that no video follows.
+/// - `next` is the Next button of the lock screen (`playNext`), `watched=<video id>[,<video id>...]` records a minute of
+///   each sample video in the history, so that autoplay passes it over, `scrollPage=<points>` scrolls the watch page
 /// - `quality=<auto|1080|720|480|360>` (a pick), `capQuality=<...>` (only the cap, as the connection sets it),
 ///   `rate=<speed>`, `pause`, `play`
+/// - `systemPause`, `systemPlay` reach the `AVPlayer` directly, as the Picture in Picture window or an AirPlay remote
+///   does, without `pause()` and `play()` of the controller
+/// - `fail` ends the video with the error screen (`failLong`: with the long reason YouTube gives for an age-restricted
+///   video), `retry` is its Retry button, `reopen` opens the current video again
+///   (a link to it), `openStaleLive=<video id>` opens a video whose saved copy still says live and upcoming (a row
+///   of Watch Later after the broadcast ended)
 /// - `seek=<seconds>`, `seekEnd=<seconds before the end>`, `undo` (the skip notice's Undo)
-/// - `captions=<on|off>`, `fullscreen`, `minimize`, `expand`, `autoplay=<on|off>`, `sponsorBlock=<on|off>`, `notice`
-///   (shows the skip notice and leaves it up)
-/// - `segment=<start>-<end>` adds a SponsorBlock segment, `endSegment=<seconds before the end>[,<seconds past it>]`
-///   adds one that runs to the end of the video
-/// - `log=<tag>` writes the state of the player to the log, `watch=<seconds>` does so every second meanwhile
+/// - `captions=<on|off>`, `fullscreen`, `minimize`, `expand`, `autoplay=<on|off>`, `sponsorBlock=<on|off>`,
+///   `deArrow=<on|off>` ("De-clickbait titles"), `notice` (shows the skip notice and leaves it up)
+/// - `segment=<start>-<end>[@<length>]` adds a SponsorBlock segment (`@` is the length of the video it was submitted
+///   for), `endSegment=<seconds before the end>[,<seconds past it>]` adds one that runs to the end of the video,
+///   `highlight=<seconds>` adds a highlight (a moment, `poi_highlight`) at that second
+/// - `log=<tag>` writes the state of the player to the log, `watch=<seconds>` does so every second meanwhile,
+///   `axdump=<tag>` writes the accessibility elements of this moment to `<Documents>/ax-<tag>.txt` (see
+///   `AccessibilityDump`), `axescape` is the two-finger scrub of VoiceOver with the focus on the video,
+///   `captionStyle=<parts separated by |>` changes the caption style the way Settings does while the app runs (see
+///   `-captionStyle`: `captionStyle=size=2|text=yellow`), `captionStyle=` puts the standard look back
 @MainActor
 enum PlayerDebugScript {
     static func runIfRequested(on player: PlayerController) {
@@ -50,7 +68,24 @@ enum PlayerDebugScript {
                 await wait(until: { player.state == .playing })
             case "waitVideo":
                 let before = player.currentVideo?.id
-                await wait(until: { player.currentVideo?.id != before })
+                await wait(until: { player.currentVideo?.id != before }, upTo: Double(value) ?? 90)
+            case "hops":
+                let numbers = value.split(separator: ",").compactMap { Double($0) }
+                let secondsBeforeEnd = numbers.count > 1 ? numbers[1] : 2
+                for hop in 1...max(Int(numbers.first ?? 1), 1) {
+                    await wait(until: { player.state == .playing }, upTo: 20)
+                    let current = player.currentVideo?.id
+                    player.seek(to: player.duration - secondsBeforeEnd)
+                    await wait(until: { player.currentVideo?.id != current }, upTo: 25)
+                    player.debugLogSnapshot("hop \(hop)")
+                    if player.currentVideo?.id == current { break }
+                }
+            case "next":
+                _ = player.playNext()
+            case "scrollPage":
+                if let points = Double(value) { DebugLaunchHooks.scrollWatchPage(to: points) }
+            case "watched":
+                for id in value.split(separator: ",") { player.debugMarkWatched(String(id)) }
             case "quality":
                 let options: [String: QualityPreference] = ["auto": .auto, "1080": .p1080, "720": .p720, "480": .p480, "360": .p360]
                 if let quality = options[value] { player.quality = quality }
@@ -63,6 +98,23 @@ enum PlayerDebugScript {
                 player.pause()
             case "play":
                 player.play()
+            case "systemPause":
+                player.avPlayer.pause()
+            case "systemPlay":
+                player.avPlayer.play()
+            case "fail":
+                player.debugFail()
+            case "failLong":
+                player.debugFail(
+                    message: "This video may be inappropriate for some users. Sign in to confirm your age, or open it on YouTube "
+                        + "in a browser where you are signed in. Videos like this one cannot be played in No Slop."
+                )
+            case "retry":
+                player.retry()
+            case "reopen":
+                player.debugReopen()
+            case "openStaleLive":
+                player.debugOpenStaleLive(id: value)
             case "seek":
                 if let seconds = Double(value) { player.seek(to: seconds) }
             case "seekEnd":
@@ -83,15 +135,35 @@ enum PlayerDebugScript {
                 player.debugSettingsStore.settings.autoplayNext = value == "on"
             case "sponsorBlock":
                 player.debugSettingsStore.settings.sponsorBlockEnabled = value == "on"
+            case "deArrow":
+                player.debugSettingsStore.settings.deArrowTitles = value == "on"
             case "segment":
-                let range = value.split(separator: "-").compactMap { Double($0) }
-                if range.count == 2 { player.debugAddSegment(start: range[0], end: range[1]) }
+                let parts = value.split(separator: "@", maxSplits: 1)
+                let range = (parts.first ?? "").split(separator: "-").compactMap { Double($0) }
+                let length = parts.count > 1 ? Double(parts[1]) : nil
+                if range.count == 2 { player.debugAddSegment(start: range[0], end: range[1], videoDuration: length) }
+            case "highlight":
+                if let seconds = Double(value) { player.debugAddHighlight(at: seconds) }
             case "endSegment":
                 let numbers = value.split(separator: ",").compactMap { Double($0) }
                 if let before = numbers.first {
                     let end = player.duration + (numbers.count > 1 ? numbers[1] : 0)
                     player.debugAddSegment(start: player.duration - before, end: end)
                 }
+            case "axdump":
+                AccessibilityDump.write(tag: value)
+            case "captionStyle":
+                // What Settings does: the style changes and the system tells the apps with this notification.
+                UserDefaults.standard.set(value.replacingOccurrences(of: "|", with: ";"), forKey: "captionStyle")
+                CFNotificationCenterPostNotification(
+                    CFNotificationCenterGetLocalCenter(),
+                    CFNotificationName(kMACaptionAppearanceSettingsChangedNotification),
+                    nil,
+                    nil,
+                    true
+                )
+            case "axescape":
+                _ = AccessibilityDump.performEscape(startingAtLabel: value.isEmpty ? "Video" : value)
             case "log":
                 break
             default:

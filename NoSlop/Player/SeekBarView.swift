@@ -2,8 +2,9 @@ import NoSlopKit
 import SwiftUI
 
 /// The scrubber: played part in the accent colour, buffered part lighter, SponsorBlock segments in their category
-/// colours, a tick at every chapter start. Dragging scrubs (a bubble shows the time and the chapter title) and the
-/// seek happens when the finger lifts.
+/// colours (a stretch for a sponsor read or an intro, a short tick for a highlight, which marks a moment), a tick at
+/// every chapter start. Dragging scrubs (a bubble shows the time and the chapter title) and the seek happens when the
+/// finger lifts.
 struct SeekBarView: View {
     let currentTime: Double
     let duration: Double
@@ -75,13 +76,11 @@ struct SeekBarView: View {
                 .frame(width: width * fraction(shown))
 
             ForEach(segments) { segment in
-                let start = fraction(segment.start)
-                let end = fraction(segment.end)
-                if end > start {
+                if let frame = SeekBarMarkerLayout.frame(for: segment, duration: duration, width: width) {
                     Rectangle()
                         .fill(Color(sponsorBlockHex: segment.category.colorHex))
-                        .frame(width: max(2, width * (end - start)))
-                        .offset(x: width * start)
+                        .frame(width: frame.width)
+                        .offset(x: frame.x)
                 }
             }
 
@@ -185,7 +184,9 @@ private extension Color {
             currentTime: 70,
             duration: 213,
             bufferedTime: 120,
-            segments: SampleData.segments,
+            // The samples plus a highlight, which marks a moment and has no length.
+            segments: SampleData.segments
+                + [SponsorSegment(id: "highlight", category: .poiHighlight, actionType: .poi, start: 90, end: 90)],
             chapters: SampleData.chapters,
             onSeek: { _ in }
         )

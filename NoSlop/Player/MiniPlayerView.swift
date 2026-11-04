@@ -8,6 +8,11 @@ struct MiniPlayerView: View {
 
     static let height: CGFloat = 64
     private static let cornerRadius: CGFloat = 16
+    /// The title and the channel stop following the viewer's text size here. The bar is a fixed 64 pt (what
+    /// `Theme.miniPlayerInset` and `MiniPlayerPlacement` are measured for), and two lines of accessibility-size text are
+    /// taller than that: they would be cut off at the top and the bottom. Up to here they fit, and the expanded player
+    /// shows the title at any size.
+    private static let largestTextSize = DynamicTypeSize.xxxLarge
 
     var body: some View {
         let player = env.player
@@ -103,6 +108,7 @@ struct MiniPlayerView: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        .dynamicTypeSize(...Self.largestTextSize)
     }
 
     private func progressLine(_ player: PlayerController) -> some View {
@@ -144,8 +150,9 @@ struct MiniPlayerView: View {
     }
 
     private func accessibilityTitle(_ player: PlayerController) -> String {
-        guard let video = player.currentVideo else { return "Player" }
-        let title = video.title.isEmpty ? "Video" : video.title
+        // The title the visible text shows: with De-clickbait titles on, the community title.
+        guard let video = player.currentVideo, let shown = player.displayTitle else { return "Player" }
+        let title = shown.isEmpty ? "Video" : shown
         if let channel = video.channel?.name, !channel.isEmpty {
             return "\(title), \(channel)"
         }

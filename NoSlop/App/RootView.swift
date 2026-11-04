@@ -37,6 +37,9 @@ struct RootView: View {
                 }
             }
         }
+        // While the player panel covers the tabs, VoiceOver has no business in them: the tab bar, the navigation bars
+        // and the lists are hidden from it. (Before `.overlay`: after it, the panel would be hidden as well.)
+        .accessibilityHidden(env.player.presentation == .expanded)
         .overlay { PlayerOverlayContainer() }
         .onOpenURL { url in
             Task { await env.handleOpenURL(url) }
@@ -54,6 +57,8 @@ struct RootView: View {
         }
         #if DEBUG
         .task {
+            AccessibilityDump.runIfRequested()
+            DebugUIScript.runIfRequested(in: env)
             await LaunchURLArgument.openAll(in: env)
         }
         #endif
