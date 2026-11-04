@@ -29,6 +29,9 @@ enum DownloadFailure: Error, Equatable, Sendable, LocalizedError {
     case tooLarge
     case liveStream
     case outOfSpace
+    /// The device cannot hold this download: checked before anything is fetched. `needed` counts what is still to be
+    /// fetched and the room the merge takes at the end; both are bytes.
+    case notEnoughSpace(needed: Int64, free: Int64)
     case fileSystem(String)
     case mergeFailed(String)
     /// The system cut the merge short (the app was suspended in the middle of it, media services were reset). Nothing
@@ -58,6 +61,9 @@ enum DownloadFailure: Error, Equatable, Sendable, LocalizedError {
             return "Live streams can't be downloaded."
         case .outOfSpace:
             return "There isn't enough free space on this device."
+        case .notEnoughSpace(let needed, let free):
+            let formatter: (Int64) -> String = { ByteCountFormatter.string(fromByteCount: $0, countStyle: .file) }
+            return "There isn't enough free space on this device: this download needs about \(formatter(needed)) while it finishes, and \(formatter(free)) is free."
         case .fileSystem:
             return "Couldn't save the download to disk."
         case .mergeFailed:
@@ -77,12 +83,13 @@ enum DownloadFailure: Error, Equatable, Sendable, LocalizedError {
         return false
     }
 
-    /// Whether what is already on disk is still worth keeping after the download failed like this: a full disk, a merge
-    /// that was interrupted, a disk that could not be written, parts that went missing. None of these says anything
+    /// Whether what is already on disk is still worth keeping after the download failed like this: a full disk (or a
+    /// download that would not fit), a merge that was interrupted, a disk that could not be written, parts that went
+    /// missing. None of these says anything
     /// against the downloaded data, and a retry carries on from it.
     var keepsDownloadedData: Bool {
         switch self {
-        case .outOfSpace, .mergeInterrupted, .fileSystem, .missingParts: return true
+        case .outOfSpace, .notEnoughSpace, .mergeInterrupted, .fileSystem, .missingParts: return true
         default: return false
         }
     }
@@ -160,6 +167,9 @@ struct DownloadTuning: Sendable {
     var mux: DownloadMuxer = { videoFile, audioFile, durationSeconds, output in
         try await MediaMuxer.mux(videoFile: videoFile, audioFile: audioFile, durationSeconds: durationSeconds, output: output)
     }
+    /// How many bytes are free on the volume of the given folder; nil when that cannot be told, and the download then
+    /// goes ahead. Tests replace it to run out of room without filling a disk.
+    var availableCapacity: @Sendable (URL) -> Int64? = { DownloadAssembler.availableCapacity(at: $0) }
 
     static let standard = DownloadTuning()
 }
@@ -372,6 +382,23 @@ struct DownloadWorkspace: Sendable {
     }
 }
 
+// MARK: - Room on the device
+
+/// How much free space a download needs.
+enum DownloadSpace {
+    /// Kept free on top of what the download itself takes, so that it never fills the device to the last byte.
+    static let margin: Int64 = 64 * 1_048_576
+
+    /// What must be free before `totalBytes` of streams are fetched when `presentBytes` of them are on disk already.
+    ///
+    /// The streams are fetched in full (`totalBytes`), and then the merge writes the combined file next to them before
+    /// they are removed: at its peak the download holds twice its size. Whatever is on disk already has been paid for.
+    /// A merge-only retry (everything is on disk) needs about one more copy.
+    static func needed(totalBytes: Int64, presentBytes: Int64) -> Int64 {
+        max(0, 2 * totalBytes - presentBytes) + margin
+    }
+}
+
 // MARK: - Assembly
 
 /// Turns the fetched parts into the final file. Every step is restartable from what is on disk: a stream file exists
@@ -385,6 +412,22 @@ enum DownloadAssembler {
     static func fileSize(_ url: URL) -> Int64? {
         guard let size = try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize else { return nil }
         return Int64(size)
+    }
+
+    /// The bytes available for the volume `url` is on, counting what the system would free up if it had to (cached
+    /// files, say): the number the system itself shows as available for something the person asked for. nil when the
+    /// volume does not say.
+    static func availableCapacity(at url: URL) -> Int64? {
+        let values = try? url.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey, .volumeAvailableCapacityKey])
+        if let important = values?.volumeAvailableCapacityForImportantUsage { return important }
+        return values?.volumeAvailableCapacity.map(Int64.init)
+    }
+
+    /// `provider`'s answer for `url`, asked off the main actor: the system can take a moment to work out what it could
+    /// free up.
+    @concurrent
+    static func freeSpace(at url: URL, using provider: @Sendable (URL) -> Int64?) async -> Int64? {
+        provider(url)
     }
 
     /// The chunks that need no download: parts of exactly the right size, and every chunk of a stream whose

@@ -363,6 +363,15 @@ public final class DownloadManager {
             let present = try await DownloadAssembler.prepare(plan: plan, workspace: workspace)
             try ensureStarting(id, generation)
 
+            // Fetching what is missing takes room, and so does the merge at the end: it writes a second copy before the
+            // streams are removed. Better to say so now than after gigabytes have arrived (maybe over mobile data) and the
+            // device is full. What is on disk already is not asked for again, and the parts stay for the next try.
+            let needed = DownloadSpace.needed(totalBytes: plan.totalBytes, presentBytes: present.bytes)
+            if let free = await DownloadAssembler.freeSpace(at: rootDirectory, using: tuning.availableCapacity), free < needed {
+                throw DownloadFailure.notEnoughSpace(needed: needed, free: free)
+            }
+            try ensureStarting(id, generation)
+
             starts[id] = nil
             let job = DownloadJob(plan: plan, generation: generation, present: present)
             jobs[id] = job

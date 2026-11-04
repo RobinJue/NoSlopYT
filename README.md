@@ -163,8 +163,9 @@ and by running it with the mock services (next section).
   a time, however many downloads finish together. AVFoundation reports twice the real length for YouTube's
   fragmented MP4 files, so both tracks are cut to the true duration (the format's `approxDurationMs`, else the
   video's length), for audio-only downloads too. A half-written file never counts as finished. Merging needs room
-  for a second copy of the video. A download that fails keeps what it fetched, and so does a merge that the system
-  interrupted: Retry only fetches or merges what is missing.
+  for a second copy of the video, so before it fetches anything the app checks the free space and refuses a download
+  that would not fit, saying how much it needs and how much is free. A download that fails keeps what it fetched, and
+  so does a merge that the system interrupted: Retry only fetches or merges what is missing.
 - **SponsorBlock and DeArrow** are asked the privacy-preserving way: the app sends only the first 4 hex characters
   of the SHA-256 of the video ID to `sponsor.ajay.app`, the server answers for every video that shares that prefix,
   and the app keeps the entry for its own video. The server never learns what you watch.
@@ -220,7 +221,8 @@ shows a plain "Can't open this link" message.
 - **A download failed or is paused.** Tap Retry: it asks YouTube for fresh stream addresses and reuses the parts
   that are still good, so only what is missing is fetched again. When a stream address stops working (it expired, or
   the phone left the Wi-Fi it was made for), the app asks YouTube for new ones by itself once before it gives up.
-  A nearly full device cannot merge a download.
+  "There isn't enough free space" means the download, plus a second copy for the merge, would not fit: free some
+  space and tap Retry, the parts that were fetched are kept.
 - **A download stopped after you swiped the app away.** iOS cancels the background transfers of an app that was
   force-quit and does not start it again. Open No Slop: the parts that were already fetched are kept, and if the row
   says Paused, tap Retry.
