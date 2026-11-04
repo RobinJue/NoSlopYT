@@ -13,12 +13,26 @@ import SwiftUI
 ///   Search key pressed.
 /// - `-scrollToEnd YES`: while the mini player shows, every list that makes room for it scrolls to its end, so a
 ///   screenshot shows whether the last row clears the bar.
+/// - `-streamDelay <seconds>`: the mock stream resolver takes that long (0.3 s by default), so a video stays in its
+///   loading state long enough to look at.
+/// - `-flakySponsorBlock <n>`: the first n SponsorBlock lookups of a mock run fail, the next ones answer.
 enum DebugLaunchHooks {
     private static var isPrepared = false
     private static var isSearchTextTaken = false
 
     static var scrollsToEnd: Bool {
         UserDefaults.standard.bool(forKey: "scrollToEnd")
+    }
+
+    /// How long the mock stream resolver takes: `-streamDelay`, else its usual 0.3 s.
+    static var mockStreamDelay: Duration {
+        let seconds = UserDefaults.standard.double(forKey: "streamDelay")
+        return seconds > 0 ? .milliseconds(Int(seconds * 1_000)) : .milliseconds(300)
+    }
+
+    /// How many SponsorBlock lookups of a mock run fail first: `-flakySponsorBlock`, else none.
+    static var flakySponsorBlockFailures: Int {
+        max(0, UserDefaults.standard.integer(forKey: "flakySponsorBlock"))
     }
 
     /// Runs `-subscribeAll` and starts the wait of `-blockChannel`, once per launch. Home calls it when it first

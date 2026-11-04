@@ -153,7 +153,13 @@ final class AppEnvironment {
             .appendingPathComponent("NoSlop-Preview-\(UUID().uuidString)", isDirectory: true)
         let defaults = UserDefaults(suiteName: "com.robinjungerich.noslopyt.preview.\(UUID().uuidString)") ?? .standard
 
+        #if DEBUG
+        let streams = MockStreamResolver(delay: DebugLaunchHooks.mockStreamDelay)
+        let sponsorBlock = MockSponsorBlock(failingFirst: DebugLaunchHooks.flakySponsorBlockFailures)
+        #else
         let streams = MockStreamResolver()
+        let sponsorBlock = MockSponsorBlock()
+        #endif
         let settingsStore = SettingsStore(defaults: defaults)
         let library = LibraryStore(directory: scratch.appendingPathComponent("Library", isDirectory: true))
         let downloads = DownloadManager(
@@ -168,7 +174,7 @@ final class AppEnvironment {
             captions: MockCaptions(),
             subscriptionFeed: MockSubscriptionFeed(),
             homeFeed: MockHomeFeed(),
-            sponsorBlock: MockSponsorBlock(),
+            sponsorBlock: sponsorBlock,
             deArrow: MockDeArrow(),
             auth: MockAuth(),
             account: MockAccountService(),

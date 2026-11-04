@@ -12,11 +12,16 @@ import NoSlopKit
 /// - `wait=<seconds>`, `waitPlaying` (until the video plays), `waitVideo` (until another video is the current one)
 /// - `quality=<auto|1080|720|480|360>` (a pick), `capQuality=<...>` (only the cap, as the connection sets it),
 ///   `rate=<speed>`, `pause`, `play`
+/// - `systemPause`, `systemPlay` reach the `AVPlayer` directly, as the Picture in Picture window or an AirPlay remote
+///   does, without `pause()` and `play()` of the controller
+/// - `fail` ends the video with the error screen, `retry` is its Retry button, `reopen` opens the current video again
+///   (a link to it), `openStaleLive=<video id>` opens a video whose saved copy still says live and upcoming (a row
+///   of Watch Later after the broadcast ended)
 /// - `seek=<seconds>`, `seekEnd=<seconds before the end>`, `undo` (the skip notice's Undo)
 /// - `captions=<on|off>`, `fullscreen`, `minimize`, `expand`, `autoplay=<on|off>`, `sponsorBlock=<on|off>`, `notice`
 ///   (shows the skip notice and leaves it up)
-/// - `segment=<start>-<end>` adds a SponsorBlock segment, `endSegment=<seconds before the end>[,<seconds past it>]`
-///   adds one that runs to the end of the video
+/// - `segment=<start>-<end>[@<length>]` adds a SponsorBlock segment (`@` is the length of the video it was submitted
+///   for), `endSegment=<seconds before the end>[,<seconds past it>]` adds one that runs to the end of the video
 /// - `log=<tag>` writes the state of the player to the log, `watch=<seconds>` does so every second meanwhile
 @MainActor
 enum PlayerDebugScript {
@@ -63,6 +68,18 @@ enum PlayerDebugScript {
                 player.pause()
             case "play":
                 player.play()
+            case "systemPause":
+                player.avPlayer.pause()
+            case "systemPlay":
+                player.avPlayer.play()
+            case "fail":
+                player.debugFail()
+            case "retry":
+                player.retry()
+            case "reopen":
+                player.debugReopen()
+            case "openStaleLive":
+                player.debugOpenStaleLive(id: value)
             case "seek":
                 if let seconds = Double(value) { player.seek(to: seconds) }
             case "seekEnd":
@@ -84,8 +101,10 @@ enum PlayerDebugScript {
             case "sponsorBlock":
                 player.debugSettingsStore.settings.sponsorBlockEnabled = value == "on"
             case "segment":
-                let range = value.split(separator: "-").compactMap { Double($0) }
-                if range.count == 2 { player.debugAddSegment(start: range[0], end: range[1]) }
+                let parts = value.split(separator: "@", maxSplits: 1)
+                let range = (parts.first ?? "").split(separator: "-").compactMap { Double($0) }
+                let length = parts.count > 1 ? Double(parts[1]) : nil
+                if range.count == 2 { player.debugAddSegment(start: range[0], end: range[1], videoDuration: length) }
             case "endSegment":
                 let numbers = value.split(separator: ",").compactMap { Double($0) }
                 if let before = numbers.first {

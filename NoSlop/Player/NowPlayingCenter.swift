@@ -56,6 +56,17 @@ final class NowPlayingCenter {
         commands.skipBackwardCommand.isEnabled = !isLive
     }
 
+    #if DEBUG
+    /// What the lock screen is told right now, for the simulator checks: the title, the live flag and whether the
+    /// scrub command is on.
+    var debugPublished: String {
+        let info = infoCenter.nowPlayingInfo
+        let title = (info?[MPMediaItemPropertyTitle] as? String) ?? "-"
+        let live = (info?[MPNowPlayingInfoPropertyIsLiveStream] as? Bool) ?? false
+        return "{title: \(title), live: \(live), scrub: \(commands.changePlaybackPositionCommand.isEnabled)}"
+    }
+    #endif
+
     /// Removes the lock-screen entry (the player was closed).
     func clear() {
         artworkTask?.cancel()

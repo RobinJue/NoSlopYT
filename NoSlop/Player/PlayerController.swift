@@ -715,6 +715,7 @@ final class PlayerController {
 
     /// The video buffers for a long time: nothing is coming. Offline, wait for the connection; online, try fresh URLs.
     private func watchForStall() {
+        Self.log.debug("watching for a stall (state \(String(describing: self.state), privacy: .public), online \(self.network.isOnline))")
         stallTask?.cancel()
         let token = generation
         stallTask = Task { [weak self] in
@@ -1470,9 +1471,40 @@ extension PlayerController {
     }
 
     /// Adds a SponsorBlock segment to the loaded ones, for example an outro that runs to the end of the video.
-    func debugAddSegment(start: Double, end: Double) {
-        rawSegments.append(SponsorSegment(id: "debug-\(start)-\(end)", category: .sponsor, actionType: .skip, start: start, end: end))
+    /// `videoDuration` is the length of the video the segment claims to have been submitted for.
+    func debugAddSegment(start: Double, end: Double, videoDuration: Double? = nil) {
+        rawSegments.append(
+            SponsorSegment(
+                id: "debug-\(start)-\(end)",
+                category: .sponsor,
+                actionType: .skip,
+                start: start,
+                end: end,
+                videoDuration: videoDuration
+            )
+        )
         rebuildPlanner()
+    }
+
+    /// Ends the video with the error screen, as a stream that cannot be played would.
+    func debugFail() {
+        fail(message: "Failed on purpose by the player script.")
+    }
+
+    /// Opens the video that is current once more, the way a link to it does.
+    func debugReopen() {
+        guard let video = currentVideo else { return }
+        open(video, startAt: nil, queue: [])
+    }
+
+    /// Opens `id` the way a row of Watch Later does for a broadcast that has ended since it was saved: the saved copy
+    /// still says live and upcoming, and has no length.
+    func debugOpenStaleLive(id: String) {
+        var video = SampleData.video(id: id) ?? VideoSummary(id: id, title: "Saved while it was live")
+        video.isLive = true
+        video.isUpcoming = true
+        video.durationSeconds = nil
+        open(video, startAt: nil, queue: [])
     }
 
     /// Sets the quality the way the connection does (Wi-Fi or cellular): only the cap, no new item. That is also how a
@@ -1504,7 +1536,12 @@ extension PlayerController {
             quality=\(self.quality.label, privacy: .public) size=\(Int(size.width))x\(Int(size.height)) \
             captions=\(self.selectedCaption?.id ?? "off", privacy: .public) caption=\(caption, privacy: .public) \
             notice=\(notice, privacy: .public) segments=\(self.segments.count) upNext=\(self.upNext.count) \
-            queue=\(self.queue.count) video=\(self.currentVideo?.id ?? "-", privacy: .public) \
+            chapters=\(self.chapters.count) queue=\(self.queue.count) \
+            video=\(self.currentVideo?.id ?? "-", privacy: .public) \
+            live=\(self.isLive) videoLive=\(self.currentVideo?.isLive ?? false) \
+            videoUpcoming=\(self.currentVideo?.isUpcoming ?? false) \
+            history=\(self.library.history.map(\.id).joined(separator: ","), privacy: .public) \
+            nowPlaying=\(self.nowPlaying.debugPublished, privacy: .public) \
             presentation=\(String(describing: self.presentation), privacy: .public) fullscreen=\(self.isFullscreen) \
             window=\(Int(bounds.width))x\(Int(bounds.height)) safeTop=\(insets.top) safeBottom=\(insets.bottom)
             """)
