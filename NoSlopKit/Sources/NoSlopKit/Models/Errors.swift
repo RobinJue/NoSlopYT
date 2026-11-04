@@ -10,6 +10,10 @@ public enum NoSlopError: Error, Equatable, Sendable, LocalizedError {
     /// YouTube asked the client to prove it is not a bot (`LOGIN_REQUIRED` on `player`).
     case botCheck
     case unplayable(reason: String)
+    /// YouTube says that the video, playlist or channel is gone: removed, private, terminated. The payload is
+    /// YouTube's own wording ("The playlist does not exist."), which says it better than any sentence of ours. Asking
+    /// again cannot change the answer (`isWorthRetrying`).
+    case unavailable(reason: String)
     case notSignedIn
     case googleNotConfigured
     case oauth(String)
@@ -32,7 +36,7 @@ public enum NoSlopError: Error, Equatable, Sendable, LocalizedError {
             return "Couldn't read the response from YouTube."
         case .botCheck:
             return "YouTube asked to confirm you're not a bot. Try again in a minute, or open the video on YouTube."
-        case .unplayable(let reason):
+        case .unplayable(let reason), .unavailable(let reason):
             return reason
         case .notSignedIn:
             return "Sign in with Google to use this."
@@ -47,6 +51,14 @@ public enum NoSlopError: Error, Equatable, Sendable, LocalizedError {
         case .cancelled:
             return "Cancelled."
         }
+    }
+
+    /// Whether trying again could end differently. Not for content YouTube says is gone: "Retry" on a deleted playlist
+    /// would only ask the same question again. Every other failure may pass (a dropped connection, a bot check, a page
+    /// that came back in a format that is read differently next time).
+    public var isWorthRetrying: Bool {
+        if case .unavailable = self { return false }
+        return true
     }
 
     /// The text of `.oauth(message)`. The message is either a bare reason from Google or from the redirect

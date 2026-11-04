@@ -4,7 +4,9 @@ import Foundation
 ///
 /// Everything except `player` goes through the WEB client profile; this type only builds the requests and hands the
 /// answers to the parsers of Tasks 3 and 4. A page the parsers cannot make anything of is an empty page; only the
-/// two that cannot be empty (a video's details, a channel or playlist header) turn into `NoSlopError.decoding`.
+/// two that cannot be empty (a video's details, a channel or playlist header) turn into an error: YouTube's own
+/// reason as `NoSlopError.unavailable` when the answer gives one (the content is gone, private or terminated), else
+/// `NoSlopError.decoding`.
 public struct InnerTubeYouTubeService: YouTubeService {
     private let client: InnerTubeClient
     private let http: any HTTPClient
@@ -67,6 +69,7 @@ public struct InnerTubeYouTubeService: YouTubeService {
         }
         let json = try await client.post(endpoint: "next", profile: .web, body: ["videoId": .string(id)])
         guard var details = parsers.watch(json, id) else {
+            if let reason = UnavailableParser.reason(inWatchPage: json) { throw NoSlopError.unavailable(reason: reason) }
             throw NoSlopError.decoding("The watch page for \(id) had an unexpected format.")
         }
         let related = parsers.related(json)
@@ -89,6 +92,7 @@ public struct InnerTubeYouTubeService: YouTubeService {
     public func channel(id: String) async throws -> ChannelPage {
         let json = try await client.post(endpoint: "browse", profile: .web, body: browseBody(id: id, tab: .videos))
         guard let page = parsers.channelPage(json) else {
+            if let reason = UnavailableParser.reason(inBrowse: json) { throw NoSlopError.unavailable(reason: reason) }
             throw NoSlopError.decoding("The channel page for \(id) had an unexpected format.")
         }
         return page
@@ -115,6 +119,7 @@ public struct InnerTubeYouTubeService: YouTubeService {
     public func playlist(id: String) async throws -> PlaylistPage {
         let json = try await client.post(endpoint: "browse", profile: .web, body: ["browseId": .string("VL" + id)])
         guard let page = parsers.playlist(json, id) else {
+            if let reason = UnavailableParser.reason(inBrowse: json) { throw NoSlopError.unavailable(reason: reason) }
             throw NoSlopError.decoding("The playlist \(id) had an unexpected format.")
         }
         return page
