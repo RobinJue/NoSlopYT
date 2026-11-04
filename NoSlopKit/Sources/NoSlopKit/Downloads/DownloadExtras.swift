@@ -9,7 +9,8 @@ import Foundation
 /// while an empty list says that YouTube or SponsorBlock was asked and has nothing.
 ///
 /// - `segments` are the SponsorBlock segments of every category, not only the ones the settings skip today: what to do
-///   with each is decided when the video plays, so a later change of the settings still applies to a download.
+///   with each is decided when the video plays, so a later change of the settings still applies to a download. They are
+///   only asked for while SponsorBlock is switched on; a download started with it off has none (not known).
 /// - `chapters` are the ones the watch page shows.
 /// - `captions` are caption tracks with their text, at least the one captions open with (see `CaptionTrackChoice`).
 public struct DownloadExtras: Codable, Equatable, Sendable {

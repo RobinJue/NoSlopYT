@@ -177,6 +177,9 @@ struct DownloadTuning: Sendable {
     /// How long a download that starts waits for the extras of its video (SponsorBlock segments, chapters, captions).
     /// After that it starts without them.
     var extrasTimeout: Duration = .seconds(8)
+    /// Borrows running time from the system for work that must not be cut short by the app being suspended (the start of
+    /// a download, a merge): `BackgroundTime`. Tests replace it to see when time is held and given back.
+    var backgroundTime: BackgroundTimeSource = { BackgroundTime(name: $0) }
 
     static let standard = DownloadTuning()
 }

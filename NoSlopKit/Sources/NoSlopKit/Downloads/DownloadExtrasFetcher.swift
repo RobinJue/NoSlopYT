@@ -13,6 +13,11 @@ public protocol DownloadExtrasProviding: Sendable {
 /// The three are asked at once, and each of them has `timeout` (6 seconds) to answer: whatever answered in time is kept,
 /// the rest is nil. A source that is slow or down costs the download a few seconds at most and never fails it.
 ///
+/// SponsorBlock is only asked while it is switched on in the settings (`SponsorBlockSwitch`), like everywhere else in the
+/// app: a viewer who turned it off does not send the video's hash prefix to `sponsor.ajay.app` at every download. The
+/// segments are then not known (nil), which is not the same as none: the player asks live once the switch is on again and
+/// the device is online, and keeps what it learns with the download.
+///
 /// Captions are the expensive part, one request per track, so only up to `maxCaptionTracks` (three) tracks are fetched,
 /// the one captions open with first (`CaptionTrackChoice.tracksToKeep`).
 public struct DownloadExtrasFetcher: DownloadExtrasProviding {
@@ -22,11 +27,14 @@ public struct DownloadExtrasFetcher: DownloadExtrasProviding {
     public typealias ChaptersSource = @Sendable (_ videoID: String) async throws -> [Chapter]
     /// The caption language the viewer chose in the settings, if any.
     public typealias CaptionLanguageSource = @MainActor @Sendable () -> String?
+    /// Whether SponsorBlock is switched on in the settings.
+    public typealias SponsorBlockSwitch = @MainActor @Sendable () -> Bool
 
     private let segments: SegmentsSource
     private let chapters: ChaptersSource
     private let captions: any CaptionsProviding
     private let preferredCaptionLanguage: CaptionLanguageSource
+    private let sponsorBlockEnabled: SponsorBlockSwitch
     private let deviceLanguage: String?
     private let timeout: Duration
     private let maxCaptionTracks: Int
@@ -36,6 +44,7 @@ public struct DownloadExtrasFetcher: DownloadExtrasProviding {
         chapters: @escaping ChaptersSource,
         captions: any CaptionsProviding,
         preferredCaptionLanguage: @escaping CaptionLanguageSource = { nil },
+        sponsorBlockEnabled: @escaping SponsorBlockSwitch = { true },
         deviceLanguage: String? = CaptionTrackChoice.deviceLanguage,
         timeout: Duration = .seconds(6),
         maxCaptionTracks: Int = 3
@@ -44,6 +53,7 @@ public struct DownloadExtrasFetcher: DownloadExtrasProviding {
         self.chapters = chapters
         self.captions = captions
         self.preferredCaptionLanguage = preferredCaptionLanguage
+        self.sponsorBlockEnabled = sponsorBlockEnabled
         self.deviceLanguage = deviceLanguage
         self.timeout = timeout
         self.maxCaptionTracks = maxCaptionTracks
@@ -54,22 +64,27 @@ public struct DownloadExtrasFetcher: DownloadExtrasProviding {
         sponsorBlock: any SponsorBlockProviding,
         youTube: any YouTubeService,
         captions: any CaptionsProviding,
-        preferredCaptionLanguage: @escaping CaptionLanguageSource = { nil }
+        preferredCaptionLanguage: @escaping CaptionLanguageSource = { nil },
+        sponsorBlockEnabled: @escaping SponsorBlockSwitch = { true }
     ) {
         self.init(
             segments: { try await sponsorBlock.segments(videoID: $0) },
             chapters: { try await youTube.videoDetails(id: $0).chapters },
             captions: captions,
-            preferredCaptionLanguage: preferredCaptionLanguage
+            preferredCaptionLanguage: preferredCaptionLanguage,
+            sponsorBlockEnabled: sponsorBlockEnabled
         )
     }
 
     public func extras(for info: StreamInfo) async -> DownloadExtras {
         let videoID = info.videoID
+        // Settings > SponsorBlock off means that SponsorBlock is not contacted at all (the player's lookup does the same):
+        // the switch is read now, as the download starts, not when the app was set up.
+        let wantsSegments = await sponsorBlockEnabled()
         let segments = segments
         let chapters = chapters
         let timeout = timeout
-        async let foundSegments = TimeBox.run(timeout) { try await segments(videoID) }
+        async let foundSegments: [SponsorSegment]? = wantsSegments ? TimeBox.run(timeout) { try await segments(videoID) } : nil
         async let foundChapters = TimeBox.run(timeout) { try await chapters(videoID) }
         async let foundCaptions = keptCaptions(of: info)
         return DownloadExtras(segments: await foundSegments, chapters: await foundChapters, captions: await foundCaptions)

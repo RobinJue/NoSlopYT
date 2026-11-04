@@ -52,6 +52,59 @@ private final class Connection: Sendable {
     }
 }
 
+/// The running time a download borrows from the system, as the manager asked for it (`DownloadTuning.backgroundTime`):
+/// what was begun, in order, and what is held right now.
+private final class BorrowedTimeLog: Sendable {
+    private struct State {
+        var began: [String] = []
+        var held: [String] = []
+    }
+
+    private let state = Mutex(State())
+
+    var began: [String] { state.withLock { $0.began } }
+    var held: [String] { state.withLock { $0.held } }
+
+    fileprivate func begin(_ name: String) {
+        state.withLock { state in
+            state.began.append(name)
+            state.held.append(name)
+        }
+    }
+
+    fileprivate func end(_ name: String) {
+        state.withLock { state in
+            if let index = state.held.firstIndex(of: name) { state.held.remove(at: index) }
+        }
+    }
+
+    /// What replaces `DownloadTuning.backgroundTime`.
+    var source: BackgroundTimeSource {
+        { [self] name in RecordedTime(name: name, log: self) }
+    }
+}
+
+/// One stretch of borrowed time. Like the system's, it can be ended any number of times and counts once.
+@MainActor
+private final class RecordedTime: BackgroundTimeHolding {
+    let expired = false
+    private let name: String
+    private let log: BorrowedTimeLog
+    private var isHeld = true
+
+    init(name: String, log: BorrowedTimeLog) {
+        self.name = name
+        self.log = log
+        log.begin(name)
+    }
+
+    func end() {
+        guard isHeld else { return }
+        isHeld = false
+        log.end(name)
+    }
+}
+
 /// One download test's directory, fake server, resolver and managers over the same downloads folder.
 @MainActor
 private struct CaptureRig {
@@ -62,12 +115,13 @@ private struct CaptureRig {
 
     /// The zoo video; `captions` are the tracks its stream info lists, and with `twoRenditions` it has a 360p next to the
     /// 144p (two qualities that are two downloads).
-    static func zoo(captions: [CaptionTrack] = [], twoRenditions: Bool = false) throws -> CaptureRig {
+    static func zoo(captions: [CaptionTrack] = [], twoRenditions: Bool = false, lookupFails: Bool = false) throws -> CaptureRig {
         let directory = try DownloadTestDirectory.make()
         let server = DownloadStubServer()
         try ZooFixture.serveFixtures(on: server)
         if twoRenditions { server.serve("/video-360.mp4", data: try Fixture.data("zoo_video_144p.mp4")) }
         let resolver = DownloadStubResolver { _, _ in
+            if lookupFails { throw NoSlopError.network("offline") }
             var info = twoRenditions
                 ? ZooFixture.streamInfo(formats: [
                     ZooFixture.video(at: server.url("/video.mp4")),
@@ -85,10 +139,15 @@ private struct CaptureRig {
     }
 
     /// A manager over the downloads folder. Starting another one over the same folder is what a relaunch of the app is.
-    func manager(extras: (any DownloadExtrasProviding)?, extrasTimeout: Duration = .seconds(8)) -> DownloadManager {
+    func manager(
+        extras: (any DownloadExtrasProviding)?,
+        extrasTimeout: Duration = .seconds(8),
+        borrowedTime: BorrowedTimeLog? = nil
+    ) -> DownloadManager {
         var tuning = DownloadTuning.testing
         tuning.extrasTimeout = extrasTimeout
         tuning.mux = { _, _, _, output in try Data("muxed".utf8).write(to: output) }
+        if let borrowedTime { tuning.backgroundTime = borrowedTime.source }
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [DownloadStubURLProtocol.self]
         return DownloadManager(rootDirectory: root, streams: resolver, sessionConfiguration: configuration, tuning: tuning, extras: extras)
@@ -214,6 +273,36 @@ private struct CaptureRig {
         #expect(await relaunched.extras(forVideoID: ZooFixture.videoID) == nil)
     }
 
+    @Test func aDownloadStartedWithSponsorBlockSwitchedOffNeverAsksItAndKeepsTheRest() async throws {
+        let rig = try CaptureRig.zoo(captions: [ExtrasSample.english])
+        defer { rig.cleanUp() }
+        let captions = ExtrasStubCaptions()
+        captions.serve(ExtrasSample.english, ExtrasSample.englishCues)
+        let sponsorBlockRequests = DownloadTestCounter()
+        let fetcher = DownloadExtrasFetcher(
+            segments: { _ in
+                sponsorBlockRequests.increment()
+                return ExtrasSample.segments
+            },
+            chapters: { _ in ExtrasSample.chapters },
+            captions: captions,
+            preferredCaptionLanguage: { nil },
+            sponsorBlockEnabled: { false },
+            deviceLanguage: "en",
+            timeout: .seconds(30)
+        )
+        let manager = rig.manager(extras: fetcher)
+
+        manager.enqueue(video: ZooFixture.summary, quality: quality144)
+        #expect(await complete(manager))
+
+        #expect(sponsorBlockRequests.value == 0, "the viewer switched SponsorBlock off: nothing is sent to it")
+        let extras = try #require(await manager.extras(forVideoID: ZooFixture.videoID))
+        #expect(extras.segments == nil, "not known: the player asks live if the switch is turned on later")
+        #expect(extras.chapters == ExtrasSample.chapters)
+        #expect(extras.cues(for: ExtrasSample.english) == ExtrasSample.englishCues)
+    }
+
     @Test func aDownloadWithoutAProviderKeepsNothing() async throws {
         let rig = try CaptureRig.zoo()
         defer { rig.cleanUp() }
@@ -276,6 +365,103 @@ private struct CaptureRig {
         #expect(!rig.sidecarExists())
     }
 
+    // MARK: Borrowed background time
+
+    // A download is started with a tap and then the phone is locked, or another app comes up. iOS suspends the app moments
+    // later, and the chunk tasks only exist once the first start has got to the end of its lookups: until then nothing
+    // downloads, whatever the background session would do. So that whole stretch, the wait for the extras included, runs on
+    // time borrowed from the system.
+
+    @Test func theTimeIsBorrowedWithTheTapAndCoversTheWaitForTheExtras() async throws {
+        let rig = try CaptureRig.zoo()
+        defer { rig.cleanUp() }
+        let time = BorrowedTimeLog()
+        let gate = DownloadTestGate()
+        defer { gate.release() }
+        let provider = StubExtras { _, _ in
+            await gate.opened()
+            return ExtrasSample.all
+        }
+        let manager = rig.manager(extras: provider, borrowedTime: time)
+
+        manager.enqueue(video: ZooFixture.summary, quality: quality144)
+        #expect(time.held == ["No Slop start"], "held from the tap on, while the app still is in the foreground")
+
+        // The extras are being waited for: nothing has been requested from the server yet, which is why this stretch is the
+        // one that cannot be left to the background session.
+        #expect(await awaitDownloadCondition { provider.requests.count == 1 })
+        #expect(time.held == ["No Slop start"], "and still held while the extras are waited for")
+        #expect(rig.server.requests.isEmpty, "no chunk task exists yet")
+
+        gate.release()
+        #expect(await complete(manager))
+        #expect(await awaitDownloadCondition { time.held.isEmpty }, "everything given back: \(time.held)")
+        #expect(time.began.first == "No Slop start")
+    }
+
+    @Test func theTimeIsGivenBackWhenTheLookupFails() async throws {
+        let rig = try CaptureRig.zoo(lookupFails: true)
+        defer { rig.cleanUp() }
+        let time = BorrowedTimeLog()
+        let manager = rig.manager(extras: StubExtras { _, _ in ExtrasSample.all }, borrowedTime: time)
+
+        manager.enqueue(video: ZooFixture.summary, quality: quality144)
+        #expect(time.held == ["No Slop start"])
+        #expect(await awaitDownloadCondition { downloadIsSettled(manager, ZooFixture.itemID) })
+        #expect(manager.items.first?.state == .failed)
+        #expect(await awaitDownloadCondition { time.held.isEmpty }, "\(time.held)")
+        #expect(time.began == ["No Slop start"])
+    }
+
+    @Test func theTimeIsGivenBackWhenTheDownloadIsCancelledDuringTheWaitForTheExtras() async throws {
+        let rig = try CaptureRig.zoo()
+        defer { rig.cleanUp() }
+        let time = BorrowedTimeLog()
+        let gate = DownloadTestGate()
+        defer { gate.release() }
+        let provider = StubExtras { _, _ in
+            await gate.opened()
+            return ExtrasSample.all
+        }
+        let manager = rig.manager(extras: provider, borrowedTime: time)
+        manager.enqueue(video: ZooFixture.summary, quality: quality144)
+        #expect(await awaitDownloadCondition { provider.requests.count == 1 })
+        #expect(time.held == ["No Slop start"])
+
+        manager.cancel(id: ZooFixture.itemID)
+        #expect(await awaitDownloadCondition { time.held.isEmpty }, "\(time.held)")
+        #expect(time.began == ["No Slop start"])
+        #expect(manager.items.isEmpty)
+    }
+
+    @Test func aRequestThatTurnsOutToBeTheSameDownloadGivesItsTimeBackToo() async throws {
+        let rig = try CaptureRig.zoo()
+        defer { rig.cleanUp() }
+        let time = BorrowedTimeLog()
+        let manager = rig.manager(extras: StubExtras { _, _ in ExtrasSample.all }, borrowedTime: time)
+        manager.enqueue(video: ZooFixture.summary, quality: .video(maxHeight: 144))
+        manager.enqueue(video: ZooFixture.summary, quality: .video(maxHeight: 360))
+        #expect(time.held == ["No Slop start", "No Slop start"], "each request borrows for its own start")
+
+        #expect(await awaitDownloadCondition { manager.items.count == 1 && downloadIsSettled(manager, manager.items[0].id) })
+        #expect(manager.items.first?.state == .completed)
+        #expect(await awaitDownloadCondition { time.held.isEmpty }, "\(time.held)")
+        #expect(time.began.filter { $0 == "No Slop start" }.count == 2)
+    }
+
+    @Test func aRestartWithFreshLinksBorrowsTimeOfItsOwnAndGivesEverythingBack() async throws {
+        let rig = try CaptureRig.zoo()
+        defer { rig.cleanUp() }
+        rig.server.fail("/video.mp4", with: .status(403), times: 1)
+        let time = BorrowedTimeLog()
+        let manager = rig.manager(extras: StubExtras { _, _ in ExtrasSample.all }, borrowedTime: time)
+
+        manager.enqueue(video: ZooFixture.summary, quality: quality144)
+        #expect(await complete(manager), "\(manager.items.first?.errorMessage ?? "")")
+        #expect(await awaitDownloadCondition { time.held.isEmpty }, "\(time.held)")
+        #expect(time.began == ["No Slop start", "No Slop refresh links", "No Slop merge"])
+    }
+
     // MARK: One file per video
 
     @Test func theQualitiesOfAVideoShareOneFileThatLaterAnswersAddTo() async throws {
@@ -315,6 +501,24 @@ private struct CaptureRig {
         #expect(manager.items.first?.state == .completed)
         #expect(provider.requests.count == 1)
         #expect(rig.sidecarExists(), "the download that stayed owns it")
+    }
+
+    @Test func aRestartWithFreshLinksDoesNotAskForTheExtrasAgain() async throws {
+        // The address of the video stops working (a phone that left its Wi-Fi): the download starts over once with fresh
+        // addresses, from the chunks that are on disk. It asked for the extras at its first start; asking again would hold
+        // the restart up for up to the time box, on borrowed background time.
+        let rig = try CaptureRig.zoo()
+        defer { rig.cleanUp() }
+        rig.server.fail("/video.mp4", with: .status(403), times: 1)   // one dead address: the links are refreshed once
+        let provider = StubExtras { _, _ in ExtrasSample.all }
+        let manager = rig.manager(extras: provider)
+
+        manager.enqueue(video: ZooFixture.summary, quality: quality144)
+        #expect(await complete(manager), "\(manager.items.first?.errorMessage ?? "")")
+
+        #expect(rig.resolver.callCount == 2, "the links were refreshed (without this the test would pass for nothing)")
+        #expect(provider.requests.count == 1, "and the restart did not ask for the extras again")
+        #expect(await manager.extras(forVideoID: ZooFixture.videoID) == ExtrasSample.all)
     }
 
     @Test func cancellingADownloadThatHasNotFinishedRemovesItsExtras() async throws {

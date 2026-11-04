@@ -30,8 +30,9 @@ import UIKit
 /// Extras: a download is played offline, so what the player would ask YouTube for while it streams (SponsorBlock
 /// segments, chapters, captions: see `DownloadExtras`) is fetched when the download starts, while there is a connection,
 /// and kept per video in `<root>/.extras/<video id>.json`, out of the Files app's list like `.work`. The fetch is best
-/// effort and time-boxed (`DownloadTuning.extrasTimeout`): it never fails a download. The file goes when the last download
-/// of the video goes. `extras(forVideoID:)` reads it.
+/// effort and time-boxed (`DownloadTuning.extrasTimeout`): it never fails a download, and the wait for it, like the rest of
+/// the start, runs on running time borrowed from iOS (`BackgroundTime`), so that a download that is started and left at
+/// once still gets its chunk tasks. The file goes when the last download of the video goes. `extras(forVideoID:)` reads it.
 @MainActor
 @Observable
 public final class DownloadManager {
@@ -408,14 +409,18 @@ public final class DownloadManager {
             item.errorMessage = nil
         }
         let generation = UUID()
+        // The start runs on time borrowed from the system, asked for here with the request: a download is started with a
+        // tap, and the phone is often locked or left right after it, so that iOS suspends the app moments later. The chunk
+        // tasks, which the background session carries on with, only exist once the start has got through its lookups (the
+        // stream info, the free space and, for a first start, the extras of the video, which can take up to `extrasTimeout`).
+        // Without the borrowed time the download would wait for the person to come back to the app. A restart after the
+        // stream addresses went stale (`refreshLinks`) needs it as much: the phone has just left the Wi-Fi they were made
+        // for. It ends with `run`: the chunk tasks are created, or the item failed, was cancelled or was dropped.
+        let borrowedTime = tuning.backgroundTime(refreshingLinks ? "No Slop refresh links" : "No Slop start")
         let task = Task { [weak self] in
+            defer { borrowedTime.end() }
             guard let self else { return }
-            // New addresses may be needed while the app is in the background (the phone left its Wi-Fi): the lookup has to
-            // finish before iOS suspends the app again.
-            let extraTime = refreshingLinks ? BackgroundTime(name: "No Slop refresh links") : nil
-            defer { extraTime?.end() }
-            // A restart after the addresses went stale (`refreshLinks`) runs on borrowed background time and has asked for the
-            // extras at its first start already.
+            // A restart after the addresses went stale has asked for the extras at its first start already.
             await run(id, generation: generation, fetchesExtras: !refreshingLinks)
         }
         starts[id] = DownloadStart(generation: generation, task: task)
@@ -781,13 +786,14 @@ public final class DownloadManager {
         let plan = job.plan
         let workspace = workspace
         let mux = tuning.mux
+        let backgroundTime = tuning.backgroundTime
         let destination = reserveDestination(for: item, plan: plan)
         let generation = job.generation
 
         job.destination = destination
         job.assembly = Task { [weak self] in
             // A download that finishes while the app is suspended is merged right then, on borrowed time.
-            let extraTime = BackgroundTime(name: "No Slop merge")
+            let extraTime = backgroundTime("No Slop merge")
             defer { extraTime.end() }
             do {
                 let size = try await DownloadAssembler.assemble(plan: plan, workspace: workspace, destination: destination, mux: mux)
@@ -943,11 +949,24 @@ private final class NotificationObservers: @unchecked Sendable {
 
 // MARK: - Background time
 
-#if canImport(UIKit) && !os(watchOS)
-/// Asks iOS for a little more running time while a merge (or a refresh of stream addresses) is in progress, so a
-/// download that completes while the app is in the background is finished before the app is suspended again.
+/// Running time borrowed from the system for a stretch of work: held from `BackgroundTime.init` until `end()`.
 @MainActor
-private final class BackgroundTime {
+protocol BackgroundTimeHolding: AnyObject, Sendable {
+    /// True once iOS said the time is up: the app is about to be suspended.
+    var expired: Bool { get }
+    /// Gives the time back. Does nothing the second time.
+    func end()
+}
+
+/// Asks for the running time of a named stretch of work (`DownloadTuning.backgroundTime`).
+typealias BackgroundTimeSource = @MainActor @Sendable (_ name: String) -> any BackgroundTimeHolding
+
+#if canImport(UIKit) && !os(watchOS)
+/// Asks iOS for a little more running time while the start of a download, a merge or a refresh of stream addresses is in
+/// progress, so that a download that is started or completes while the app is in the background is carried on before the
+/// app is suspended again.
+@MainActor
+final class BackgroundTime: BackgroundTimeHolding {
     private var identifier = UIBackgroundTaskIdentifier.invalid
     /// True once iOS said the time is up: the app is about to be suspended, so whatever fails after that did not fail
     /// because of the files.
@@ -968,7 +987,7 @@ private final class BackgroundTime {
 }
 #else
 @MainActor
-private final class BackgroundTime {
+final class BackgroundTime: BackgroundTimeHolding {
     let expired = false
 
     init(name: String) {}

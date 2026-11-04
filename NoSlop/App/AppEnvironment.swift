@@ -138,7 +138,8 @@ final class AppEnvironment {
             sponsorBlock: sponsorBlock,
             youTube: youTube,
             captions: captions,
-            preferredCaptionLanguage: { settingsStore.settings.preferredCaptionLanguage }
+            preferredCaptionLanguage: { settingsStore.settings.preferredCaptionLanguage },
+            sponsorBlockEnabled: { settingsStore.settings.sponsorBlockEnabled }
         )
         let downloads = DownloadManager(
             rootDirectory: directory(.documentDirectory, appending: "NoSlop Downloads"),

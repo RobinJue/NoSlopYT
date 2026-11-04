@@ -367,6 +367,21 @@ private final class CallLog: Sendable {
     var lines: [String] { recorded.withLock { $0 } }
 }
 
+/// A setting that the test flips while closures that must be `Sendable` read it.
+private final class TestSwitch: Sendable {
+    private let state: Mutex<Bool>
+
+    init(_ isOn: Bool) {
+        state = Mutex(isOn)
+    }
+
+    var isOn: Bool { state.withLock { $0 } }
+
+    func set(_ isOn: Bool) {
+        state.withLock { $0 = isOn }
+    }
+}
+
 /// Caption text by track id, or an error; counts the requests.
 final class ExtrasStubCaptions: CaptionsProviding, Sendable {
     private let state = Mutex(State())
@@ -419,6 +434,7 @@ final class ExtrasStubCaptions: CaptionsProviding, Sendable {
         chapters: @escaping DownloadExtrasFetcher.ChaptersSource = { _ in ExtrasSample.chapters },
         captions: ExtrasStubCaptions,
         language: String? = nil,
+        sponsorBlockEnabled: @escaping DownloadExtrasFetcher.SponsorBlockSwitch = { true },
         timeout: Duration = .seconds(30),
         maxCaptionTracks: Int = 3
     ) -> DownloadExtrasFetcher {
@@ -427,6 +443,7 @@ final class ExtrasStubCaptions: CaptionsProviding, Sendable {
             chapters: chapters,
             captions: captions,
             preferredCaptionLanguage: { language },
+            sponsorBlockEnabled: sponsorBlockEnabled,
             deviceLanguage: "en",
             timeout: timeout,
             maxCaptionTracks: maxCaptionTracks
@@ -447,6 +464,60 @@ final class ExtrasStubCaptions: CaptionsProviding, Sendable {
         #expect(extras.chapters == ExtrasSample.chapters)
         #expect(extras.captions == [StoredCaptions(track: ExtrasSample.english, cues: ExtrasSample.englishCues)])
         #expect(Set(asked.lines) == ["segments:jNQXAC9IVRw", "chapters:jNQXAC9IVRw"])
+    }
+
+    // MARK: The SponsorBlock switch
+
+    @Test func withSponsorBlockSwitchedOffTheSegmentsAreNotAskedForAndTheRestIsKept() async {
+        // Settings > SponsorBlock off means no lookup: not for the player, and not for the copy a download keeps.
+        let captions = ExtrasStubCaptions()
+        captions.serve(ExtrasSample.english, ExtrasSample.englishCues)
+        let asked = CallLog()
+        let extras = await fetcher(
+            segments: { id in asked.add("segments:\(id)"); return ExtrasSample.segments },
+            chapters: { id in asked.add("chapters:\(id)"); return ExtrasSample.chapters },
+            captions: captions,
+            sponsorBlockEnabled: { false }
+        ).extras(for: info())
+
+        #expect(asked.lines == ["chapters:jNQXAC9IVRw"], "SponsorBlock was not contacted: \(asked.lines)")
+        #expect(extras.segments == nil, "not known (the player asks live if the switch is turned on later), which is not the same as none")
+        #expect(extras.chapters == ExtrasSample.chapters, "the watch page is YouTube's own, the switch is not about it")
+        #expect(extras.captions == [StoredCaptions(track: ExtrasSample.english, cues: ExtrasSample.englishCues)])
+    }
+
+    @Test func theSwitchIsReadWhenTheDownloadStartsNotWhenTheFetcherIsMade() async {
+        let enabled = TestSwitch(true)
+        let asked = CallLog()
+        let subject = fetcher(
+            segments: { id in asked.add("segments:\(id)"); return ExtrasSample.segments },
+            captions: ExtrasStubCaptions(),
+            sponsorBlockEnabled: { enabled.isOn }
+        )
+
+        let whileOn = await subject.extras(for: info(captions: []))
+        #expect(whileOn.segments == ExtrasSample.segments)
+        #expect(asked.lines == ["segments:jNQXAC9IVRw"])
+
+        enabled.set(false)
+        let whileOff = await subject.extras(for: info(captions: []))
+        #expect(whileOff.segments == nil)
+        #expect(asked.lines == ["segments:jNQXAC9IVRw"], "not asked a second time: \(asked.lines)")
+
+        enabled.set(true)
+        #expect(await subject.extras(for: info(captions: [])).segments == ExtrasSample.segments)
+        #expect(asked.lines.count == 2)
+    }
+
+    @Test func withSponsorBlockOffAndEverythingElseFailingNothingIsKnown() async {
+        let captions = ExtrasStubCaptions()
+        captions.fail(ExtrasSample.english)
+        let extras = await fetcher(
+            chapters: { _ in throw NoSlopError.network("offline") },
+            captions: captions,
+            sponsorBlockEnabled: { false }
+        ).extras(for: info())
+        #expect(extras.isEmpty, "so nothing is written for the video")
     }
 
     @Test func aSourceThatFailsLeavesOnlyItsPartUnknown() async {
