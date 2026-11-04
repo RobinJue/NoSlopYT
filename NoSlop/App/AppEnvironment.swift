@@ -33,6 +33,9 @@ final class AppEnvironment {
     /// say; `dismissLinkError` clears it.
     private(set) var linkError: String?
 
+    /// The load of the watch details that the player asked for (`loadDetailsForPlayer`).
+    @ObservationIgnored private var playerDetailsTask: Task<Void, Never>?
+
     /// `settingsStore.settings`.
     var settings: AppSettings { settingsStore.settings }
 
@@ -82,6 +85,9 @@ final class AppEnvironment {
             settingsStore: settingsStore,
             downloads: downloads
         )
+        // With the player minimized (or the app in the background) no watch page is on screen to hand the player the
+        // chapters and the up-next list of the video that plays: they are loaded here instead.
+        player.detailsNeeded = { [weak self] video in self?.loadDetailsForPlayer(video) }
     }
 
     // MARK: Construction
@@ -201,6 +207,16 @@ final class AppEnvironment {
             player.minimize()
         }
         router.push(route)
+    }
+
+    /// Loads the chapters and the up-next list of `video` for the player (`PlayerController.detailsNeeded`), from the
+    /// cache or from YouTube. A request for another video, which means the player has moved on, ends this one.
+    private func loadDetailsForPlayer(_ video: VideoSummary) {
+        playerDetailsTask?.cancel()
+        playerDetailsTask = Task { [weak self] in
+            guard let self else { return }
+            await WatchDetailsViewModel(video: video).loadForPlayer(using: self)
+        }
     }
 
     // MARK: Subscriptions

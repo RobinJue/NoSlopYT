@@ -151,6 +151,8 @@ final class PlayerController {
     @ObservationIgnored private var forceStreaming = false
 
     @ObservationIgnored private var upNext: [VideoSummary] = []
+    /// The video whose chapters and up-next list were handed over (`setUpNext`), the page's or the owner's.
+    @ObservationIgnored private var detailsHandedOverFor: String?
     /// What follows `queue`: the rest of the list it came from (a playlist), which arrives in pages. The next page is
     /// asked for when the queue runs low and when it runs out. Nil for a queue that is all there is.
     @ObservationIgnored private var queueSource: QueueSource?
@@ -288,21 +290,40 @@ final class PlayerController {
         }
     }
 
-    /// The chapters of the current video (from the watch page); the seek bar draws them.
+    /// The chapters of the current video (from the watch details); the seek bar draws them.
     func setChapters(_ chapters: [Chapter]) {
         self.chapters = chapters
     }
 
-    /// The related videos the watch page found, for autoplay once the queue is empty. The watch page calls this only
-    /// while it is on screen; it replaces whatever list autoplay carried over, and a restart of the same video keeps
-    /// it (see `start`).
+    /// The related videos of the current video, for autoplay once the queue is empty. The watch page hands them over
+    /// while it is on screen, and `detailsNeeded` has them loaded while it is not. They replace whatever list autoplay
+    /// carried over, and a restart of the same video keeps them (see `start`).
     func setUpNext(_ videos: [VideoSummary]) {
         upNext = videos
+        detailsHandedOverFor = currentVideo?.id
     }
 
-    /// Starts `video`. A video opened from outside starts with an empty up-next list (the watch page fills it); when
-    /// autoplay moves on by itself, `upNext` is what remains of the list, so it can keep going with the player minimized
-    /// and no watch page to hand over the next list.
+    /// Asks for the chapters and the up-next list of a video that nobody is going to hand over, because no watch page is
+    /// on screen to do it (see `requestDetailsIfNoPageShows`). Set by `AppEnvironment`, which loads the details and
+    /// answers with `setChapters` and `setUpNext`.
+    @ObservationIgnored var detailsNeeded: ((VideoSummary) -> Void)?
+
+    /// The watch page loads and hands over the details of the video when the player is expanded and the app is on
+    /// screen. In every other case (the player is minimized, so there is no page, or the app is in the background,
+    /// where a page for a video that autoplay just started may not be built) the owner of the player is asked to load
+    /// them, unless they were handed over already. Without them the new video has no chapters, and autoplay has only
+    /// what was left of the list of the video before.
+    private func requestDetailsIfNoPageShows(for video: VideoSummary) {
+        let pageShows = presentation == .expanded && UIApplication.shared.applicationState == .active
+        guard !pageShows, detailsHandedOverFor != video.id else { return }
+        Self.log.info("no watch page shows: loading the details of \(video.id, privacy: .public) for the player")
+        detailsNeeded?(video)
+    }
+
+    /// Starts `video`. A video opened from outside starts with an empty up-next list (the watch page fills it, or the
+    /// owner of the player when no page shows: `detailsNeeded`); when autoplay moves on by itself, `upNext` is what
+    /// remains of the list, so it can keep going until the new video's own list has arrived, or when that cannot be
+    /// loaded (offline).
     ///
     /// `queue` and `more` are what follows the video (see `adoptQueue`): the queue moving on to its next video passes
     /// the source it has, an open from outside brings its own, and autoplay leaves the queue behind.
@@ -339,6 +360,7 @@ final class PlayerController {
         segments = []
         if !isSameVideo {
             chapters = []
+            detailsHandedOverFor = nil
         }
         skipNotice = nil
         captionText = nil
@@ -376,6 +398,9 @@ final class PlayerController {
         audioSession.activate()
         updateNowPlaying()
         Self.log.info("open \(video.id, privacy: .public)")
+        if !isSameVideo {
+            requestDetailsIfNoPageShows(for: video)
+        }
 
         loadTask = Task { [weak self] in
             await self?.load(video, startAt: startAt, token: token)
@@ -1048,6 +1073,10 @@ final class PlayerController {
             requestOrientation(landscape: false)
         }
         presentation = .minimized
+        // The watch page goes away with the expanded player, perhaps before it had loaded the details.
+        if let video = currentVideo {
+            requestDetailsIfNoPageShows(for: video)
+        }
     }
 
     /// Stops playback and hides the player.
@@ -1071,6 +1100,7 @@ final class PlayerController {
         pendingAdvance = nil
         queueSource = nil
         upNext = []
+        detailsHandedOverFor = nil
         segments = []
         chapters = []
         skipNotice = nil

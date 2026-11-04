@@ -116,9 +116,12 @@ final class WatchDetailsViewModel {
     /// Shows the cached page right away, or asks YouTube; then loads the first comments for the teaser.
     func load(using env: AppEnvironment) async {
         if let cached = WatchDetailsCache.shared.entry(for: video.id) {
-            apply(cached.details, arrivedRelated: cached.arrivedRelated, relatedContinuation: cached.relatedContinuation, using: env)
-            commentsFirstPage = cached.commentsFirstPage
-            publishToPlayer(env)
+            showCached(cached, using: env)
+            // A page that the player stored while it was minimized has no teaser yet (see `loadForPlayer`), and neither
+            // has one whose teaser could not be loaded then.
+            if cached.commentsFirstPage == nil, cached.details.commentsContinuation != nil {
+                await loadCommentsTeaser(using: env)
+            }
             return
         }
 
@@ -134,7 +137,33 @@ final class WatchDetailsViewModel {
             return
         }
 
-        // The teaser is a bonus: without it the card just shows the comment count.
+        await loadCommentsTeaser(using: env)
+    }
+
+    /// What the player needs from the details when no watch page is on screen to hand it over (the player is minimized,
+    /// or the app is in the background): the chapters for its seek bar and the up-next list for autoplay, from the
+    /// cache or from YouTube, through the viewer's filters. Without it, a video that autoplay starts has no chapters,
+    /// and autoplay only goes on with what was left of the list of the video before, until that runs out.
+    ///
+    /// The comments teaser is left out: nobody sees it. The page that opens later loads it (`load`).
+    func loadForPlayer(using env: AppEnvironment) async {
+        if let cached = WatchDetailsCache.shared.entry(for: video.id) {
+            showCached(cached, using: env)
+            return
+        }
+        do {
+            let details = try await env.youTube.videoDetails(id: video.id)
+            guard !Task.isCancelled else { return }
+            apply(details, arrivedRelated: details.related, relatedContinuation: details.relatedContinuation, using: env)
+            publishToPlayer(env)
+            storeInCache()
+        } catch {
+            // The player plays on with what it has; autoplay carries on with what is left of the list it was given.
+        }
+    }
+
+    /// The first comments, for the teaser. They are a bonus: without them the card just shows the comment count.
+    private func loadCommentsTeaser(using env: AppEnvironment) async {
         if let token = details?.commentsContinuation {
             let page = try? await env.youTube.comments(continuation: token)
             guard !Task.isCancelled else { return }
@@ -148,6 +177,13 @@ final class WatchDetailsViewModel {
         WatchDetailsCache.shared.removeEntry(for: video.id)
         details = nil
         await load(using: env)
+    }
+
+    /// A page of an earlier visit, or one the player loaded, through the viewer's filters as they are now.
+    private func showCached(_ cached: WatchDetailsCache.Entry, using env: AppEnvironment) {
+        apply(cached.details, arrivedRelated: cached.arrivedRelated, relatedContinuation: cached.relatedContinuation, using: env)
+        commentsFirstPage = cached.commentsFirstPage
+        publishToPlayer(env)
     }
 
     /// `arrivedRelated` is every related video that has arrived, before the viewer's filters (see the property).

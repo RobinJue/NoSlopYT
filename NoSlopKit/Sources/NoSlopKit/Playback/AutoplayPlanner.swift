@@ -2,10 +2,10 @@ import Foundation
 
 /// Chooses the video autoplay starts when the current one ends, and what stays up next behind it.
 ///
-/// The up-next list comes from the watch page, which only hands it over while it is on screen. When autoplay moves on
-/// to the next video with the player minimized, nobody replaces the list, so the player keeps what remains of it
-/// (`Step.remaining`) and the next hop can use it. The watch page replaces the list as soon as it loads the new
-/// video's related videos.
+/// The up-next list comes from the details of the video that plays: the watch page hands it over while it is on
+/// screen, and the app loads the details itself while the player is minimized (or the app is in the background). Until
+/// the new video's own list has arrived, or when it cannot be loaded at all (offline), the player keeps what remains of
+/// the old one (`Step.remaining`), so that autoplay can go on.
 public enum AutoplayPlanner {
     /// A video counts as watched once this many seconds of it have played.
     public static let watchedAfter: Double = 10
