@@ -85,11 +85,15 @@ final class HomeViewModel {
         start(using: env, forceRefresh: false)
     }
 
-    /// Pull to refresh: fetches fresh subscription uploads and rebuilds the feed. Suspends until it is done.
+    /// Pull to refresh (and Retry): fetches fresh subscription uploads and rebuilds the feed. Suspends until it is done.
     ///
     /// A load that is already running is joined only when it asked for fresh uploads itself. One that did not (the
     /// first load of the day, which shows the feed from disk) is waited for, and the pull then makes its own: joining it
     /// would swallow the pull, and no upload would ever be fetched for it.
+    ///
+    /// When the viewer is signed in, the Google account is looked at once more afterwards. The feed service looks up the
+    /// durations of the uploads through the account and keeps quiet about a session that ended meanwhile, so nothing else
+    /// would notice before the next call to the account. The automatic loads do not do this.
     func refresh(using env: AppEnvironment) async {
         while let running = loadTask {
             let wasForced = loadIsForced
@@ -97,6 +101,9 @@ final class HomeViewModel {
             if wasForced { return }
         }
         await start(using: env, forceRefresh: true).value
+        if env.googleAccount != nil {
+            await env.reconcileGoogleAccount()
+        }
     }
 
     /// Runs the user's filters on the feed already built (cheap; no network). Call it when they change: the user

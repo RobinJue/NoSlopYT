@@ -7,13 +7,20 @@ import UIKit
 ///
 /// Pushed from Settings → Account, or shown in a sheet from the Library (`GoogleSetupGuideSheet`), where
 /// `openSettings` adds an "Open Settings" button to the last step.
+///
+/// Pushed in a tab's navigation stack it leaves room under its last step for the mini player, which sits over that
+/// stack. A sheet covers the mini player, so there it adds nothing (`leavesRoomForMiniPlayer`).
 struct GoogleSetupGuideView: View {
     var openSettings: (() -> Void)?
+    /// Whether the guide leaves room at the bottom for the mini player: true when it is pushed in a navigation stack that
+    /// sits under it, false in a sheet.
+    var leavesRoomForMiniPlayer: Bool
 
     @State private var hasCopiedBundleID = false
 
-    init(openSettings: (() -> Void)? = nil) {
+    init(openSettings: (() -> Void)? = nil, leavesRoomForMiniPlayer: Bool = true) {
         self.openSettings = openSettings
+        self.leavesRoomForMiniPlayer = leavesRoomForMiniPlayer
     }
 
     private var bundleID: String {
@@ -82,7 +89,7 @@ struct GoogleSetupGuideView: View {
             .frame(maxWidth: 640, alignment: .leading)
             .frame(maxWidth: .infinity)
         }
-        .miniPlayerClearance()
+        .modifier(OptionalMiniPlayerClearance(applies: leavesRoomForMiniPlayer))
         .navigationTitle("Set up Google sign-in")
         .navigationBarTitleDisplayMode(.inline)
     }
@@ -119,6 +126,19 @@ struct GoogleSetupGuideView: View {
             Link(destination: url) {
                 Label(title, systemImage: "arrow.up.right.square")
             }
+        }
+    }
+}
+
+/// `miniPlayerClearance()` when `applies`, nothing otherwise.
+private struct OptionalMiniPlayerClearance: ViewModifier {
+    let applies: Bool
+
+    func body(content: Content) -> some View {
+        if applies {
+            content.miniPlayerClearance()
+        } else {
+            content
         }
     }
 }
@@ -161,17 +181,21 @@ private struct GuideStepRow<Actions: View>: View {
     }
 }
 
-/// The guide in a sheet of its own, for the Library tab: a "Done" button, and "Open Settings" on the last step.
+/// The guide in a sheet of its own, for the Library tab: a "Done" button, and "Open Settings" on the last step. The sheet
+/// covers the mini player, so the guide leaves no room for it.
 struct GoogleSetupGuideSheet: View {
     @Environment(AppEnvironment.self) private var env
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         NavigationStack {
-            GoogleSetupGuideView {
-                dismiss()
-                env.show(.settings)
-            }
+            GoogleSetupGuideView(
+                openSettings: {
+                    dismiss()
+                    env.show(.settings)
+                },
+                leavesRoomForMiniPlayer: false
+            )
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") { dismiss() }
