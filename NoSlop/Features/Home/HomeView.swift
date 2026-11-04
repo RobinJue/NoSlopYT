@@ -126,7 +126,7 @@ private struct AccountButton: View {
 
     var body: some View {
         Button {
-            env.router.selectedTab = .library
+            env.router.showRoot(of: .library)
         } label: {
             if let pictureURL = env.googleAccount?.pictureURL {
                 ChannelAvatarView(url: pictureURL, size: 30)

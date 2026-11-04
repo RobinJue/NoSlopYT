@@ -421,8 +421,7 @@ final class AppEnvironment {
         case .playlist(let id):
             show(.playlist(id: id))
         case .search(let query):
-            router.selectedTab = .search
-            router.popToRoot(.search)
+            router.showRoot(of: .search)
             show(.searchResults(query: query))
         }
     }

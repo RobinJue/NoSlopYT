@@ -84,8 +84,7 @@ private struct WatchDetailsContent: View {
             Button("Go to Library") {
                 env.player.minimize()
                 // The sign-in card is at the top of the Library tab, which may still be showing a screen from earlier.
-                env.router.popToRoot(.library)
-                env.router.selectedTab = .library
+                env.router.showRoot(of: .library)
             }
             Button("Not now", role: .cancel) {}
         } message: {

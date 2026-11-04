@@ -101,7 +101,7 @@ struct SubscriptionsView: View {
             Text("Subscribe to channels to see their uploads here.")
         } actions: {
             Button("Search for channels") {
-                env.router.selectedTab = .search
+                env.router.showRoot(of: .search)
             }
             .buttonStyle(.borderedProminent)
         }

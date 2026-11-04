@@ -55,4 +55,13 @@ final class Router {
         case .search: searchPath.removeAll()
         }
     }
+
+    /// Shows the root of `tab`: whatever the tab had pushed is popped first, so that the pop is not seen on screen, then
+    /// the tab is selected. For the buttons that send the viewer to what sits at the top of a tab (the account in the
+    /// Library, the search field in Search), which a screen pushed earlier would hide. The `noslop://tab/...` link does
+    /// not use it: it deliberately only selects a tab and leaves it where it was.
+    func showRoot(of tab: AppTab) {
+        popToRoot(tab)
+        selectedTab = tab
+    }
 }
