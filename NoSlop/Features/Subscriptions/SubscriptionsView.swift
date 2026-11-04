@@ -170,34 +170,6 @@ private struct SubscriptionStrip: View {
     }
 }
 
-/// "Couldn't refresh. Showing the last feed." with a Retry button, above a feed that is still on screen.
-private struct RefreshFailureBanner: View {
-    let error: Error
-    let retry: @MainActor () async -> Void
-
-    var body: some View {
-        HStack(spacing: Theme.padding) {
-            Image(systemName: "exclamationmark.triangle.fill")
-                .foregroundStyle(.orange)
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Couldn't refresh")
-                    .font(.subheadline.weight(.semibold))
-                Text((error as? LocalizedError)?.errorDescription ?? "Showing the last feed.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-            Spacer(minLength: 0)
-            Button("Retry") {
-                Task { await retry() }
-            }
-            .buttonStyle(.bordered)
-            .controlSize(.small)
-        }
-        .padding(Theme.padding)
-        .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: Theme.cornerRadius, style: .continuous))
-    }
-}
-
 #Preview {
     NavigationStack {
         SubscriptionsView()
