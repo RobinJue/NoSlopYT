@@ -29,9 +29,11 @@ import SwiftUI
 ///   starts from scratch: that is what the checks of rotation and full screen look for.
 /// - `-axDump '<seconds>,...'`: that long after launch, writes the accessibility elements VoiceOver would walk through
 ///   to `<Documents>/ax-<seconds>.txt` (see `AccessibilityDump`).
+/// - `-searchScroll <points>`: the search results scroll down by that much, once, when they appear.
 enum DebugLaunchHooks {
     private static var isPrepared = false
     private static var isSearchTextTaken = false
+    private static var isSearchScrollTaken = false
     private static var takenWatchPageSteps: Set<String> = []
 
     static var scrollsToEnd: Bool {
@@ -110,6 +112,15 @@ enum DebugLaunchHooks {
         }
     }
 
+    /// The offset of `-searchScroll`, once per launch.
+    static func takeSearchScroll() -> Double? {
+        guard !isSearchScrollTaken else { return nil }
+        let points = UserDefaults.standard.double(forKey: "searchScroll")
+        guard points > 0 else { return nil }
+        isSearchScrollTaken = true
+        return points
+    }
+
     /// The text of `-searchText`, once per launch.
     static func takeSearchText() -> String? {
         guard !isSearchTextTaken else { return nil }
@@ -128,6 +139,34 @@ extension View {
         } else {
             self
         }
+    }
+}
+
+extension View {
+    /// With `-searchScroll <points>`: scrolls the scroll view inside down by that much, once, a moment after it has
+    /// appeared (the results of a search take that long to arrive). Without it the view is left as it is.
+    @ViewBuilder
+    func debugSearchScroll() -> some View {
+        if UserDefaults.standard.double(forKey: "searchScroll") > 0 {
+            modifier(DebugSearchScroll())
+        } else {
+            self
+        }
+    }
+}
+
+private struct DebugSearchScroll: ViewModifier {
+    @State private var position = ScrollPosition()
+
+    func body(content: Content) -> some View {
+        content
+            .scrollPosition($position)
+            .task {
+                try? await Task.sleep(for: .seconds(2.5))
+                if let points = DebugLaunchHooks.takeSearchScroll() {
+                    position.scrollTo(y: points)
+                }
+            }
     }
 }
 

@@ -17,6 +17,9 @@ struct SearchResultsContent: View {
         .scrollDismissesKeyboard(.interactively)
         .refreshable { await model.refresh(using: env) }
         .miniPlayerClearance()
+        #if DEBUG
+        .debugSearchScroll()
+        #endif
         // "Don't show this channel" (or any other feed filter) takes effect on the results on screen, not after a new
         // search. Also when the screen comes back: the filter may have changed on a screen above it.
         .onChange(of: env.settings) {
