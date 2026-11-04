@@ -35,6 +35,8 @@ import SwiftUI
 /// - `-captionStyle '<parts>'`: the captions are drawn with a caption style as if the viewer had chosen it in Settings
 ///   > Accessibility > Subtitles & Captioning, for example `-captionStyle 'size=2;text=yellow;background=clear;edge=shadow'`
 ///   (see `CaptionAppearance`).
+/// - `-mockDelay <seconds>`: the mock YouTube service (search, watch details, related and playlist pages) takes that
+///   long to answer (0.3 s by default), so that a page loading in the background is still on its way when a video ends.
 /// - `-playlistPlay all|<n>`: once the first page of a playlist has loaded, the playlist screen plays like a tap on "Play
 ///   all" (`all`) or on its n-th row (1-based), once per launch. The mock pages the 14-video series as 10 plus 4, so
 ///   this plays with the second page not loaded yet.
@@ -80,6 +82,12 @@ enum DebugLaunchHooks {
     /// How long the mock stream resolver takes: `-streamDelay`, else its usual 0.3 s.
     static var mockStreamDelay: Duration {
         let seconds = UserDefaults.standard.double(forKey: "streamDelay")
+        return seconds > 0 ? .milliseconds(Int(seconds * 1_000)) : .milliseconds(300)
+    }
+
+    /// How long the mock YouTube service takes: `-mockDelay`, else its usual 0.3 s.
+    static var mockYouTubeDelay: Duration {
+        let seconds = UserDefaults.standard.double(forKey: "mockDelay")
         return seconds > 0 ? .milliseconds(Int(seconds * 1_000)) : .milliseconds(300)
     }
 

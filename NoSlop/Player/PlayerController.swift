@@ -1729,6 +1729,12 @@ extension PlayerController {
         isApplyingDefaultQuality = false
     }
 
+    /// Records a minute of the sample video `id` in the history, so that autoplay treats it as watched.
+    func debugMarkWatched(_ id: String) {
+        guard let video = SampleData.video(id: id) else { return }
+        library.recordProgress(video: video, seconds: 60, duration: video.durationSeconds.map(Double.init))
+    }
+
     /// Shows the skip notice of the first segment and leaves it up (it has no timer), for screenshots.
     func debugPinNotice() {
         guard let segment = segments.first ?? rawSegments.first else { return }
@@ -1750,6 +1756,7 @@ extension PlayerController {
             quality=\(self.quality.label, privacy: .public) size=\(Int(size.width))x\(Int(size.height)) \
             captions=\(self.selectedCaption?.id ?? "off", privacy: .public) caption=\(caption, privacy: .public) \
             notice=\(notice, privacy: .public) segments=\(self.segments.count) upNext=\(self.upNext.count) \
+            upNextHead=\(self.upNext.first?.id ?? "-", privacy: .public) \
             chapters=\(self.chapters.count) queue=\(self.queue.count) \
             video=\(self.currentVideo?.id ?? "-", privacy: .public) \
             live=\(self.isLive) videoLive=\(self.currentVideo?.isLive ?? false) \

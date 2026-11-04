@@ -155,9 +155,11 @@ final class AppEnvironment {
         let defaults = UserDefaults(suiteName: "com.robinjungerich.noslopyt.preview.\(UUID().uuidString)") ?? .standard
 
         #if DEBUG
+        let youTube = MockYouTubeService(delay: DebugLaunchHooks.mockYouTubeDelay)
         let streams = MockStreamResolver(delay: DebugLaunchHooks.mockStreamDelay)
         let sponsorBlock = MockSponsorBlock(failingFirst: DebugLaunchHooks.flakySponsorBlockFailures)
         #else
+        let youTube = MockYouTubeService()
         let streams = MockStreamResolver()
         let sponsorBlock = MockSponsorBlock()
         #endif
@@ -170,7 +172,7 @@ final class AppEnvironment {
         )
 
         return AppEnvironment(
-            youTube: MockYouTubeService(),
+            youTube: youTube,
             streams: streams,
             captions: MockCaptions(),
             subscriptionFeed: MockSubscriptionFeed(),
