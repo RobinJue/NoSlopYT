@@ -5,6 +5,7 @@ import SwiftUI
 /// "Local" for this device). A row opens the channel; swipe to unsubscribe; pull down to re-sync the account.
 struct SubscriptionsManagerView: View {
     @Environment(AppEnvironment.self) private var env
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @State private var query = ""
     /// Channels whose unsubscribe is in flight, so a second swipe cannot flip them back to subscribed.
     @State private var unsubscribing: Set<String> = []
@@ -59,20 +60,28 @@ struct SubscriptionsManagerView: View {
     // MARK: Rows
 
     private func row(for channel: SubscribedChannel) -> some View {
-        Button {
+        // Next to the name, the badge leaves it a few letters at accessibility text sizes. There the name wraps over the
+        // width that is left of the avatar and the badge goes under it.
+        let stacked = dynamicTypeSize.isAccessibilitySize
+        let name = Text(channel.name.isEmpty ? channel.id : channel.name)
+            .font(.body)
+            .foregroundStyle(.primary)
+
+        return Button {
             env.show(.channel(id: channel.id))
         } label: {
             HStack(spacing: 12) {
                 ChannelAvatarView(url: channel.avatarURL, size: 44)
-                Text(channel.name.isEmpty ? channel.id : channel.name)
-                    .font(.body)
-                    .foregroundStyle(.primary)
-                    .lineLimit(1)
-                Spacer(minLength: 8)
-                if unsubscribing.contains(channel.id) {
-                    ProgressView()
+                if stacked {
+                    VStack(alignment: .leading, spacing: 6) {
+                        name.lineLimit(3)
+                        trailing(for: channel)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 } else {
-                    SourceBadge(source: channel.source)
+                    name.lineLimit(1)
+                    Spacer(minLength: 8)
+                    trailing(for: channel)
                 }
             }
             .contentShape(Rectangle())
@@ -84,6 +93,16 @@ struct SubscriptionsManagerView: View {
             } label: {
                 Label("Unsubscribe", systemImage: "person.badge.minus")
             }
+        }
+    }
+
+    /// A spinner while the unsubscribe runs, else where the subscription lives.
+    @ViewBuilder
+    private func trailing(for channel: SubscribedChannel) -> some View {
+        if unsubscribing.contains(channel.id) {
+            ProgressView()
+        } else {
+            SourceBadge(source: channel.source)
         }
     }
 
@@ -145,4 +164,15 @@ private struct SourceBadge: View {
         SubscriptionsManagerView()
     }
     .environment(AppEnvironment.preview())
+}
+
+#Preview("Accessibility text size") {
+    let env = AppEnvironment.preview()
+    env.library.subscribe(SubscribedChannel(id: "UC1", name: "Blender Guru", source: .google(subscriptionID: "sub-1")))
+    env.library.subscribe(SubscribedChannel(id: "UC2", name: "A channel with a rather long name", source: .local))
+    return NavigationStack {
+        SubscriptionsManagerView()
+    }
+    .environment(env)
+    .dynamicTypeSize(.accessibility2)
 }
