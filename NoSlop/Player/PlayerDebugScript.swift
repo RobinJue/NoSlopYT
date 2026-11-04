@@ -24,7 +24,9 @@ import NoSlopKit
 /// - `segment=<start>-<end>[@<length>]` adds a SponsorBlock segment (`@` is the length of the video it was submitted
 ///   for), `endSegment=<seconds before the end>[,<seconds past it>]` adds one that runs to the end of the video,
 ///   `highlight=<seconds>` adds a highlight (a moment, `poi_highlight`) at that second
-/// - `log=<tag>` writes the state of the player to the log, `watch=<seconds>` does so every second meanwhile
+/// - `log=<tag>` writes the state of the player to the log, `watch=<seconds>` does so every second meanwhile,
+///   `axdump=<tag>` writes the accessibility elements of this moment to `<Documents>/ax-<tag>.txt` (see
+///   `AccessibilityDump`)
 @MainActor
 enum PlayerDebugScript {
     static func runIfRequested(on player: PlayerController) {
@@ -122,6 +124,8 @@ enum PlayerDebugScript {
                     let end = player.duration + (numbers.count > 1 ? numbers[1] : 0)
                     player.debugAddSegment(start: player.duration - before, end: end)
                 }
+            case "axdump":
+                AccessibilityDump.write(tag: value)
             case "log":
                 break
             default:

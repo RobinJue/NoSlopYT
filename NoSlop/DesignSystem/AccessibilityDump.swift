@@ -32,7 +32,8 @@ enum AccessibilityDump {
         }
     }
 
-    private static func write(tag: String) {
+    /// Writes the dump of this moment to `<Documents>/ax-<tag>.txt`.
+    static func write(tag: String) {
         var lines: [String] = []
         let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
         for window in scenes.flatMap(\.windows) where !window.isHidden {
