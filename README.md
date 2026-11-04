@@ -19,11 +19,20 @@ Design: [`docs/superpowers/specs/2026-11-03-noslop-design.md`](docs/superpowers/
   lock-screen controls. It resumes where you left off. While VoiceOver or Switch Control runs, the player's controls
   stay on screen instead of fading out, and a skipped segment is announced, with its Undo left up for ten seconds.
 - Plays a public YouTube playlist (from search, a channel or a link) with "Play all" on its page, or from a tap on one
-  of its rows, also a long one: the next part of the playlist is fetched while the queue runs low. Your YouTube
-  playlists and liked videos (signed in) have "Play all" too, but they load 50 videos at a time as you scroll and
-  queue only those loaded so far; the playlists on the device and Watch Later queue everything.
+  of its rows. Your YouTube playlists and liked videos (signed in), the playlists on the device and Watch Later work
+  the same way. The whole list is queued, also a long one: the part that is not loaded yet is fetched while the queue
+  runs low, and your feed filters apply to it.
+- While a queue plays, the watch page has a "Playing from Liked videos" section (the name of the list the queue came
+  from) above Up next. It shows where the video is in the queue ("3 of 14", or "3 of 100+" while more of the list is
+  still to be fetched) and up to three of the videos that come next; a tap on one skips ahead to it. A queue without a
+  name (Watch Later, a playlist on the device) reads "Playing from your queue". The Next button in the player controls
+  starts the next queued video or, when nothing is queued, the first video in Up next that you have not watched (no
+  Short, live or upcoming video, and nothing your feed filters hide), also when Autoplay next video is off. The lock
+  screen's Next does the same. Next is off when there is nothing to start. There is no Previous.
 - Downloads videos (pick a quality, or audio only) for offline viewing. Downloads continue while the app is in the
-  background, and the files show up in the Files app.
+  background, and the files show up in the Files app. A download also keeps its video's SponsorBlock segments,
+  chapters and captions, so offline it still skips sponsors, shows segments and chapter marks in the seek bar, and has
+  captions.
 - Skips sponsor, self-promotion and interaction-reminder segments (SponsorBlock; each category can also be shown in
   the seek bar or ignored, and a highlight, which is a moment and not a stretch, shows as a tick in the seek bar),
   swaps clickbait titles for the plain ones written by the DeArrow community, and lets you block channels and
@@ -185,15 +194,34 @@ and by running it with the mock services (next section).
   for a second copy of the video, so before it fetches anything the app checks the free space and refuses a download
   that would not fit, saying how much it needs and how much is free. A download that fails keeps what it fetched, and
   so does a merge that the system interrupted: Retry only fetches or merges what is missing.
+- **Offline extras.** Offline the player cannot ask SponsorBlock, the watch page or the caption service, so a download
+  keeps their answers. When it starts (the phone is online then) the app also fetches the video's SponsorBlock segments
+  (every category, so your settings still decide when the video plays; not asked while SponsorBlock is off in Settings),
+  its chapters and the text of up to three caption tracks, the one captions open with first. They are kept per video,
+  not per quality, in `.extras/<video id>.json` in the downloads folder. `.extras` starts with a dot, like `.work` where
+  the parts of unfinished downloads go, so the Files app does not list it; the file goes with the last download of the
+  video. The fetch is best effort: it waits at most eight seconds (each lookup gets six) before the first part of the
+  video is requested, leaves out what did not arrive and never fails the download. The whole start of a download
+  (stream addresses, free-space check, this fetch) runs on running time borrowed from iOS, so leaving the app right
+  after you tap Download does not hold it up. A download then plays offline with sponsor skipping, the segments and
+  chapter marks in the seek bar, and the captions button with the kept text. (The chapter list under the video belongs
+  to the watch page and still needs a connection.) When a download plays with a connection, the live answers win and
+  are written back to the extras file: that is how a download that lacks some of this gets it, the first time it plays
+  online. A caption track you open then is kept too, up to six in all.
 - **SponsorBlock and DeArrow** are asked the privacy-preserving way: the app sends only the first 4 hex characters
   of the SHA-256 of the video ID to `sponsor.ajay.app`, the server answers for every video that shares that prefix,
-  and the app keeps the entry for its own video. The server never learns what you watch.
+  and the app keeps the entry for its own video. The server never learns what you watch. A DeArrow lookup that fails
+  (no connection, a timeout, a busy server) is not an answer: the original title shows, the same video is not asked
+  about again for a minute, and the app asks again when the connection comes back or De-clickbait titles is switched
+  on.
 - **Your data** stays on the device: subscriptions, history, Watch Later, playlists and recent searches are JSON
-  files in Application Support, written half a second after a change and at once when the app leaves the foreground;
-  settings are in `UserDefaults`; the Google tokens are in the Keychain; downloads are in Documents. A file that is
-  damaged is moved aside as `<name>.corrupt` instead of being deleted, a file that exists but cannot be read (the
-  phone was restarted and not unlocked yet) is left untouched and nothing is saved over it until it can be read, and
-  a setting that an older save does not have yet takes its default.
+  files in Application Support, written half a second after a change, at once when the app leaves the foreground, and
+  when iOS announces that it is about to end the app (an app that plays in the background can get that notice when it
+  is force-quit): the player saves the position first, so the video resumes where it stopped, and the write waits at
+  most two seconds for a write that is still running; settings are in `UserDefaults`; the Google tokens are in the
+  Keychain; downloads are in Documents. A file that is damaged is moved aside as `<name>.corrupt` instead of being
+  deleted, a file that exists but cannot be read (the phone was restarted and not unlocked yet) is left untouched and
+  nothing is saved over it until it can be read, and a setting that an older save does not have yet takes its default.
 
 ## Debug launch arguments and app links
 
@@ -239,10 +267,14 @@ shows a plain "Can't open this link" message.
 - **"YouTube asked to confirm you're not a bot."** YouTube rejected the visitor token. The app already retried once
   with a fresh one. Try again in a minute, or tap "Open on YouTube".
 - **A video says it is unavailable, private, age-restricted or made for kids.** The message is YouTube's own reason.
-  These videos cannot be played through this kind of client; "Open on YouTube" opens them in the YouTube app or in
-  Safari.
+  These videos cannot be played through this kind of client, and asking again gets the same answer, so the player shows
+  no Retry for them, only "Open on YouTube", which opens them in the YouTube app or in Safari (the chevron at the top
+  still minimizes the player). Retry stays for failures that can pass: no connection, a busy server, a bot check, and a
+  live event or premiere that has not begun yet.
 - **Playback stops after a long pause or a lost connection.** The app re-resolves the stream (or waits for the
-  connection) and resumes once; if playback fails again it shows the error with a Retry button.
+  connection) and resumes once; if playback fails again it shows the error with a Retry button. A stream that this
+  device cannot decode gets no Retry, since fresh addresses would not help; for a download that cannot be played, Retry
+  streams the video instead.
 - **A download failed or is paused.** Tap Retry: it asks YouTube for fresh stream addresses and reuses the parts
   that are still good, so only what is missing is fetched again. When a stream address stops working (it expired, or
   the phone left the Wi-Fi it was made for), the app asks YouTube for new ones by itself once before it gives up.
@@ -251,6 +283,13 @@ shows a plain "Can't open this link" message.
 - **A download stopped after you swiped the app away.** iOS cancels the background transfers of an app that was
   force-quit and does not start it again. Open No Slop: the parts that were already fetched are kept, and if the row
   says Paused, tap Retry.
+- **A download plays offline without sponsor skipping, chapter marks or captions.** They are fetched when the download
+  starts, so they are missing if SponsorBlock was off then, if a service was too slow to answer, and for a download
+  made by an older version of the app. Play it once with a connection (SponsorBlock on): the app asks again and keeps
+  what it gets; for captions, the track you open.
+- **A title is still the clickbait one.** DeArrow has no better title for every video, and Settings > Titles >
+  De-clickbait titles has to be on. If DeArrow could not be reached, the original shows for now: the app asks again when
+  the connection comes back, when you switch the setting on, and when the title comes into view again after a minute.
 - **Lists are empty, videos do not load, or everything fails after a while.** YouTube's web API is unofficial and
   changes. The client versions the app presents itself with live in
   `NoSlopKit/Sources/NoSlopKit/InnerTube/ClientProfile.swift` (`ClientProfile.web` and `ClientProfile.visionOS`:
