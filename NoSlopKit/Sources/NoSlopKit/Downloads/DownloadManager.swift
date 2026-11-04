@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import Synchronization
 #if canImport(UIKit) && !os(watchOS)
 import UIKit
 #endif
@@ -17,7 +18,9 @@ import UIKit
 ///
 /// Persistence: the list lives in `<root>/downloads.json`. Items that were in flight when the app last ran come
 /// back `.paused` (their tasks are gone or unknown); the session is then asked what it kept, and those items pick up
-/// where they were. `retry` asks YouTube for fresh stream URLs and reuses parts that are still valid.
+/// where they were. `retry` asks YouTube for fresh stream URLs and reuses parts that are still valid. A list that
+/// exists but cannot be read (the app was started in the background before the first unlock after a restart, say) is
+/// not an empty list: nothing is deleted, cancelled or saved over it, and it is read again once the files can be read.
 ///
 /// A failed download keeps what it fetched, so a retry only fetches what is missing: the chunks that finished, and
 /// the concatenated streams of a merge that was interrupted. Only a download that is proven bad (an unreadable stream,
@@ -49,6 +52,12 @@ public final class DownloadManager {
     /// second dead address is a failure to show, not a loop. Cleared when the item is started by hand, fails, is
     /// cancelled or deleted, or finishes.
     @ObservationIgnored private var refreshedLinks: Set<String> = []
+    /// True while `downloads.json` exists but could not be read. The list in memory is then only what was started
+    /// since; nothing is saved over the file, and no work directory is deleted as an orphan of a list nobody has seen.
+    @ObservationIgnored private var listIsUnreadable = false
+#if canImport(UIKit) && !os(watchOS)
+    @ObservationIgnored private let notificationObservers = NotificationObservers()
+#endif
 
     /// - Parameter sessionConfiguration: nil means the background configuration with the global session id.
     public convenience init(rootDirectory: URL, streams: any StreamResolving, sessionConfiguration: URLSessionConfiguration? = nil) {
@@ -74,38 +83,13 @@ public final class DownloadManager {
         DownloadAssembler.excludeFromBackup(rootDirectory)
 
         // What the last run left behind. Nothing is trusted to still be running until the session confirms it.
-        var loaded = store.load()
-        var restoredIDs: [String] = []
-        var unfinishedIDs: Set<String> = []
-        var changed = false
-        for index in loaded.indices {
-            switch loaded[index].state {
-            case .queued, .downloading, .merging:
-                loaded[index].state = .paused
-                loaded[index].errorMessage = nil
-                restoredIDs.append(loaded[index].id)
-                unfinishedIDs.insert(loaded[index].id)
-                changed = true
-            case .paused:
-                restoredIDs.append(loaded[index].id)
-                unfinishedIDs.insert(loaded[index].id)
-            case .failed:
-                // A failed item has a work directory only when its parts were kept on purpose for the next retry.
-                unfinishedIDs.insert(loaded[index].id)
-            case .completed:
-                if Self.finishedFile(of: loaded[index], in: rootDirectory) == nil {
-                    loaded[index].state = .failed
-                    loaded[index].relativeFilePath = nil
-                    loaded[index].progress = 0
-                    loaded[index].bytesDownloaded = 0
-                    loaded[index].errorMessage = "The downloaded file is missing. Retry to download it again."
-                    changed = true
-                }
-            }
-        }
-        items = loaded
-        if changed { saveItems() }
-        workspace.prune(keeping: unfinishedIDs)
+        let restored = Self.restore(store.load(), root: rootDirectory)
+        listIsUnreadable = restored.isUnreadable
+        items = restored.items
+        if restored.changed { saveItems() }
+        // With a list that could not be read every work directory would look like an orphan: leave them all alone, and
+        // leave the session's tasks alone too, until the list can be read (see `reloadIfUnreadable`).
+        if !restored.isUnreadable { workspace.prune(keeping: restored.unfinishedIDs) }
 
         // Events are handled one at a time, in order, on the main actor.
         Task { @MainActor [weak self] in
@@ -113,13 +97,102 @@ public final class DownloadManager {
                 self?.handle(event)
             }
         }
+        if !restored.isUnreadable {
+            Task { @MainActor [weak self] in
+                await self?.reconcile(restoredIDs: restored.restoredIDs)
+            }
+        }
+        observeProtectedData()
+    }
+
+    deinit {
+        engine.shutdown()
+    }
+
+    // MARK: - Restoring the list
+
+    /// The list as the last run left it, made ready for this one.
+    private struct RestoredList {
+        var items: [DownloadItem] = []
+        /// Items that were in flight and must be matched up with the session's tasks.
+        var restoredIDs: [String] = []
+        /// Items that may have a work directory.
+        var unfinishedIDs: Set<String> = []
+        /// Whether `items` differs from the file.
+        var changed = false
+        var isUnreadable = false
+    }
+
+    nonisolated private static func restore(_ contents: DownloadItemStore.Contents, root: URL) -> RestoredList {
+        guard case .items(var loaded) = contents else { return RestoredList(isUnreadable: true) }
+        var restored = RestoredList()
+        for index in loaded.indices {
+            switch loaded[index].state {
+            case .queued, .downloading, .merging:
+                loaded[index].state = .paused
+                loaded[index].errorMessage = nil
+                restored.restoredIDs.append(loaded[index].id)
+                restored.unfinishedIDs.insert(loaded[index].id)
+                restored.changed = true
+            case .paused:
+                restored.restoredIDs.append(loaded[index].id)
+                restored.unfinishedIDs.insert(loaded[index].id)
+            case .failed:
+                // A failed item has a work directory only when its parts were kept on purpose for the next retry.
+                restored.unfinishedIDs.insert(loaded[index].id)
+            case .completed:
+                if finishedFile(of: loaded[index], in: root) == nil {
+                    loaded[index].state = .failed
+                    loaded[index].relativeFilePath = nil
+                    loaded[index].progress = 0
+                    loaded[index].bytesDownloaded = 0
+                    loaded[index].errorMessage = "The downloaded file is missing. Retry to download it again."
+                    restored.changed = true
+                }
+            }
+        }
+        restored.items = loaded
+        return restored
+    }
+
+    /// Reads `downloads.json` again when it could not be read at launch, and carries on as the launch would have: items
+    /// that were in flight come back `.paused`, work directories nobody needs are deleted, and the session's tasks are
+    /// matched up. Downloads started in the meantime stay and come first. Does nothing once the list has been read, so
+    /// it is cheap to call: when the protected data becomes available, when the app becomes active, and before a new
+    /// download is added.
+    func reloadIfUnreadable() {
+        guard listIsUnreadable else { return }
+        let restored = Self.restore(store.load(), root: rootDirectory)
+        guard !restored.isUnreadable else { return }
+        listIsUnreadable = false
+
+        // What was started meanwhile is newer than the file, and wins where both have an item.
+        let known = Set(items.map(\.id))
+        items += restored.items.filter { !known.contains($0.id) }
+        saveItems()
+
+        var unfinishedIDs = restored.unfinishedIDs
+        for item in items where item.state != .completed { unfinishedIDs.insert(item.id) }
+        workspace.prune(keeping: unfinishedIDs)
+
+        let restoredIDs = restored.restoredIDs.filter { !known.contains($0) }
         Task { @MainActor [weak self] in
             await self?.reconcile(restoredIDs: restoredIDs)
         }
     }
 
-    deinit {
-        engine.shutdown()
+    /// Files that data protection keeps closed until the first unlock after a restart can be opened again when the
+    /// device is unlocked, and an app that was started in the background before that finds its list closed. The list
+    /// is read again then, and when the app comes to the foreground.
+    private func observeProtectedData() {
+#if canImport(UIKit) && !os(watchOS)
+        for name in [UIApplication.protectedDataDidBecomeAvailableNotification, UIApplication.didBecomeActiveNotification] {
+            let token = NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.reloadIfUnreadable() }
+            }
+            notificationObservers.add(token)
+        }
+#endif
     }
 
     // MARK: - Options
@@ -142,6 +215,8 @@ public final class DownloadManager {
     /// audio streams as another item of that video that has not failed is removed from the list again instead of
     /// downloading them twice. An original that is paused starts again, since a download of it was asked for.
     public func enqueue(video: VideoSummary, quality: DownloadQuality) {
+        // A list that was closed at launch may be readable by now; a video that is already downloaded should be found.
+        reloadIfUnreadable()
         let id = Self.itemID(video: video, quality: quality)
         if let item = items.first(where: { $0.id == id }) {
             switch item.state {
@@ -727,6 +802,24 @@ public final class DownloadManager {
     }
 }
 
+// MARK: - Notifications
+
+#if canImport(UIKit) && !os(watchOS)
+/// Holds the manager's notification observers and removes them when the manager goes away.
+private final class NotificationObservers: @unchecked Sendable {
+    // Only touched on the main thread while the manager is created, and when it is released.
+    private var tokens: [any NSObjectProtocol] = []
+
+    func add(_ token: any NSObjectProtocol) {
+        tokens.append(token)
+    }
+
+    deinit {
+        for token in tokens { NotificationCenter.default.removeObserver(token) }
+    }
+}
+#endif
+
 // MARK: - Background time
 
 #if canImport(UIKit) && !os(watchOS)
@@ -876,8 +969,48 @@ enum DownloadFileNaming {
 /// `downloads.json`: the list of items as a JSON array. Missing keys decode to defaults, an element that cannot be
 /// read is skipped (and the file kept as `downloads.json.corrupt`), and a file that is not a list at all is moved
 /// aside instead of deleted.
+///
+/// A file that exists but cannot be read (no permission, data protection before the first unlock, an I/O error) says
+/// nothing about its content, which may be perfectly good: `load` reports it as `.unreadable`, the file stays where it
+/// is, and `save` refuses to write over it for the rest of the process, until a load of it succeeds. Otherwise a launch
+/// while the device is locked would replace the list of downloads with a new, nearly empty one. (`JSONFileStore` does
+/// the same for the library.) Only a file that is not there at all is a first launch.
 struct DownloadItemStore: Sendable {
     let fileURL: URL
+    private let read: @Sendable (URL) throws -> Data
+
+    init(fileURL: URL) {
+        self.init(fileURL: fileURL, read: { try Data(contentsOf: $0) })
+    }
+
+    /// Tests inject the reader to make reading fail the way a device can.
+    init(fileURL: URL, read: @escaping @Sendable (URL) throws -> Data) {
+        self.fileURL = fileURL
+        self.read = read
+    }
+
+    enum Contents: Equatable {
+        /// The items; none when there is no file yet (first launch) or the file was not a list.
+        case items([DownloadItem])
+        /// The file is there but the system would not give its content.
+        case unreadable
+    }
+
+    /// The files (by path) that exist but could not be read. Process-wide on purpose: whoever created the store that saw
+    /// the failure, no store in this process may write over such a file until one of them has read it.
+    private static let unreadableFiles = Mutex<Set<String>>([])
+
+    private static func key(for url: URL) -> String {
+        url.standardizedFileURL.path
+    }
+
+    private static func isUnreadable(_ url: URL) -> Bool {
+        unreadableFiles.withLock { $0.contains(key(for: url)) }
+    }
+
+    private func markReadable() {
+        Self.unreadableFiles.withLock { _ = $0.remove(Self.key(for: fileURL)) }
+    }
 
     private struct Lossy<Element: Decodable>: Decodable {
         let value: Element?
@@ -891,8 +1024,19 @@ struct DownloadItemStore: Sendable {
         let items: [Lossy<DownloadItem>]
     }
 
-    func load() -> [DownloadItem] {
-        guard let data = try? Data(contentsOf: fileURL) else { return [] }
+    func load() -> Contents {
+        let data: Data
+        do {
+            data = try read(fileURL)
+            markReadable()
+        } catch {
+            if JSONFileStore.isMissing(error) {
+                markReadable()
+                return .items([])
+            }
+            Self.unreadableFiles.withLock { _ = $0.insert(Self.key(for: fileURL)) }
+            return .unreadable
+        }
         let decoder = Self.makeDecoder()
 
         let elements: [Lossy<DownloadItem>]
@@ -902,15 +1046,17 @@ struct DownloadItemStore: Sendable {
             elements = envelope.items
         } else {
             moveAside()
-            return []
+            return .items([])
         }
 
         let items = elements.compactMap(\.value)
         if items.count < elements.count { keepCopyOfUnreadableFile() }
-        return items
+        return .items(items)
     }
 
+    /// Writes the list, unless the file exists and could not be read (see the type's documentation).
     func save(_ items: [DownloadItem]) {
+        guard !Self.isUnreadable(fileURL) else { return }
         do {
             try FileManager.default.createDirectory(at: fileURL.deletingLastPathComponent(), withIntermediateDirectories: true)
             try JSONEncoder().encode(items).write(to: fileURL, options: .atomic)

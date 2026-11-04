@@ -170,9 +170,10 @@ and by running it with the mock services (next section).
   and the app keeps the entry for its own video. The server never learns what you watch.
 - **Your data** stays on the device: subscriptions, history, Watch Later, playlists and recent searches are JSON
   files in Application Support, written half a second after a change and at once when the app leaves the foreground;
-  settings are in `UserDefaults`; the Google tokens are in the Keychain; downloads are in Documents. A file that
-  cannot be read is moved aside as `<name>.corrupt` instead of being deleted, and a setting that an older save does
-  not have yet takes its default.
+  settings are in `UserDefaults`; the Google tokens are in the Keychain; downloads are in Documents. A file that is
+  damaged is moved aside as `<name>.corrupt` instead of being deleted, a file that exists but cannot be read (the
+  phone was restarted and not unlocked yet) is left untouched and nothing is saved over it until it can be read, and
+  a setting that an older save does not have yet takes its default.
 
 ## Debug launch arguments and app links
 
