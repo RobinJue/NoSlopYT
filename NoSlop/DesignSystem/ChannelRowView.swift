@@ -54,6 +54,8 @@ struct ChannelRowView: View {
             SubscribeButton(channel: channel.ref)
                 .fixedSize(horizontal: true, vertical: false)
         }
+        // The whole width, from the leading edge, stacked or not (see `VideoRowView`).
+        .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(Rectangle())
     }
 

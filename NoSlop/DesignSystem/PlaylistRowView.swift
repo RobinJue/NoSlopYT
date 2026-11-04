@@ -37,6 +37,8 @@ struct PlaylistRowView: View {
                 Spacer(minLength: 0)
             }
         }
+        // The whole width, from the leading edge, stacked or not (see `VideoRowView`).
+        .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(Rectangle())
     }
 

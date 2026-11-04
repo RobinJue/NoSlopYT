@@ -49,6 +49,11 @@ struct VideoRowView: View {
                 Spacer(minLength: 0)
             }
         }
+        // At accessibility sizes the stack has no Spacer, so it is only as wide as its widest part, and a `LazyVStack` or
+        // a grid cell centres a child that is narrower than its column: the row would be drawn off to the middle and
+        // would take a tap only there. The frame gives the row the whole width, from its leading edge, and the tap area
+        // with it (a content shape is the bounds of what it is put on).
+        .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(Rectangle())
     }
 }
