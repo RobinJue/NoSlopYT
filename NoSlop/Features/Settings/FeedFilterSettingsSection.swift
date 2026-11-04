@@ -39,7 +39,8 @@ struct FeedFilterSettingsSection: View {
     }
 }
 
-/// The channels hidden with "Don't show this channel". Swipe a row to unblock it.
+/// The channels hidden with "Don't show this channel". Swipe a row to unblock it, or choose "Show this channel again"
+/// in the menu of one of its videos.
 struct BlockedChannelsView: View {
     @Environment(AppEnvironment.self) private var env
 
@@ -79,7 +80,7 @@ struct BlockedChannelsView: View {
     }
 
     private func unblock(_ channel: BlockedChannel) {
-        env.settingsStore.settings.blockedChannels.removeAll { $0.id == channel.id }
+        ChannelBlocking.unblock(channelID: channel.id, using: env)
     }
 }
 
