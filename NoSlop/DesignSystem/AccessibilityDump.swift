@@ -47,12 +47,62 @@ enum AccessibilityDump {
         log.info("[ax] dump \(tag, privacy: .public): \(lines.count) lines")
     }
 
-    private static func walk(_ object: NSObject, depth: Int, into lines: inout [String]) {
-        if let view = object as? UIView {
-            if view.accessibilityElementsHidden || view.isHidden || view.alpha < 0.01 { return }
-            if view.accessibilityViewIsModal {
-                lines.append(indent(depth) + "-- modal: \(type(of: view)) --")
+    /// The two-finger scrub (escape) of VoiceOver, with the focus on the element labelled `label`: asks that element
+    /// and then every container above it to `accessibilityPerformEscape`, until one handles it. True when one did.
+    static func performEscape(startingAtLabel label: String) -> Bool {
+        var found: NSObject?
+        let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+        for window in scenes.flatMap(\.windows) where !window.isHidden && found == nil {
+            find(label: label, in: window, found: &found)
+        }
+        var current = found
+        while let object = current {
+            if object.accessibilityPerformEscape() {
+                log.info("[ax] escape handled by \(String(describing: type(of: object)), privacy: .public)")
+                return true
             }
+            current = container(of: object)
+        }
+        log.info("[ax] escape not handled (started at \(found == nil ? "nothing" : label, privacy: .public))")
+        return false
+    }
+
+    /// The container of an accessibility element (SwiftUI's nodes keep it where UIKit's elements do), or the superview.
+    private static func container(of object: NSObject) -> NSObject? {
+        let selector = NSSelectorFromString("accessibilityContainer")
+        if object.responds(to: selector), let container = object.perform(selector)?.takeUnretainedValue() as? NSObject {
+            return container
+        }
+        return (object as? UIView)?.superview
+    }
+
+    private static func find(label: String, in object: NSObject, found: inout NSObject?) {
+        guard found == nil else { return }
+        if let view = object as? UIView, view.accessibilityElementsHidden || view.isHidden || view.alpha < 0.01 { return }
+        if object.isAccessibilityElement {
+            if object.accessibilityLabel == label { found = object }
+            return
+        }
+        if let children = object.accessibilityElements, !children.isEmpty {
+            for case let child as NSObject in children { find(label: label, in: child, found: &found) }
+            return
+        }
+        let count = object.accessibilityElementCount()
+        if count != NSNotFound, count > 0 {
+            for index in 0..<count {
+                if let child = object.accessibilityElement(at: index) as? NSObject { find(label: label, in: child, found: &found) }
+            }
+            return
+        }
+        if let view = object as? UIView {
+            for subview in view.subviews { find(label: label, in: subview, found: &found) }
+        }
+    }
+
+    private static func walk(_ object: NSObject, depth: Int, into lines: inout [String]) {
+        if let view = object as? UIView, view.accessibilityElementsHidden || view.isHidden || view.alpha < 0.01 { return }
+        if object.accessibilityViewIsModal {
+            lines.append(indent(depth) + "-- modal: \(type(of: object)) --")
         }
         if object.isAccessibilityElement {
             lines.append(indent(depth) + describe(object))

@@ -26,7 +26,7 @@ import NoSlopKit
 ///   `highlight=<seconds>` adds a highlight (a moment, `poi_highlight`) at that second
 /// - `log=<tag>` writes the state of the player to the log, `watch=<seconds>` does so every second meanwhile,
 ///   `axdump=<tag>` writes the accessibility elements of this moment to `<Documents>/ax-<tag>.txt` (see
-///   `AccessibilityDump`)
+///   `AccessibilityDump`), `axescape` is the two-finger scrub of VoiceOver with the focus on the video
 @MainActor
 enum PlayerDebugScript {
     static func runIfRequested(on player: PlayerController) {
@@ -126,6 +126,8 @@ enum PlayerDebugScript {
                 }
             case "axdump":
                 AccessibilityDump.write(tag: value)
+            case "axescape":
+                _ = AccessibilityDump.performEscape(startingAtLabel: value.isEmpty ? "Video" : value)
             case "log":
                 break
             default:

@@ -29,7 +29,9 @@ import SwiftUI
 ///   starts from scratch: that is what the checks of rotation and full screen look for.
 /// - `-axDump '<seconds>,...'`: that long after launch, writes the accessibility elements VoiceOver would walk through
 ///   to `<Documents>/ax-<seconds>.txt` (see `AccessibilityDump`).
-/// - `-searchScroll <points>`: the search results scroll down by that much, once, when they appear.
+/// - `-searchScroll <points>`: the Search tab's scroll view (results, recents, suggestions) scrolls down by that much,
+///   once, a moment after it shows while no expanded player covers it. `-searchScroll end` scrolls it to its very end,
+///   which also works for a `List` (it goes through UIKit's scroll view) and keeps the room the content margins leave.
 enum DebugLaunchHooks {
     private static var isPrepared = false
     private static var isSearchTextTaken = false
@@ -112,13 +114,43 @@ enum DebugLaunchHooks {
         }
     }
 
-    /// The offset of `-searchScroll`, once per launch.
-    static func takeSearchScroll() -> Double? {
-        guard !isSearchScrollTaken else { return nil }
-        let points = UserDefaults.standard.double(forKey: "searchScroll")
-        guard points > 0 else { return nil }
+    /// How far `-searchScroll` scrolls, once per launch; nil afterwards and without the argument.
+    enum SearchScroll {
+        case points(Double)
+        case end
+    }
+
+    static func takeSearchScroll() -> SearchScroll? {
+        guard !isSearchScrollTaken, let argument = UserDefaults.standard.string(forKey: "searchScroll") else { return nil }
+        let scroll: SearchScroll
+        if argument == "end" {
+            scroll = .end
+        } else if let points = Double(argument), points > 0 {
+            scroll = .points(points)
+        } else {
+            return nil
+        }
         isSearchScrollTaken = true
-        return points
+        return scroll
+    }
+
+    /// Scrolls the biggest scroll view on screen to its very end, room for the content margins included.
+    static func scrollBiggestScrollViewToEnd() {
+        let windows = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.flatMap(\.windows)
+        var best: UIScrollView?
+        func visit(_ view: UIView) {
+            if view.isHidden || view.alpha < 0.01 { return }
+            if let scrollView = view as? UIScrollView, scrollView.isScrollEnabled,
+               scrollView.bounds.width * scrollView.bounds.height > (best.map { $0.bounds.width * $0.bounds.height } ?? 0) {
+                best = scrollView
+            }
+            view.subviews.forEach(visit)
+        }
+        windows.forEach(visit)
+        guard let scrollView = best else { return }
+        let inset = scrollView.adjustedContentInset
+        let end = scrollView.contentSize.height - scrollView.bounds.height + inset.bottom
+        scrollView.setContentOffset(CGPoint(x: scrollView.contentOffset.x, y: max(-inset.top, end)), animated: false)
     }
 
     /// The text of `-searchText`, once per launch.
@@ -143,11 +175,12 @@ extension View {
 }
 
 extension View {
-    /// With `-searchScroll <points>`: scrolls the scroll view inside down by that much, once, a moment after it has
-    /// appeared (the results of a search take that long to arrive). Without it the view is left as it is.
+    /// With `-searchScroll <points>`: scrolls the scroll view inside down by that much, once, 2.5 s after it shows
+    /// without an expanded player on top of it (the results of a search take that long to arrive, and a minimized
+    /// player has made its room by then). Without the argument the view is left as it is.
     @ViewBuilder
     func debugSearchScroll() -> some View {
-        if UserDefaults.standard.double(forKey: "searchScroll") > 0 {
+        if UserDefaults.standard.string(forKey: "searchScroll") != nil {
             modifier(DebugSearchScroll())
         } else {
             self
@@ -156,15 +189,19 @@ extension View {
 }
 
 private struct DebugSearchScroll: ViewModifier {
+    @Environment(AppEnvironment.self) private var env
     @State private var position = ScrollPosition()
 
     func body(content: Content) -> some View {
         content
             .scrollPosition($position)
-            .task {
+            .task(id: env.player.presentation) {
+                guard env.player.presentation != .expanded else { return }
                 try? await Task.sleep(for: .seconds(2.5))
-                if let points = DebugLaunchHooks.takeSearchScroll() {
-                    position.scrollTo(y: points)
+                guard !Task.isCancelled, let scroll = DebugLaunchHooks.takeSearchScroll() else { return }
+                switch scroll {
+                case .points(let points): position.scrollTo(y: points)
+                case .end: DebugLaunchHooks.scrollBiggestScrollViewToEnd()
                 }
             }
     }
