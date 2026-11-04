@@ -416,12 +416,16 @@ private enum MockURLResolver {
 /// `StreamResolving` that returns Apple's bipbop HLS stream for every video, with no downloadable formats.
 public struct MockStreamResolver: StreamResolving {
     private let delay: Duration
+    private let connection: MockConnection?
 
-    public init(delay: Duration = .milliseconds(300)) {
+    /// - Parameter connection: when given and off, every call fails with `NoSlopError.network`.
+    public init(delay: Duration = .milliseconds(300), connection: MockConnection? = nil) {
         self.delay = delay
+        self.connection = connection
     }
 
     public func streamInfo(videoID: String) async throws -> StreamInfo {
+        try connection?.requireOnline()
         try await MockDelay.wait(delay)
         return SampleData.streamInfo(for: videoID)
     }
@@ -430,12 +434,16 @@ public struct MockStreamResolver: StreamResolving {
 /// `CaptionsProviding` that returns the same few cues for every track.
 public struct MockCaptions: CaptionsProviding {
     private let delay: Duration
+    private let connection: MockConnection?
 
-    public init(delay: Duration = .milliseconds(300)) {
+    /// - Parameter connection: when given and off, every call fails with `NoSlopError.network`.
+    public init(delay: Duration = .milliseconds(300), connection: MockConnection? = nil) {
         self.delay = delay
+        self.connection = connection
     }
 
     public func cues(for track: CaptionTrack) async throws -> [CaptionCue] {
+        try connection?.requireOnline()
         try await MockDelay.wait(delay)
         return SampleData.captionCues
     }
@@ -595,20 +603,25 @@ public actor MockAccountService: YouTubeAccountService {
 public struct MockSponsorBlock: SponsorBlockProviding {
     private let delay: Duration
     private let failures: FailureBudget?
+    private let connection: MockConnection?
 
-    public init(delay: Duration = .milliseconds(300)) {
+    /// - Parameter connection: when given and off, every lookup fails with `NoSlopError.network`.
+    public init(delay: Duration = .milliseconds(300), connection: MockConnection? = nil) {
         self.delay = delay
         self.failures = nil
+        self.connection = connection
     }
 
     /// A service with a bad moment, for checking that the player retries: the first `failingFirst` lookups (counted
     /// across copies of the mock) throw a network error, the following ones answer. Zero or less never fails.
-    public init(delay: Duration = .milliseconds(300), failingFirst: Int) {
+    public init(delay: Duration = .milliseconds(300), failingFirst: Int, connection: MockConnection? = nil) {
         self.delay = delay
         self.failures = failingFirst > 0 ? FailureBudget(failingFirst) : nil
+        self.connection = connection
     }
 
     public func segments(videoID: String) async throws -> [SponsorSegment] {
+        try connection?.requireOnline()
         try await MockDelay.wait(delay)
         if failures?.takeOne() == true {
             throw NoSlopError.network("SponsorBlock is having a bad moment.")

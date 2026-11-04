@@ -99,6 +99,9 @@ final class PlayerController {
     /// Whether the error screen offers Retry (`PlayerFailureAdvice`): not for a video YouTube will not hand out, where
     /// asking again only brings the same message back. Only meaningful while the state is `.failed`.
     private(set) var failureIsWorthRetrying = true
+    /// The caption tracks of the download that plays whose text it kept (`DownloadExtras`). They work without a
+    /// connection and are there before the stream info is, so they are part of `captionTracks`.
+    private(set) var keptCaptionTracks: [CaptionTrack] = []
 
     var isFullscreen = false
 
@@ -170,6 +173,13 @@ final class PlayerController {
     @ObservationIgnored private var isApplyingDefaultQuality = false
 
     @ObservationIgnored private var rawSegments: [SponsorSegment] = []
+    /// What the download that plays kept of its video: SponsorBlock segments, chapters and the text of caption tracks. Each
+    /// is the fallback while its live answer is missing (offline, or not there yet), and live data wins when it arrives.
+    /// Nil unless a download plays and kept something.
+    @ObservationIgnored private var keptExtras: DownloadExtras?
+    /// The live answers have arrived: the kept ones no longer apply, and a late read of the file must not put them back.
+    @ObservationIgnored private var liveSegmentsArrived = false
+    @ObservationIgnored private var liveChaptersArrived = false
     @ObservationIgnored private var planner: SegmentSkipPlanner?
     @ObservationIgnored private var plannerEnabled = true
     @ObservationIgnored private var plannerBehaviors: [SponsorCategory: SegmentBehavior] = [:]
@@ -232,9 +242,10 @@ final class PlayerController {
         }
     }
 
-    /// The caption tracks the video offers.
+    /// The caption tracks the video offers: those of the stream info, and, while a download plays, the ones it kept the
+    /// text of (`DownloadExtras.captionTracks(live:kept:)`).
     var captionTracks: [CaptionTrack] {
-        streamInfo?.captions ?? []
+        DownloadExtras.captionTracks(live: streamInfo?.captions, kept: keptCaptionTracks)
     }
 
     /// Whether `playNext` has a video to start: a queued one, or the first of the next page of the list the queue came
@@ -296,6 +307,10 @@ final class PlayerController {
     /// The chapters of the current video (from the watch details); the seek bar draws them.
     func setChapters(_ chapters: [Chapter]) {
         self.chapters = chapters
+        liveChaptersArrived = true
+        if chapters != keptExtras?.chapters {
+            keepWithDownload(DownloadExtras(chapters: chapters))
+        }
     }
 
     /// The related videos of the current video, for autoplay once the queue is empty. The watch page hands them over
@@ -375,6 +390,7 @@ final class PlayerController {
         segments = []
         if !isSameVideo {
             chapters = []
+            liveChaptersArrived = false
             detailsHandedOverFor = nil
         }
         skipNotice = nil
@@ -394,6 +410,9 @@ final class PlayerController {
         planner = nil
         plannerLength = nil
         segmentsRequestedFor = nil
+        keptExtras = nil
+        keptCaptionTracks = []
+        liveSegmentsArrived = false
         cueTimeline = CueTimeline(cues: [])
         selectedCaption = nil
         shouldPlayWhenReady = true
@@ -441,6 +460,10 @@ final class PlayerController {
             Self.log.info("playing the download of \(video.id, privacy: .public)")
             attach(AVPlayerItem(url: local.url))
             loadStreamInfoForOfflinePlayback(of: video.id, token: token)
+            // Without a connection there is no SponsorBlock, no watch page and no caption service to ask: what the download
+            // kept stands in for them (and until their answers arrive, when there is one). After the item is attached:
+            // playback never waits for the file.
+            await applyKeptExtras(of: video.id, token: token)
             return
         }
 
@@ -453,7 +476,7 @@ final class PlayerController {
                 return
             }
             attach(AVPlayerItem(url: url))
-            selectDefaultCaption(from: info)
+            selectDefaultCaption(from: captionTracks)
         } catch {
             guard token == generation, !Task.isCancelled else { return }
             fail(with: error)
@@ -461,14 +484,46 @@ final class PlayerController {
     }
 
     /// While a download plays there is no stream info, but captions and chapters want its caption tracks. Best effort:
-    /// offline this simply fails.
+    /// offline this simply fails, and the tracks the download kept are all there is (`applyKeptExtras`).
     private func loadStreamInfoForOfflinePlayback(of videoID: String, token: Int) {
         Task { [weak self] in
             guard let self else { return }
             guard let info = try? await self.streams.streamInfo(videoID: videoID), token == self.generation else { return }
             self.accept(info)
-            self.selectDefaultCaption(from: info)
+            self.selectDefaultCaption(from: self.captionTracks)
         }
+    }
+
+    /// Puts what the download of `videoID` kept (`DownloadExtras`) in place of the live answers that cannot be had offline
+    /// or have not arrived yet: the SponsorBlock segments (the planner is built from them, so auto-skip and the coloured
+    /// marks work from the first second), the chapters and the caption tracks with their text. A live answer that is
+    /// there already wins; one that comes later replaces these (`ensureSegments`, `setChapters`).
+    private func applyKeptExtras(of videoID: String, token: Int) async {
+        guard let kept = await downloads.extras(forVideoID: videoID) else { return }
+        // The viewer moved on while the file was read, or the download turned out not to play and the stream took over.
+        guard token == generation, currentVideo?.id == videoID, isPlayingOffline else { return }
+        keptExtras = kept
+        keptCaptionTracks = kept.captionTracks
+        if let segments = kept.segments, !liveSegmentsArrived {
+            rawSegments = segments
+            rebuildPlanner()
+        }
+        if let keptChapters = kept.chapters, chapters.isEmpty, !liveChaptersArrived {
+            chapters = keptChapters
+        }
+        selectDefaultCaption(from: captionTracks)
+    }
+
+    /// A download that plays while there is a connection learns what the live services say (the segments of the lookup,
+    /// the chapters of the watch page, the text of a caption track the viewer opened), and keeps it with the download:
+    /// that is how downloads made before the extras were kept get them, and how the kept ones stay as current as the
+    /// live ones. The callers only pass what differs from what is kept.
+    private func keepWithDownload(_ news: DownloadExtras) {
+        guard isPlayingOffline, let id = currentVideo?.id, !news.isEmpty else { return }
+        downloads.saveExtras(news, forVideoID: id)
+        let merged = (keptExtras ?? DownloadExtras()).merging(news)
+        keptExtras = merged
+        keptCaptionTracks = merged.captionTracks
     }
 
     /// The finished download of the video whose file is still there: the sharpest video download first, an audio-only
@@ -1136,6 +1191,10 @@ final class PlayerController {
         planner = nil
         plannerLength = nil
         segmentsRequestedFor = nil
+        keptExtras = nil
+        keptCaptionTracks = []
+        liveSegmentsArrived = false
+        liveChaptersArrived = false
         betterTitle = nil
         betterTitleRequestedFor = nil
         cueTimeline = CueTimeline(cues: [])
@@ -1430,8 +1489,13 @@ final class PlayerController {
             guard !Task.isCancelled, self.currentVideo?.id == videoID else { return }
             switch outcome {
             case .loaded(let loaded):
+                // The live answer is the truth, an empty one too. A failed lookup (below) leaves what the download kept.
+                self.liveSegmentsArrived = true
                 self.rawSegments = loaded
                 self.rebuildPlanner()
+                if loaded != self.keptExtras?.segments {
+                    self.keepWithDownload(DownloadExtras(segments: loaded))
+                }
             case .failed:
                 Self.log.info("SponsorBlock lookup for \(videoID, privacy: .public) failed, will ask again later")
                 self.segmentsRequestedFor = nil
@@ -1563,37 +1627,16 @@ final class PlayerController {
         if selectedCaption != nil {
             selectedCaption = nil
         } else {
-            selectedCaption = Self.preferredTrack(in: captionTracks, language: settings.preferredCaptionLanguage)
+            selectedCaption = CaptionTrackChoice.preferred(in: captionTracks, language: settings.preferredCaptionLanguage)
         }
     }
 
     /// Shows the preferred caption language right away when the viewer set one and the video has it.
-    private func selectDefaultCaption(from info: StreamInfo) {
+    private func selectDefaultCaption(from tracks: [CaptionTrack]) {
         guard selectedCaption == nil,
               let language = settings.preferredCaptionLanguage, !language.isEmpty,
-              let track = Self.matchingTrack(in: info.captions, language: language) else { return }
+              let track = CaptionTrackChoice.matching(in: tracks, language: language) else { return }
         selectedCaption = track
-    }
-
-    private static func preferredTrack(in tracks: [CaptionTrack], language: String?) -> CaptionTrack? {
-        let device = Locale.current.language.languageCode?.identifier
-        for candidate in [language, device, "en"] {
-            if let candidate, !candidate.isEmpty, let track = matchingTrack(in: tracks, language: candidate) {
-                return track
-            }
-        }
-        return tracks.first(where: { !$0.isAutoGenerated }) ?? tracks.first
-    }
-
-    /// A track in `language` ("en" also matches "en-US"); written captions before auto-generated ones.
-    private static func matchingTrack(in tracks: [CaptionTrack], language: String) -> CaptionTrack? {
-        let wanted = baseLanguage(language)
-        let matches = tracks.filter { baseLanguage($0.languageCode) == wanted }
-        return matches.first(where: { !$0.isAutoGenerated }) ?? matches.first
-    }
-
-    private static func baseLanguage(_ code: String) -> String {
-        code.lowercased().split(whereSeparator: { $0 == "-" || $0 == "_" }).first.map(String.init) ?? code.lowercased()
     }
 
     private func selectedCaptionDidChange() {
@@ -1601,6 +1644,12 @@ final class PlayerController {
         cueTimeline = CueTimeline(cues: [])
         captionText = nil
         guard let track = selectedCaption else { return }
+        // A download that kept the text of this track plays it from there: no request, so none that can fail offline.
+        if let kept = keptExtras?.cues(for: track) {
+            cueTimeline = CueTimeline(cues: kept)
+            refreshCaption()
+            return
+        }
         captionTask = Task { [weak self] in
             guard let self else { return }
             do {
@@ -1608,6 +1657,10 @@ final class PlayerController {
                 guard !Task.isCancelled, self.selectedCaption == track else { return }
                 self.cueTimeline = CueTimeline(cues: cues)
                 self.refreshCaption()
+                // A download that plays learns the text of the track the viewer opened (up to a few tracks).
+                if !cues.isEmpty, (self.keptExtras?.captions?.count ?? 0) < DownloadExtras.maxKeptCaptionTracks {
+                    self.keepWithDownload(DownloadExtras(captions: [StoredCaptions(track: track, cues: cues)]))
+                }
             } catch {
                 guard !Task.isCancelled, self.selectedCaption == track else { return }
                 // Captions that cannot be loaded are shown as off rather than as "on" with nothing to read.
@@ -1927,6 +1980,14 @@ extension PlayerController {
         skipNotice = SkipNotice(id: segment.id, segment: segment)
     }
 
+    /// What the download that plays kept, as "segments/chapters/caption tracks" with "-" for a part that is not known, or
+    /// "none" when nothing was kept.
+    var debugKeptSummary: String {
+        guard let kept = keptExtras else { return "none" }
+        func count(_ number: Int?) -> String { number.map(String.init) ?? "-" }
+        return "\(count(kept.segments?.count))/\(count(kept.chapters?.count))/\(count(kept.captions?.count))"
+    }
+
     /// One line with the state of the player for the log (`xcrun simctl spawn <udid> log stream --level debug`).
     func debugLogSnapshot(_ tag: String) {
         let size = avPlayer.currentItem?.presentationSize ?? .zero
@@ -1942,7 +2003,8 @@ extension PlayerController {
             captions=\(self.selectedCaption?.id ?? "off", privacy: .public) caption=\(caption, privacy: .public) \
             notice=\(notice, privacy: .public) segments=\(self.segments.count) upNext=\(self.upNext.count) \
             upNextHead=\(self.upNext.first?.id ?? "-", privacy: .public) \
-            chapters=\(self.chapters.count) queue=\(self.queue.count) more=\(self.queueSource?.hasMore ?? false) \
+            chapters=\(self.chapters.count) tracks=\(self.captionTracks.count) kept=\(self.debugKeptSummary) \
+            queue=\(self.queue.count) more=\(self.queueSource?.hasMore ?? false) \
             blocked=\(self.settings.blockedChannels.count) \
             video=\(self.currentVideo?.id ?? "-", privacy: .public) \
             live=\(self.isLive) videoLive=\(self.currentVideo?.isLive ?? false) \

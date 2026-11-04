@@ -51,6 +51,12 @@ import SwiftUI
 /// - `-seedHistory '<video id>,...'`: a minute of each of these sample videos in the history at launch, the first one
 ///   the most recent.
 /// - `-seedDownload <video id>`: the mock run starts with a finished (audio only, silent) download of that sample video.
+/// - `-seedDownloadExtras YES` (with `-seedDownload`): that download also has what a download made online keeps for
+///   offline playback (`DownloadExtras`): a sponsor segment at 3-6 s and an intro at 10-12 s, three chapters and two
+///   caption tracks with their text, all called "kept" so that they can be told from what the mock services answer.
+/// - `-offlinePlayerServices YES`: the services a playing video asks (the stream resolver, SponsorBlock, captions) fail like
+///   the network does, so a download plays with nothing but what it kept. `playerServices=on|off` of `-playerScript`
+///   switches them while the app runs.
 /// - `-uiScript '<steps>'`: taps, pulls and the like at given moments (see `DebugUIScript`).
 enum DebugLaunchHooks {
     private static var isPrepared = false
@@ -105,6 +111,10 @@ enum DebugLaunchHooks {
 
     /// The connection of the mock run: on, unless `-mockOffline YES`. The UI script switches it.
     static let mockConnection = MockConnection(isOnline: !UserDefaults.standard.bool(forKey: "mockOffline"))
+
+    /// The connection of the services a playing video asks (stream info, SponsorBlock, captions): on, unless
+    /// `-offlinePlayerServices YES`. The player script switches it (`playerServices=on|off`).
+    static let playerConnection = MockConnection(isOnline: !UserDefaults.standard.bool(forKey: "offlinePlayerServices"))
 
     /// How long the mock feeds take: `-feedDelay`, else their usual 0.3 s.
     static var mockFeedDelay: Duration {
@@ -227,6 +237,35 @@ enum DebugLaunchHooks {
         } catch {
             NSLog("[seedDownload] failed: \(error)")
         }
+    }
+
+    /// `-seedDownloadExtras YES`: keeps the extras of a download made online with the seeded download (see `seedDownload`).
+    /// Call it once the download manager has read the folder `seedDownload` wrote.
+    static func seedDownloadExtras(into downloads: DownloadManager) {
+        let defaults = UserDefaults.standard
+        guard defaults.bool(forKey: "seedDownloadExtras"), let id = defaults.string(forKey: "seedDownload") else { return }
+        let english = CaptionTrack(languageCode: "en", name: "English (kept)", baseURL: URL(string: "https://kept.invalid/timedtext?lang=en")!)
+        let german = CaptionTrack(languageCode: "de", name: "Deutsch (kept)", baseURL: URL(string: "https://kept.invalid/timedtext?lang=de")!)
+        let extras = DownloadExtras(
+            segments: [
+                SponsorSegment(id: "kept-sponsor", category: .sponsor, actionType: .skip, start: 3, end: 6),
+                SponsorSegment(id: "kept-intro", category: .intro, actionType: .skip, start: 10, end: 12),
+            ],
+            chapters: [
+                Chapter(title: "Kept intro", startSeconds: 0),
+                Chapter(title: "Kept middle", startSeconds: 8),
+                Chapter(title: "Kept ending", startSeconds: 14),
+            ],
+            captions: [
+                StoredCaptions(track: english, cues: [
+                    CaptionCue(start: 0, end: 3, text: "Kept caption: no connection needed"),
+                    CaptionCue(start: 6, end: 9, text: "These words come from the download"),
+                    CaptionCue(start: 12, end: 20, text: "Kept caption: the end"),
+                ]),
+                StoredCaptions(track: german, cues: [CaptionCue(start: 0, end: 20, text: "Gespeicherte Untertitel")]),
+            ]
+        )
+        downloads.saveExtras(extras, forVideoID: id)
     }
 
     /// How far `-searchScroll` scrolls, once per launch; nil afterwards and without the argument.

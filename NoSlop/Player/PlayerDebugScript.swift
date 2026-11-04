@@ -27,6 +27,9 @@ import UIKit
 ///   (a link to it), `openStaleLive=<video id>` opens a video whose saved copy still says live and upcoming (a row
 ///   of Watch Later after the broadcast ended)
 /// - `seek=<seconds>`, `seekEnd=<seconds before the end>`, `undo` (the skip notice's Undo)
+/// - `playerServices=<on|off>` switches the connection of the services the player asks (stream info, SponsorBlock,
+///   captions; see `-offlinePlayerServices`), for example to let the live answers arrive while a download plays with the
+///   ones it kept
 /// - `captions=<on|off>`, `fullscreen`, `minimize`, `expand`, `autoplay=<on|off>`, `sponsorBlock=<on|off>`,
 ///   `deArrow=<on|off>` ("De-clickbait titles"), `notice` (shows the skip notice and leaves it up)
 /// - `segment=<start>-<end>[@<length>]` adds a SponsorBlock segment (`@` is the length of the video it was submitted
@@ -128,6 +131,8 @@ enum PlayerDebugScript {
                 if let seconds = Double(value) { player.seek(to: player.duration - seconds) }
             case "undo":
                 player.undoSkip()
+            case "playerServices":
+                DebugLaunchHooks.playerConnection.isOnline = value == "on"
             case "captions":
                 if (value == "on") == (player.selectedCaption == nil) { player.toggleCaptions() }
             case "fullscreen":

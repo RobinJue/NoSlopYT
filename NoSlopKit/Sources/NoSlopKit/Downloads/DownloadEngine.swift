@@ -13,6 +13,7 @@ import Synchronization
 //   .work/<item id>/video.3.part        chunk 3 of the video stream, moved here by the session delegate
 //   .work/<item id>/video.mp4           the concatenated stream, present only when complete
 //   .work/.trash/<uuid>                 directories being deleted in the background
+//   .extras/<video id>.json             what a video's downloads keep for offline playback (DownloadExtras)
 
 // MARK: - Failure
 
@@ -173,6 +174,9 @@ struct DownloadTuning: Sendable {
     /// How many bytes are free on the volume of the given folder; nil when that cannot be told, and the download then
     /// goes ahead. Tests replace it to run out of room without filling a disk.
     var availableCapacity: @Sendable (URL) -> Int64? = { DownloadAssembler.availableCapacity(at: $0) }
+    /// How long a download that starts waits for the extras of its video (SponsorBlock segments, chapters, captions).
+    /// After that it starts without them.
+    var extrasTimeout: Duration = .seconds(8)
 
     static let standard = DownloadTuning()
 }

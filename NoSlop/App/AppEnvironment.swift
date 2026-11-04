@@ -132,9 +132,18 @@ final class AppEnvironment {
         let deArrow = DeArrowClient(http: http)
 
         let library = LibraryStore(directory: directory(.applicationSupportDirectory, appending: "NoSlop"))
+        // A download is played offline, so the SponsorBlock segments, the chapters and the captions of its video are fetched
+        // when the download starts, while there is a connection, and kept with it.
+        let downloadExtras = DownloadExtrasFetcher(
+            sponsorBlock: sponsorBlock,
+            youTube: youTube,
+            captions: captions,
+            preferredCaptionLanguage: { settingsStore.settings.preferredCaptionLanguage }
+        )
         let downloads = DownloadManager(
             rootDirectory: directory(.documentDirectory, appending: "NoSlop Downloads"),
-            streams: streams
+            streams: streams,
+            extras: downloadExtras
         )
 
         return AppEnvironment(
@@ -162,9 +171,12 @@ final class AppEnvironment {
 
         #if DEBUG
         let connection = DebugLaunchHooks.mockConnection
+        // The services a playing video asks (`-offlinePlayerServices YES` makes them fail like the network does).
+        let playerConnection = DebugLaunchHooks.playerConnection
         let youTube = MockYouTubeService(delay: DebugLaunchHooks.mockYouTubeDelay, connection: connection)
-        let streams = MockStreamResolver(delay: DebugLaunchHooks.mockStreamDelay)
-        let sponsorBlock = MockSponsorBlock(failingFirst: DebugLaunchHooks.flakySponsorBlockFailures)
+        let streams = MockStreamResolver(delay: DebugLaunchHooks.mockStreamDelay, connection: playerConnection)
+        let sponsorBlock = MockSponsorBlock(failingFirst: DebugLaunchHooks.flakySponsorBlockFailures, connection: playerConnection)
+        let captions: any CaptionsProviding = MockCaptions(connection: playerConnection)
         let subscriptionFeed: any SubscriptionFeedProviding = LoggingSubscriptionFeed(
             MockSubscriptionFeed(delay: DebugLaunchHooks.mockFeedDelay, connection: connection, cached: DebugLaunchHooks.staleFeedCache)
         )
@@ -177,6 +189,7 @@ final class AppEnvironment {
         let youTube = MockYouTubeService()
         let streams = MockStreamResolver()
         let sponsorBlock = MockSponsorBlock()
+        let captions: any CaptionsProviding = MockCaptions()
         let subscriptionFeed: any SubscriptionFeedProviding = MockSubscriptionFeed()
         let homeFeed: any HomeFeedProviding = MockHomeFeed()
         let auth: any GoogleAuthProviding = MockAuth()
@@ -188,11 +201,14 @@ final class AppEnvironment {
             streams: streams,
             sessionConfiguration: .ephemeral
         )
+        #if DEBUG
+        DebugLaunchHooks.seedDownloadExtras(into: downloads)
+        #endif
 
         return AppEnvironment(
             youTube: youTube,
             streams: streams,
-            captions: MockCaptions(),
+            captions: captions,
             subscriptionFeed: subscriptionFeed,
             homeFeed: homeFeed,
             sponsorBlock: sponsorBlock,

@@ -26,6 +26,12 @@ import UIKit
 /// the concatenated streams of a merge that was interrupted. Only a download that is proven bad (an unreadable stream,
 /// a video YouTube no longer offers) is thrown away. A stream address that stops working (it expired, or it was made
 /// for an IP address the phone has left) is replaced once, automatically.
+///
+/// Extras: a download is played offline, so what the player would ask YouTube for while it streams (SponsorBlock
+/// segments, chapters, captions: see `DownloadExtras`) is fetched when the download starts, while there is a connection,
+/// and kept per video in `<root>/.extras/<video id>.json`, out of the Files app's list like `.work`. The fetch is best
+/// effort and time-boxed (`DownloadTuning.extrasTimeout`): it never fails a download. The file goes when the last download
+/// of the video goes. `extras(forVideoID:)` reads it.
 @MainActor
 @Observable
 public final class DownloadManager {
@@ -38,6 +44,9 @@ public final class DownloadManager {
     @ObservationIgnored private let workspace: DownloadWorkspace
     @ObservationIgnored private let store: DownloadItemStore
     @ObservationIgnored private let engine: DownloadEngine
+    /// Fetches the extras of a video when its download starts; nil for none (the tests that do not care).
+    @ObservationIgnored private let extrasProvider: (any DownloadExtrasProviding)?
+    @ObservationIgnored private let extrasStore: DownloadExtrasStore
     /// Items whose chunk tasks exist, by item id.
     @ObservationIgnored private var jobs: [String: DownloadJob] = [:]
     /// Items that are still resolving their stream URLs and preparing their directory.
@@ -59,15 +68,31 @@ public final class DownloadManager {
     @ObservationIgnored private let notificationObservers = NotificationObservers()
 #endif
 
-    /// - Parameter sessionConfiguration: nil means the background configuration with the global session id.
-    public convenience init(rootDirectory: URL, streams: any StreamResolving, sessionConfiguration: URLSessionConfiguration? = nil) {
-        self.init(rootDirectory: rootDirectory, streams: streams, sessionConfiguration: sessionConfiguration, tuning: .standard)
+    /// - Parameters:
+    ///   - sessionConfiguration: nil means the background configuration with the global session id.
+    ///   - extras: fetches the SponsorBlock segments, chapters and captions of a video when its download starts, to keep
+    ///     them with the download (see `DownloadExtras`). nil keeps nothing.
+    public convenience init(
+        rootDirectory: URL,
+        streams: any StreamResolving,
+        sessionConfiguration: URLSessionConfiguration? = nil,
+        extras: (any DownloadExtrasProviding)? = nil
+    ) {
+        self.init(rootDirectory: rootDirectory, streams: streams, sessionConfiguration: sessionConfiguration, tuning: .standard, extras: extras)
     }
 
-    init(rootDirectory: URL, streams: any StreamResolving, sessionConfiguration: URLSessionConfiguration?, tuning: DownloadTuning) {
+    init(
+        rootDirectory: URL,
+        streams: any StreamResolving,
+        sessionConfiguration: URLSessionConfiguration?,
+        tuning: DownloadTuning,
+        extras: (any DownloadExtrasProviding)? = nil
+    ) {
         self.rootDirectory = rootDirectory
         self.streams = streams
         self.tuning = tuning
+        self.extrasProvider = extras
+        self.extrasStore = DownloadExtrasStore(root: rootDirectory)
         let workspace = DownloadWorkspace(root: rootDirectory)
         self.workspace = workspace
         self.store = DownloadItemStore(fileURL: rootDirectory.appendingPathComponent("downloads.json"))
@@ -89,7 +114,11 @@ public final class DownloadManager {
         if restored.changed { saveItems() }
         // With a list that could not be read every work directory would look like an orphan: leave them all alone, and
         // leave the session's tasks alone too, until the list can be read (see `reloadIfUnreadable`).
-        if !restored.isUnreadable { workspace.prune(keeping: restored.unfinishedIDs) }
+        if !restored.isUnreadable {
+            workspace.prune(keeping: restored.unfinishedIDs)
+            // The extras of a video whose last download was removed, when the process ended before they were.
+            extrasStore.prune(keeping: Set(restored.items.map(\.video.id)))
+        }
 
         // Events are handled one at a time, in order, on the main actor.
         Task { @MainActor [weak self] in
@@ -174,6 +203,7 @@ public final class DownloadManager {
         var unfinishedIDs = restored.unfinishedIDs
         for item in items where item.state != .completed { unfinishedIDs.insert(item.id) }
         workspace.prune(keeping: unfinishedIDs)
+        extrasStore.prune(keeping: Set(items.map(\.video.id)))
 
         let restoredIDs = restored.restoredIDs.filter { !known.contains($0) }
         Task { @MainActor [weak self] in
@@ -240,6 +270,7 @@ public final class DownloadManager {
         teardown(id)
         items.removeAll { $0.id == id }
         saveItems()
+        removeExtrasIfUnused(videoID: item.video.id)
     }
 
     /// Removes the item and its file, stopping the download first if it is still running.
@@ -252,6 +283,7 @@ public final class DownloadManager {
         }
         items.remove(at: index)
         saveItems()
+        removeExtrasIfUnused(videoID: item.video.id)
     }
 
     /// Starts a failed or paused download again. YouTube is asked for fresh stream URLs; parts that were already
@@ -263,6 +295,39 @@ public final class DownloadManager {
 
     public func completedItem(videoID: String) -> DownloadItem? {
         items.first { $0.video.id == videoID && $0.state == .completed }
+    }
+
+    // MARK: - Extras
+
+    /// What the downloads of this video kept (SponsorBlock segments, chapters, captions: see `DownloadExtras`); nil when
+    /// nothing was kept, which is the case for downloads made before this existed. Read off the main actor.
+    public func extras(forVideoID videoID: String) async -> DownloadExtras? {
+        await extrasStore.loadOffMainActor(videoID: videoID)
+    }
+
+    /// Keeps `extras` with the downloads of the video, over what is kept already (`DownloadExtras.merging`): the parts
+    /// that are nil change nothing. For the player, which asks the live services while a download plays and has an
+    /// answer then; that is how downloads made before the extras were kept get them. Does nothing for a video without a
+    /// download.
+    public func saveExtras(_ extras: DownloadExtras, forVideoID videoID: String) {
+        guard !extras.isEmpty, items.contains(where: { $0.video.id == videoID }) else { return }
+        extrasStore.merge(extras, videoID: videoID)
+    }
+
+    /// Deletes the extras of a video once none of its downloads is left in the list (there is one file per video, shared
+    /// by its qualities).
+    private func removeExtrasIfUnused(videoID: String) {
+        guard !items.contains(where: { $0.video.id == videoID }) else { return }
+        extrasStore.remove(videoID: videoID)
+    }
+
+    /// Asks the provider for the extras of the video that is about to download, for at most `extrasTimeout`; nil when
+    /// there is no provider, nothing is known, or time ran out.
+    private func fetchExtras(for info: StreamInfo) async -> DownloadExtras? {
+        guard let provider = extrasProvider else { return nil }
+        let extras = await TimeBox.run(tuning.extrasTimeout) { await provider.extras(for: info) }
+        guard let extras, !extras.isEmpty else { return nil }
+        return extras
     }
 
     /// The download that a row of the quality sheet stands for: the item of this video whose rendition is the one the row
@@ -349,7 +414,9 @@ public final class DownloadManager {
             // finish before iOS suspends the app again.
             let extraTime = refreshingLinks ? BackgroundTime(name: "No Slop refresh links") : nil
             defer { extraTime?.end() }
-            await run(id, generation: generation)
+            // A restart after the addresses went stale (`refreshLinks`) runs on borrowed background time and has asked for the
+            // extras at its first start already.
+            await run(id, generation: generation, fetchesExtras: !refreshingLinks)
         }
         starts[id] = DownloadStart(generation: generation, task: task)
     }
@@ -362,7 +429,7 @@ public final class DownloadManager {
         start(id, refreshingLinks: true)
     }
 
-    private func run(_ id: String, generation: UUID) async {
+    private func run(_ id: String, generation: UUID, fetchesExtras: Bool) async {
         var keepWork = false
         do {
             guard let item = items.first(where: { $0.id == id }) else { return }
@@ -403,6 +470,16 @@ public final class DownloadManager {
                 throw DownloadFailure.notEnoughSpace(needed: needed, free: free)
             }
             try ensureStarting(id, generation)
+
+            // The extras of the video are fetched now, while there is a connection for sure: chunks can finish with the
+            // app suspended or relaunched, and the download is played on a plane. Before the first chunk is requested, so
+            // that nothing depends on the app still running when the last one arrives. A failure, or the time-box running
+            // out, only means that the video plays without them.
+            if fetchesExtras {
+                let extras = await fetchExtras(for: info)
+                try ensureStarting(id, generation)
+                if let extras { extrasStore.merge(extras, videoID: item.video.id) }
+            }
 
             starts[id] = nil
             let job = DownloadJob(plan: plan, generation: generation, present: present)
