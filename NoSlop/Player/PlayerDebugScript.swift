@@ -2,6 +2,7 @@
 import Foundation
 import MediaAccessibility
 import NoSlopKit
+import UIKit
 
 /// Checks in the simulator that links cannot reach, driven by a launch argument. Debug builds only.
 ///
@@ -31,6 +32,10 @@ import NoSlopKit
 /// - `segment=<start>-<end>[@<length>]` adds a SponsorBlock segment (`@` is the length of the video it was submitted
 ///   for), `endSegment=<seconds before the end>[,<seconds past it>]` adds one that runs to the end of the video,
 ///   `highlight=<seconds>` adds a highlight (a moment, `poi_highlight`) at that second
+/// - `terminate` ends the process the way iOS does when it is about to end it: the notice that the process will end is
+///   posted from the main run loop, with no dispatch queue around it (as UIKit posts it), and the process exits in the
+///   same breath. What the app saved by then is all that survives, so this is the last step of a script. In a mock run
+///   the library is in the app's `tmp` folder (`NoSlop-Preview-<id>/Library`).
 /// - `log=<tag>` writes the state of the player to the log, `watch=<seconds>` does so every second meanwhile,
 ///   `axdump=<tag>` writes the accessibility elements of this moment to `<Documents>/ax-<tag>.txt` (see
 ///   `AccessibilityDump`), `axescape` is the two-finger scrub of VoiceOver with the focus on the video,
@@ -164,6 +169,14 @@ enum PlayerDebugScript {
                 )
             case "axescape":
                 _ = AccessibilityDump.performEscape(startingAtLabel: value.isEmpty ? "Video" : value)
+            case "terminate":
+                let noticeName = UIApplication.willTerminateNotification
+                let block: @convention(block) () -> Void = {
+                    NotificationCenter.default.post(name: noticeName, object: nil)
+                    exit(0)
+                }
+                CFRunLoopPerformBlock(CFRunLoopGetMain(), CFRunLoopMode.commonModes.rawValue, block)
+                CFRunLoopWakeUp(CFRunLoopGetMain())
             case "log":
                 break
             default:

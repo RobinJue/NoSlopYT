@@ -1215,8 +1215,11 @@ final class PlayerController {
             center.addObserver(forName: UIApplication.willEnterForegroundNotification, object: nil, queue: .main) { [weak self] _ in
                 MainActor.assumeIsolated { self?.appWillEnterForeground() }
             },
-            center.addObserver(forName: UIApplication.willTerminateNotification, object: nil, queue: .main) { [weak self] _ in
-                MainActor.assumeIsolated { self?.saveProgress(force: true) }
+            // No queue, on purpose: an observer with a queue is only documented to be added to that queue, so whether it has
+            // run before the process is gone is up to Foundation. Without one it runs right here, on the thread that posts
+            // the notice, which UIKit does on the main thread.
+            center.addObserver(forName: UIApplication.willTerminateNotification, object: nil, queue: nil) { [weak self] _ in
+                MainActor.assumeIsolated { self?.appWillTerminate() }
             },
             center.addObserver(forName: AVPlayer.rateDidChangeNotification, object: avPlayer, queue: .main) { [weak self] note in
                 let reason = note.userInfo?[reasonKey] as? String
@@ -1387,9 +1390,10 @@ final class PlayerController {
     // MARK: Progress
 
     /// Saves the position to the library: every `ProgressSaveThrottle.interval` seconds while playing (the time
-    /// observer asks without `force`), and at once when asked with `force` (pause, close, background, a failure, the
-    /// first frame and a switch to another video). The library rewrites its whole history file for each batch of
-    /// changes, so playback must not save on every tick.
+    /// observer asks without `force`), and at once when asked with `force` (pause, close, background, the end of the
+    /// process, a failure, the first frame and a switch to another video). The library rewrites its whole history file
+    /// for each batch of changes, so playback must not save on every tick. This changes the library in memory; getting it
+    /// onto disk is the library's business (its timer, `flush()`, and `flushNow()` when the process ends).
     private func saveProgress(force: Bool) {
         guard let video = currentVideo, hasStartedPlayback, !isLive else { return }
         guard progressThrottle.shouldSave(now: Date(), force: force) else { return }
@@ -1807,6 +1811,16 @@ final class PlayerController {
             didDetachSurfaces = false
         }
         syncTimeFromPlayer()
+    }
+
+    /// iOS is about to end the process: the viewer force-quit the app while it plays on in the background, or the system
+    /// needs the memory. The notice comes once, and the process is gone as soon as the observers return. So the position
+    /// goes to the library and the library to disk right here: `saveProgress` alone only changes memory and arms the
+    /// library's half-second timer, which never fires, and `flush()` is async, which cannot finish. `flushNow` blocks
+    /// for a moment (at most two seconds), the one place where that is right.
+    private func appWillTerminate() {
+        saveProgress(force: true)
+        library.flushNow()
     }
 
     // MARK: Now Playing
