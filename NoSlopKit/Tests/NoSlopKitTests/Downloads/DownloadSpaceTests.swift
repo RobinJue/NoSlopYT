@@ -27,9 +27,26 @@ import Testing
 
     @Test func theMessageSaysHowMuchIsNeededAndHowMuchIsFree() {
         let failure = DownloadFailure.notEnoughSpace(needed: 6_442_450_944, free: 2_147_483_648)
-        #expect(failure.errorDescription == "There isn't enough free space on this device: this download needs about \(size(6_442_450_944)) while it finishes, and \(size(2_147_483_648)) is free.")
+        #expect(failure.errorDescription == "There isn't enough free space: this needs about \(size(6_442_450_944)) to finish, \(size(2_147_483_648)) is free.")
         // The plain full-disk message is unchanged.
         #expect(DownloadFailure.outOfSpace.errorDescription == "There isn't enough free space on this device.")
+    }
+
+    @Test func bothFiguresComeEarlyInTheMessage() throws {
+        // The message is shown in a caption beside the thumbnail and the Retry button, a column that holds twenty-odd
+        // characters per line. The rows show it in full, but a column this narrow wraps it to many lines, so the figures
+        // stay near the front: they are what the person needs, and the last thing that should ever be cut off.
+        let cases: [(needed: Int64, free: Int64)] = [
+            (6_442_450_944, 2_147_483_648),         // 6.44 GB needed, 2.15 GB free
+            (67_108_864 + 100, 1_000),              // just the margin and a little more, next to nothing free
+            (275_000_000_000, 100_000_000_000),     // the widest figures: about the most a download can need (two 64 GiB streams, plus the merge's copy)
+        ]
+        for (needed, free) in cases {
+            let message = try #require(DownloadFailure.notEnoughSpace(needed: needed, free: free).errorDescription)
+            let start = message.prefix(80)
+            #expect(start.contains(size(needed)), "the figure for what is needed is early in \"\(message)\"")
+            #expect(start.contains(size(free)), "the figure for what is free is early in \"\(message)\"")
+        }
     }
 
     @Test func aDownloadThatDoesNotFitKeepsWhatIsOnDisk() {

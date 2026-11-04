@@ -196,10 +196,12 @@ private struct OptionRow: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(option.label)
                         .font(.body)
+                    // No line limit: the reason can be a whole sentence with figures in it ("There isn't enough free
+                    // space: this needs about 6.44 GB to finish, 2.15 GB is free."), and it has to be readable to the end.
                     Text(item.state == .paused ? "Paused" : (item.errorMessage ?? "Download failed"))
                         .font(.caption)
                         .foregroundStyle(item.state == .paused ? Color.secondary : Color.red)
-                        .lineLimit(2)
+                        .lineLimit(nil)
                 }
                 Spacer(minLength: 8)
                 Button("Retry") {

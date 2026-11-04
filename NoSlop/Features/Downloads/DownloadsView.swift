@@ -190,10 +190,13 @@ private struct StoppedDownloadRow: View {
             Text(item.qualityLabel)
                 .font(.caption)
                 .foregroundStyle(.secondary)
+            // No line limit: beside the thumbnail and the Retry button this column is narrow, and a reason such as "There
+            // isn't enough free space: this needs about 6.44 GB to finish, 2.15 GB is free." needs several lines in it.
+            // Cut off after two, the figures it exists to give would be the part that is hidden.
             Text(reason)
                 .font(.caption)
                 .foregroundStyle(item.state == .failed ? Color.red : Color.secondary)
-                .lineLimit(2)
+                .lineLimit(nil)
         }
         .swipeActions(edge: .trailing, allowsFullSwipe: false) {
             Button(role: .destructive, action: onDelete) {

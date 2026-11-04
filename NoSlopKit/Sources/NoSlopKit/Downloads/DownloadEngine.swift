@@ -62,8 +62,11 @@ enum DownloadFailure: Error, Equatable, Sendable, LocalizedError {
         case .outOfSpace:
             return "There isn't enough free space on this device."
         case .notEnoughSpace(let needed, let free):
+            // Short, with both figures near the front: the failed row shows this in a narrow column beside the thumbnail
+            // and the Retry button, where it wraps to four or five lines. "To finish" hints at why the figure is about
+            // twice the size the download is offered at: the merge writes a second copy before the streams are removed.
             let formatter: (Int64) -> String = { ByteCountFormatter.string(fromByteCount: $0, countStyle: .file) }
-            return "There isn't enough free space on this device: this download needs about \(formatter(needed)) while it finishes, and \(formatter(free)) is free."
+            return "There isn't enough free space: this needs about \(formatter(needed)) to finish, \(formatter(free)) is free."
         case .fileSystem:
             return "Couldn't save the download to disk."
         case .mergeFailed:
