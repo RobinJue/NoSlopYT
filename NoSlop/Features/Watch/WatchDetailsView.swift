@@ -69,16 +69,16 @@ private struct WatchDetailsContent: View {
         }
         .sheet(isPresented: $isShowingComments) {
             CommentsSheet(
-                video: model.summary,
+                video: summary,
                 continuation: model.details?.commentsContinuation,
                 firstPage: model.commentsFirstPage
             )
         }
         .sheet(isPresented: $isShowingDownloads) {
-            DownloadOptionsSheet(video: model.summary)
+            DownloadOptionsSheet(video: summary)
         }
         .sheet(isPresented: $isShowingPlaylists) {
-            AddToPlaylistSheet(video: model.summary)
+            AddToPlaylistSheet(video: summary)
         }
         .alert("Sign in to like videos", isPresented: $isExplainingSignIn) {
             Button("Go to Library") {
@@ -101,6 +101,21 @@ private struct WatchDetailsContent: View {
         } message: {
             Text(model.ratingFailure ?? "")
         }
+    }
+
+    // MARK: The video as the page knows it
+
+    /// The video as this page shows and saves it: the page's own copy (`model.summary`: the video the page was opened for,
+    /// with what the details say) filled in from the player's (`video`).
+    ///
+    /// A video opened from a link starts as a bare id, and the page keeps that copy as long as it lives. Its title and
+    /// channel come from whichever answers first: the details of the page, or the stream of the player, which completes
+    /// its own copy as it arrives (`PlayerController.accept`, `complete(with:)`). What is saved (Watch Later, a playlist,
+    /// a download) and what is shown therefore takes this copy and not the page's alone: a chip tapped after the stream
+    /// has answered but before the details have must not put the bare video into the library, where nothing would ever
+    /// complete it. Nothing that is there is replaced, and the live state is left as it is (`VideoSummary.filledIn(from:)`).
+    private var summary: VideoSummary {
+        model.summary.filledIn(from: video)
     }
 
     // MARK: Scroll position
@@ -137,12 +152,9 @@ private struct WatchDetailsContent: View {
     // MARK: Title
 
     private var titleBlock: some View {
-        var shown = model.summary
-        // A video opened from a bare link: the player has its title from the stream (`video` is the player's copy) while
-        // the details are still on their way, or cannot be loaded.
-        if shown.title.isEmpty {
-            shown.title = video.title
-        }
+        // A video opened from a bare link has the title the player got from the stream while the details are still on
+        // their way, or cannot be loaded.
+        let shown = summary
         return VStack(alignment: .leading, spacing: 4) {
             if shown.title.isEmpty {
                 // A bare id from a link: the title arrives with the details, unless they cannot be loaded.
@@ -277,8 +289,12 @@ private struct WatchDetailsContent: View {
 
     private var watchLaterChip: some View {
         let saved = env.library.isInWatchLater(video.id)
+        // A video from a link is only an id until the stream or the page has told its title, and a row saved without
+        // one stays blank in the list: nothing fills it in later. So the chip waits for that (a moment, or for good when
+        // neither can be loaded). A saved video can always be taken out again.
+        let canSave = saved || !summary.title.isEmpty
         return Button {
-            env.library.toggleWatchLater(model.summary)
+            env.library.toggleWatchLater(summary)
         } label: {
             ChipLabel(
                 title: saved ? "Saved" : "Watch Later",
@@ -287,6 +303,7 @@ private struct WatchDetailsContent: View {
             )
         }
         .buttonStyle(.plain)
+        .disabled(!canSave)
         .accessibilityLabel(saved ? "Remove from Watch Later" : "Save to Watch Later")
     }
 

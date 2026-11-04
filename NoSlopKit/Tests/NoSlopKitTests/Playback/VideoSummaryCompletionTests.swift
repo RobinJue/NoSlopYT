@@ -55,6 +55,40 @@ import Testing
         #expect(known.filledIn(from: details()) == known)
     }
 
+    @Test func aBareLinkTakesWhatThePlayerLearnedFromTheStream() {
+        // The watch page of a linked video keeps the bare copy it was opened with, while the player completes its own as the
+        // stream answers (`PlayerController.accept`: title, the channel's id and name, thumbnails, length). What the page
+        // saves, to Watch Later for one, is its copy filled in from the player's, so a tap before the page's own details
+        // have arrived still saves the title and the channel.
+        let thumbnails = [Thumbnail(url: URL(string: "https://i.ytimg.com/vi/aqz-KE-bpKQ/hq720.jpg")!, width: 1280, height: 720)]
+        var player = bare
+        player.title = "Big Buck Bunny"
+        player.channel = ChannelRef(id: "UCSMOQeBJ2RAnuFungnQOxLg", name: "Blender")
+        player.thumbnails = thumbnails
+        player.durationSeconds = 635
+
+        let saved = bare.filledIn(from: player)
+
+        #expect(saved.title == "Big Buck Bunny")
+        #expect(saved.channel == ChannelRef(id: "UCSMOQeBJ2RAnuFungnQOxLg", name: "Blender"))
+        #expect(saved.thumbnails == thumbnails)
+        #expect(saved.durationSeconds == 635)
+        // What the stream does not say stays unknown; nothing is made up.
+        #expect(saved.viewCount == nil)
+        #expect(saved.viewCountText == nil)
+        #expect(saved.publishedText == nil)
+
+        // Once the details have arrived the page's copy has them, and the player's only fills what the page lacks: the
+        // thumbnails and the length, but not the channel, whose picture and handle the stream does not know.
+        let merged = bare.filledIn(from: details()).filledIn(from: player)
+        #expect(merged.title == "Big Buck Bunny")
+        #expect(merged.channel == ChannelRef(id: "UCSMOQeBJ2RAnuFungnQOxLg", name: "Blender", avatarURL: Self.avatar, handle: "@blenderofficial"))
+        #expect(merged.viewCountText == "23,500,582 views")
+        #expect(merged.publishedText == "11 years ago")
+        #expect(merged.thumbnails == thumbnails)
+        #expect(merged.durationSeconds == 635)
+    }
+
     @Test func aChannelFromTheStreamGetsItsAvatarAndHandleFromThePage() {
         // The stream knows the channel's id and name, but not its picture.
         var fromStream = bare
