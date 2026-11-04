@@ -31,6 +31,17 @@ struct PlaylistView: View {
             }
         }
         .task { model.loadIfNeeded(using: env) }
+        #if DEBUG
+        .debugPlaylistPlay(isLoaded: debugIsLoaded) { choice in
+            switch choice {
+            case .all:
+                playAll()
+            case .row(let number):
+                let items = model.list.items
+                if number <= items.count { play(items[number - 1]) }
+            }
+        }
+        #endif
         // "Don't show this channel" (or any other feed filter) takes effect on the videos on screen, not after a
         // reload. Also when the screen comes back: the filter may have changed on a screen above it.
         .onChange(of: env.settings) {
@@ -83,7 +94,7 @@ struct PlaylistView: View {
         if !list.items.isEmpty {
             ForEach(list.items) { video in
                 Button {
-                    env.open(video, queue: model.videos(after: video))
+                    play(video)
                 } label: {
                     VideoRowView(video: video)
                         .padding(.horizontal, Theme.padding)
@@ -120,11 +131,23 @@ struct PlaylistView: View {
         }
     }
 
+    /// Plays `video` and queues the videos after it, like "Play all" from there.
+    private func play(_ video: VideoSummary) {
+        env.open(video, queue: model.videos(after: video))
+    }
+
     /// Plays the first video and queues the others.
     private func playAll() {
         guard let first = model.list.items.first else { return }
         env.open(first, queue: Array(model.list.items.dropFirst()))
     }
+
+    #if DEBUG
+    private var debugIsLoaded: Bool {
+        if case .loaded = model.phase { return true }
+        return false
+    }
+    #endif
 }
 
 #Preview {

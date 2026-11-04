@@ -35,10 +35,14 @@ import SwiftUI
 /// - `-captionStyle '<parts>'`: the captions are drawn with a caption style as if the viewer had chosen it in Settings
 ///   > Accessibility > Subtitles & Captioning, for example `-captionStyle 'size=2;text=yellow;background=clear;edge=shadow'`
 ///   (see `CaptionAppearance`).
+/// - `-playlistPlay all|<n>`: once the first page of a playlist has loaded, the playlist screen plays like a tap on "Play
+///   all" (`all`) or on its n-th row (1-based), once per launch. The mock pages the 14-video series as 10 plus 4, so
+///   this plays with the second page not loaded yet.
 enum DebugLaunchHooks {
     private static var isPrepared = false
     private static var isSearchTextTaken = false
     private static var isSearchScrollTaken = false
+    private static var isPlaylistPlayTaken = false
     private static var takenWatchPageSteps: Set<String> = []
 
     static var scrollsToEnd: Bool {
@@ -180,6 +184,27 @@ enum DebugLaunchHooks {
         isSearchTextTaken = true
         return UserDefaults.standard.string(forKey: "searchText")
     }
+
+    /// What `-playlistPlay` asks for, once per launch: the row to play (1-based), or `.all` for "Play all"; nil
+    /// afterwards and without the argument.
+    enum PlaylistPlay: Equatable {
+        case all
+        case row(Int)
+    }
+
+    static func takePlaylistPlay() -> PlaylistPlay? {
+        guard !isPlaylistPlayTaken, let argument = UserDefaults.standard.string(forKey: "playlistPlay") else { return nil }
+        let choice: PlaylistPlay
+        if argument == "all" {
+            choice = .all
+        } else if let row = Int(argument), row > 0 {
+            choice = .row(row)
+        } else {
+            return nil
+        }
+        isPlaylistPlayTaken = true
+        return choice
+    }
 }
 
 extension View {
@@ -206,6 +231,32 @@ extension View {
         } else {
             self
         }
+    }
+}
+
+extension View {
+    /// With `-playlistPlay all|<n>`: calls `play` once, as soon as `isLoaded` turns true, with what the argument asks
+    /// for (see `DebugLaunchHooks.PlaylistPlay`). Without the argument the view is left as it is.
+    @ViewBuilder
+    func debugPlaylistPlay(isLoaded: Bool, play: @escaping (DebugLaunchHooks.PlaylistPlay) -> Void) -> some View {
+        if UserDefaults.standard.string(forKey: "playlistPlay") != nil {
+            modifier(DebugPlaylistPlay(isLoaded: isLoaded, play: play))
+        } else {
+            self
+        }
+    }
+}
+
+private struct DebugPlaylistPlay: ViewModifier {
+    let isLoaded: Bool
+    let play: (DebugLaunchHooks.PlaylistPlay) -> Void
+
+    func body(content: Content) -> some View {
+        content
+            .task(id: isLoaded) {
+                guard isLoaded, let choice = DebugLaunchHooks.takePlaylistPlay() else { return }
+                play(choice)
+            }
     }
 }
 

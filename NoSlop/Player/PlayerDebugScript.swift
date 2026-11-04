@@ -10,7 +10,11 @@ import NoSlopKit
 ///
 /// The steps run in order, separated by `;`, once the first video plays:
 ///
-/// - `wait=<seconds>`, `waitPlaying` (until the video plays), `waitVideo` (until another video is the current one)
+/// - `wait=<seconds>`, `waitPlaying` (until the video plays), `waitVideo` (until another video is the current one;
+///   `waitVideo=<seconds>` gives up after that long)
+/// - `hops=<count>[,<seconds before the end>]` plays on from video to video: for each hop it waits until the video plays,
+///   jumps to the end (2 s before it unless told otherwise), waits up to 25 s for another video to start and logs the
+///   state (`hop <n>`). It stops at the first hop that no video follows.
 /// - `quality=<auto|1080|720|480|360>` (a pick), `capQuality=<...>` (only the cap, as the connection sets it),
 ///   `rate=<speed>`, `pause`, `play`
 /// - `systemPause`, `systemPlay` reach the `AVPlayer` directly, as the Picture in Picture window or an AirPlay remote
@@ -62,7 +66,18 @@ enum PlayerDebugScript {
                 await wait(until: { player.state == .playing })
             case "waitVideo":
                 let before = player.currentVideo?.id
-                await wait(until: { player.currentVideo?.id != before })
+                await wait(until: { player.currentVideo?.id != before }, upTo: Double(value) ?? 90)
+            case "hops":
+                let numbers = value.split(separator: ",").compactMap { Double($0) }
+                let secondsBeforeEnd = numbers.count > 1 ? numbers[1] : 2
+                for hop in 1...max(Int(numbers.first ?? 1), 1) {
+                    await wait(until: { player.state == .playing }, upTo: 20)
+                    let current = player.currentVideo?.id
+                    player.seek(to: player.duration - secondsBeforeEnd)
+                    await wait(until: { player.currentVideo?.id != current }, upTo: 25)
+                    player.debugLogSnapshot("hop \(hop)")
+                    if player.currentVideo?.id == current { break }
+                }
             case "quality":
                 let options: [String: QualityPreference] = ["auto": .auto, "1080": .p1080, "720": .p720, "480": .p480, "360": .p360]
                 if let quality = options[value] { player.quality = quality }
