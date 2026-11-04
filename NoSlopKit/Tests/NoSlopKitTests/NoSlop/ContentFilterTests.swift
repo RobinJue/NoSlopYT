@@ -86,6 +86,93 @@ private func relaxed(_ change: (inout AppSettings) -> Void = { _ in }) -> AppSet
         #expect(filter.allows(makeVideo("c", title: "Mine and craft")))
     }
 
+    // MARK: Short keywords match whole words only
+
+    @Test func shortKeywordsMatchWholeWordsOnly() {
+        let filter = ContentFilter(settings: relaxed { $0.blockedKeywords = ["AI"] })
+        for title in ["I Tested Every Roblox AI", "AI-generated music", "ai: the future?", "AI", "Is this AI?",
+                      "The best AI-generated art", "I tested viral AI 3D products", "(AI) explained", "AI,AI", "\u{201C}AI\u{201D}"] {
+            #expect(!filter.allows(makeVideo("blocked", title: title)), "\(title)")
+        }
+        for title in ["Rain Sounds 10 Hours", "How to Train Your Brain", "Paint Mixing Explained", "Again", "Explained",
+                      "A Bit of Fresh Air!", "Great Maia", "Ma\u{00EF}s", "Saint-Ex", "AIR", "Kaiser", "aia", "2AI", "AI2"] {
+            #expect(filter.allows(makeVideo("allowed", title: title)), "\(title)")
+        }
+    }
+
+    @Test func aRepeatedLetterPairIsFoundAfterAFailedTry() {
+        // "ai" sits inside "Rain" first and stands alone later: every occurrence is looked at, not only the first.
+        let filter = ContentFilter(settings: relaxed { $0.blockedKeywords = ["ai"] })
+        #expect(!filter.allows(makeVideo("a", title: "Rain, then AI")))
+        #expect(!filter.allows(makeVideo("b", title: "Brain AI Brain")))
+        #expect(filter.allows(makeVideo("c", title: "Rain, then Train")))
+    }
+
+    @Test func shortKeywordsOfAnyKindOfLetterOrDigitAreWholeWords() {
+        let ad = ContentFilter(settings: relaxed { $0.blockedKeywords = ["ad"] })
+        #expect(!ad.allows(makeVideo("a", title: "Is this an ad?")))
+        #expect(ad.allows(makeVideo("b", title: "Adobe Photoshop made easy")))
+
+        let vs = ContentFilter(settings: relaxed { $0.blockedKeywords = ["vs"] })
+        #expect(!vs.allows(makeVideo("c", title: "Mars vs. Venus")))
+        #expect(vs.allows(makeVideo("d", title: "Best TVs of the year")))
+
+        // Digits are word characters too: "10" is a number on its own, not the start of "100".
+        let ten = ContentFilter(settings: relaxed { $0.blockedKeywords = ["10"] })
+        #expect(!ten.allows(makeVideo("e", title: "Top 10 tips")))
+        #expect(!ten.allows(makeVideo("f", title: "iPhone 10")))
+        #expect(ten.allows(makeVideo("g", title: "Top 100 tips")))
+        #expect(ten.allows(makeVideo("h", title: "Top 2010 hits")))
+
+        let fourK = ContentFilter(settings: relaxed { $0.blockedKeywords = ["4K"] })
+        #expect(!fourK.allows(makeVideo("i", title: "Shot in 4k HDR")))
+        #expect(fourK.allows(makeVideo("j", title: "24K gold")))
+
+        // Three characters is still short; four is not.
+        let gpt = ContentFilter(settings: relaxed { $0.blockedKeywords = ["gpt"] })
+        #expect(!gpt.allows(makeVideo("k", title: "ChatGPT vs GPT-4")))
+        #expect(gpt.allows(makeVideo("l", title: "ChatGPTs explained")))
+        let gpt4 = ContentFilter(settings: relaxed { $0.blockedKeywords = ["gpt4"] })
+        #expect(!gpt4.allows(makeVideo("m", title: "ChatGPT4 review")))
+    }
+
+    @Test func aNeighbourThatIsNotAnAsciiLetterOrDigitIsABoundary() {
+        let filter = ContentFilter(settings: relaxed { $0.blockedKeywords = ["ai"] })
+        // CJK text has no spaces between words, and punctuation and emoji end a word like a space does.
+        #expect(!filter.allows(makeVideo("a", title: "AI\u{6280}\u{8853}")))
+        #expect(!filter.allows(makeVideo("b", title: "\u{6700}\u{65B0}AI")))
+        #expect(!filter.allows(makeVideo("c", title: "AI\u{1F916}")))
+        #expect(!filter.allows(makeVideo("d", title: "AI_art")))
+        #expect(!filter.allows(makeVideo("e", title: "#AI")))
+        // Full-width letters are folded to ASCII, on both sides.
+        #expect(!filter.allows(makeVideo("f", title: "\u{FF21}\u{FF29} news")))
+        let fullWidthKeyword = ContentFilter(settings: relaxed { $0.blockedKeywords = ["\u{FF21}\u{FF29}"] })
+        #expect(!fullWidthKeyword.allows(makeVideo("g", title: "ai news")))
+        #expect(fullWidthKeyword.allows(makeVideo("h", title: "Rain")))
+    }
+
+    @Test func longerKeywordsAndPhrasesStillMatchInsideWords() {
+        let minecraft = ContentFilter(settings: relaxed { $0.blockedKeywords = ["minecraft"] })
+        for title in ["Minecrafter", "my Minecraft world tour", "Minecraftserver tour", "#Minecraft", "MINECRAFT"] {
+            #expect(!minecraft.allows(makeVideo("x", title: title)), "\(title)")
+        }
+        // Four characters, a phrase, a leading symbol and non-ASCII text are not "short words".
+        let others = ContentFilter(settings: relaxed { $0.blockedKeywords = ["fail", "ai art", "#ai", "\u{6280}\u{8853}", "caf\u{00E9}"] })
+        #expect(!others.allows(makeVideo("a", title: "Failure analysis")))
+        #expect(!others.allows(makeVideo("b", title: "Thai art")))
+        #expect(!others.allows(makeVideo("d", title: "#AItools weekly")))
+        #expect(!others.allows(makeVideo("e", title: "\u{6700}\u{65B0}\u{6280}\u{8853}\u{306E}\u{8A71}")))
+        #expect(!others.allows(makeVideo("f", title: "Cafeteria")))
+        #expect(others.allows(makeVideo("g", title: "Fall colors")))
+    }
+
+    @Test func aShortKeywordAndALongOneWorkTogetherAndPaddingIsTrimmed() {
+        let filter = ContentFilter(settings: relaxed { $0.blockedKeywords = ["  AI \n", "spoiler"] })
+        #expect(!filter.allows(makeVideo("a", title: "Spoilers ahead")))
+        #expect(!filter.allows(makeVideo("b", title: "All about AI")))
+        #expect(filter.allows(makeVideo("c", title: "Brain training")))
+    }
+
     @Test func blockedKeywordsIgnoreDiacriticsInBothDirections() {
         let plainKeyword = ContentFilter(settings: relaxed { $0.blockedKeywords = ["cafe"] })
         let accentedKeyword = ContentFilter(settings: relaxed { $0.blockedKeywords = ["CAF\u{00C9}"] })
