@@ -1336,11 +1336,20 @@ final class PlayerController {
         skipNotice = SkipNotice(id: segment.id, segment: segment)
         skipNoticeTask?.cancel()
         let id = segment.id
+        let duration = PlayerAccessibility.skipNoticeDuration(assistiveTechnologyOn: assistiveTechnologyIsRunning)
         skipNoticeTask = Task { [weak self] in
-            try? await Task.sleep(for: .seconds(4))
+            try? await Task.sleep(for: duration)
             guard !Task.isCancelled, let self, self.skipNotice?.id == id else { return }
             self.skipNotice = nil
         }
+    }
+
+    /// VoiceOver or Switch Control is running (in a Debug build `-assistiveTechnology YES` stands in).
+    private var assistiveTechnologyIsRunning: Bool {
+        #if DEBUG
+        if DebugLaunchHooks.assistiveTechnology { return true }
+        #endif
+        return UIAccessibility.isVoiceOverRunning || UIAccessibility.isSwitchControlRunning
     }
 
     // MARK: De-clickbait title

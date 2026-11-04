@@ -1,5 +1,6 @@
 import AVKit
 import NoSlopKit
+import OSLog
 import SwiftUI
 
 /// Everything drawn over the video: tap to show or hide the controls, double-tap a half to jump 10 s, and the
@@ -10,11 +11,15 @@ import SwiftUI
 /// - Bottom: position / length, Picture in Picture, full screen, and the seek bar.
 ///
 /// While the video plays the controls fade out after three seconds without a touch. Whenever it is not playing
-/// (paused, ended, loading, failed) they stay.
+/// (paused, ended, loading, failed) they stay, and so they do while VoiceOver or Switch Control is running: swiping
+/// from one control to the next is not a touch and takes longer than three seconds, and a control that disappears
+/// halfway cannot be reached.
 struct PlayerControlsView: View {
     let isFullscreen: Bool
 
     @Environment(AppEnvironment.self) private var env
+    @Environment(\.accessibilityVoiceOverEnabled) private var voiceOverEnabled
+    @Environment(\.accessibilitySwitchControlEnabled) private var switchControlEnabled
 
     @State private var isVisible = true
     @State private var hideTask: Task<Void, Never>?
@@ -37,12 +42,26 @@ struct PlayerControlsView: View {
     /// The text of the bars and of the centre buttons stops following the viewer's text size here. Beyond it the bars
     /// grow taller than `ControlsFootprint` says, and the controls would overlap each other and the strips between them
     /// that the skip notice and the captions use. (Video players keep their chrome at one size, for the same reason.)
-    private static let largestTextSize = DynamicTypeSize.xxxLarge
+    /// The error screen, which sits in the same 16:9 area, keeps to it as well.
+    static let largestTextSize = DynamicTypeSize.xxxLarge
+
+    /// VoiceOver or Switch Control is running (the simulator cannot run either: `-assistiveTechnology YES` stands in).
+    private var assistiveTechnologyOn: Bool {
+        #if DEBUG
+        if DebugLaunchHooks.assistiveTechnology { return true }
+        #endif
+        return voiceOverEnabled || switchControlEnabled
+    }
 
     var body: some View {
         let player = env.player
         let isRunning = player.state == .playing || player.state == .buffering
-        let showsChrome = isVisible || !isRunning || isSettingsOpen
+        let showsChrome = PlayerAccessibility.showsChrome(
+            isVisible: isVisible,
+            isPlaybackRunning: isRunning,
+            isSettingsOpen: isSettingsOpen,
+            assistiveTechnologyOn: assistiveTechnologyOn
+        )
         let failed = player.failureMessage != nil
 
         ZStack {
@@ -89,6 +108,13 @@ struct PlayerControlsView: View {
         .onChange(of: isFullscreen) { _, _ in
             show()
         }
+        .onChange(of: assistiveTechnologyOn) { _, _ in
+            // Switched off while the controls were only there for it: the countdown starts from here.
+            show()
+        }
+        .onChange(of: player.skipNotice) { _, notice in
+            announceSkip(notice)
+        }
         .task {
             scheduleHide()
         }
@@ -117,6 +143,22 @@ struct PlayerControlsView: View {
         .accessibilityAction(named: "Back 10 seconds") { player.skip(by: -Self.jump) }
         .accessibilityAction(named: "Forward 10 seconds") { player.skip(by: Self.jump) }
         .accessibilityAction(named: player.isPlaybackActive ? "Pause" : "Play") { player.togglePlayPause() }
+        .accessibilityActions {
+            // The toast with its Undo button is on screen for a few seconds only; this is where VoiceOver finds it.
+            if player.skipNotice != nil {
+                Button("Undo skip") { player.undoSkip() }
+            }
+        }
+    }
+
+    /// VoiceOver does not see the toast come and go: it hears that a segment was skipped, and that it can be undone.
+    private func announceSkip(_ notice: PlayerController.SkipNotice?) {
+        guard let notice else { return }
+        let announcement = "Skipped \(notice.segment.category.displayName.lowercased()). Undo available."
+        AccessibilityNotification.Announcement(announcement).post()
+        #if DEBUG
+        Logger(subsystem: "com.robinjungerich.noslopyt", category: "player").info("[ax] announcement: \(announcement, privacy: .public)")
+        #endif
     }
 
     private func doubleTap(at x: CGFloat, width: CGFloat, player: PlayerController) {
