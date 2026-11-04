@@ -14,13 +14,23 @@ Design: [`docs/superpowers/specs/2026-11-03-noslop-design.md`](docs/superpowers/
 
 - Plays any public YouTube video ad-free, up to 1080p60, on a watch page like YouTube's: channel and Subscribe,
   description with clickable links, timestamps and chapters, comments with replies, related videos, captions.
+  Captions follow the style you chose under Settings > Accessibility > Subtitles & Captioning, and the text size.
 - Keeps playing with the screen locked or the app in the background, in Picture in Picture, on AirPlay, with the
-  lock-screen controls. It resumes where you left off.
+  lock-screen controls. It resumes where you left off. While VoiceOver or Switch Control runs, the player's controls
+  stay on screen instead of fading out, and a skipped segment is announced, with its Undo left up for ten seconds.
+- Plays a playlist from its page with "Play all" (or from a tap on one of its rows), also a long one: the next part
+  of the playlist is fetched while the queue runs low.
 - Downloads videos (pick a quality, or audio only) for offline viewing. Downloads continue while the app is in the
   background, and the files show up in the Files app.
 - Skips sponsor, self-promotion and interaction-reminder segments (SponsorBlock; each category can also be shown in
-  the seek bar or ignored), swaps clickbait titles for the plain ones written by the DeArrow community, and lets
-  you block channels and keywords.
+  the seek bar or ignored, and a highlight, which is a moment and not a stretch, shows as a tick in the seek bar),
+  swaps clickbait titles for the plain ones written by the DeArrow community, and lets you block channels and
+  keywords. A blocked keyword of up to three letters A-Z or digits, such as "AI", matches whole words only; longer
+  ones, and words in other scripts, also match inside words.
+- Has feed filters in Settings to hide Shorts and members-only videos (both on by default), live and upcoming
+  streams, and watched videos in Subscriptions. Members-only and live or upcoming videos are hidden where YouTube
+  marks them: in search, on channel pages and in suggestions. The Subscriptions tab and the uploads on Home come from
+  the channels' feeds, which carry no such marks.
 - Works completely **anonymously**: search, watch, channels, playlists, subscriptions kept on the device, history,
   Watch Later, your own playlists, and a "For you" home feed computed on the device from your history and
   subscriptions. Copy a YouTube link and paste it into the Search field to open it.
@@ -29,11 +39,11 @@ Design: [`docs/superpowers/specs/2026-11-03-noslop-design.md`](docs/superpowers/
 
 **It doesn't**
 
-- Show ads, promoted items, Shorts or AI summary blocks, anywhere. There is no Shorts tab, and Shorts are filtered
-  out of Home, Subscriptions, search, channels, playlists, suggested videos and your liked videos and YouTube
-  playlists. (Those two come from the YouTube Data API, which has no Short marker, so there a video of a minute or
-  less counts as a Short.) Your history, Watch Later, your own playlists and downloads show everything you put
-  there. A Shorts link opens as an ordinary video.
+- Show ads, promoted items or AI summary blocks, anywhere. There is no Shorts tab, and, with Settings > Feed filters >
+  Hide Shorts on (the default), Shorts are filtered out of Home, Subscriptions, search, channels, playlists,
+  suggested videos and your liked videos and YouTube playlists. (Those two come from the YouTube Data API, which has
+  no Short marker, so there a video of a minute or less counts as a Short.) Your history, Watch Later, your own
+  playlists and downloads show everything you put there. A Shorts link opens as an ordinary video.
 - Contain any analytics, crash reporter, tracker or third-party package. Apple frameworks only. The only servers it
   talks to are YouTube and Google (for the videos, and for your account when you sign in), plus SponsorBlock and
   DeArrow, which are asked about a short hash of a video ID, never the ID itself.
@@ -44,6 +54,8 @@ Design: [`docs/superpowers/specs/2026-11-03-noslop-design.md`](docs/superpowers/
 - Show YouTube's personalised home feed: Google does not offer it to third-party apps.
 - Play age-restricted or "made for kids" videos: YouTube does not hand those out to this kind of client. The app
   shows YouTube's own reason and an "Open on YouTube" button.
+- Open a second window on iPad: the navigation, the player and Picture in Picture are shared by the whole app, so it
+  has one window. (Split View and Slide Over with other apps work.)
 - Need a server or an App Store build: it is installed from Xcode onto your own devices.
 
 ## Requirements
@@ -113,16 +125,17 @@ anyone else's servers. It takes about five minutes, once. The same steps are in 
    app, then tap **Sign in with Google**. (Library > Settings reaches that screen. The redirect address is derived
    from the client ID by the app, so there is nothing else to configure.)
 
-What you get once signed in: your subscriptions (kept in sync at launch and when you pull to refresh), your YouTube
-playlists and liked videos, and Subscribe, Like and Add to playlist acting on your real account. The app asks for
-the scope `https://www.googleapis.com/auth/youtube`, plus `openid email profile` to show who is signed in. The
-default quota of 10,000 units a day is plenty for one person.
+What you get once signed in: your subscriptions (kept in sync at launch and when you pull to refresh on Home,
+Subscriptions or in the Library), your YouTube playlists and liked videos, and Subscribe, Like and Add to playlist
+acting on your real account. The app asks for the scope `https://www.googleapis.com/auth/youtube`, plus
+`openid email profile` to show who is signed in. The default quota of 10,000 units a day is plenty for one person.
 
 - The tokens live in the iPhone's Keychain. Signing out in the app forgets them and asks Google to revoke the
   grant; your subscriptions stay on the device as local ones, so the feed never empties.
 - If Google ends the session by itself (the 7-day limit above, or you revoked access at
   [myaccount.google.com/permissions](https://myaccount.google.com/permissions)), the app shows the signed-out state
-  and keeps your data. Sign in again to bring the account back.
+  and keeps your data. It notices the next time it talks to your account, which includes a pull to refresh on Home
+  or Subscriptions. Sign in again to bring the account back.
 
 ## Tests
 
@@ -197,18 +210,21 @@ xcrun simctl launch booted com.robinjungerich.noslopyt -mockServices YES \
   -openURL 'noslop://watch?v=aqz-KE-bpKQ&t=100 | noslop://tab/library'
 ```
 
+There are more Debug-only launch arguments (slow or offline mock connections, seeded history and downloads, scripted
+player and UI steps). They are documented in `NoSlop/DesignSystem/DebugLaunchHooks.swift` and not listed here.
+
 The app understands the links below. It registers the `noslop://` scheme, so those links also open No Slop from other
 apps (iOS asks to confirm), and the YouTube ones open when you paste them into the Search field:
 
 | Link | Opens |
 |---|---|
-| `noslop://watch?v=<id>[&t=<seconds>]` | a video, optionally from a time (`90`, `1m30s` and `1h2m3s` all work) |
+| `noslop://watch?v=<id>[&t=<seconds>]` | a video, optionally from a time (`90`, `1m30s` and `1h2m3s` all work); a time that cannot be read is ignored, and the video opens from where you left off (or from the start) |
 | `noslop://channel/<id>`, `noslop://playlist/<id>` | a channel (`UC...`), a playlist |
 | `noslop://search?q=<text>` | search results |
 | `noslop://tab/<home\|subscriptions\|library\|search>` | a tab |
 | `noslop://route/<settings\|downloads\|history\|watchLater\|likedVideos\|accountPlaylists\|subscriptionsManager>` | a screen on the selected tab |
 | `https://www.youtube.com/watch?v=<id>&t=42s`, `https://youtu.be/<id>?t=1m5s`, `/shorts/<id>`, `/live/<id>`, `/embed/<id>` | a video (a Short opens as a normal video) |
-| `https://www.youtube.com/@handle`, `/channel/<id>`, `/playlist?list=<id>`, `/results?search_query=<text>` | a channel (a handle is resolved by YouTube, so it needs the network), a playlist, a search |
+| `https://www.youtube.com/@handle`, `/channel/<id>`, `/playlist?list=<id>`, `/results?search_query=<text>` | a channel (a handle is resolved by YouTube, so it needs the network; if you open another link or go elsewhere before the answer arrives, the channel does not open), a playlist, a search |
 
 A link the app cannot open (not a YouTube link, a video ID of the wrong length, a missing part) opens nothing and
 shows a plain "Can't open this link" message.
@@ -220,8 +236,8 @@ shows a plain "Can't open this link" message.
 - **A video says it is unavailable, private, age-restricted or made for kids.** The message is YouTube's own reason.
   These videos cannot be played through this kind of client; "Open on YouTube" opens them in the YouTube app or in
   Safari.
-- **Playback stops after a long pause or a lost connection.** The app re-resolves the stream and resumes; if that
-  fails twice it shows the error with a Retry button.
+- **Playback stops after a long pause or a lost connection.** The app re-resolves the stream (or waits for the
+  connection) and resumes once; if playback fails again it shows the error with a Retry button.
 - **A download failed or is paused.** Tap Retry: it asks YouTube for fresh stream addresses and reuses the parts
   that are still good, so only what is missing is fetched again. When a stream address stops working (it expired, or
   the phone left the Wi-Fi it was made for), the app asks YouTube for new ones by itself once before it gives up.
