@@ -5,8 +5,15 @@ import SwiftUI
 /// bar along the bottom edge, and a marker when the video is downloaded.
 ///
 /// It fills the width its parent offers; the parent decides the width and the corner radius.
+///
+/// For VoiceOver the picture and its badges are one element without a label, whose value says what the badges show:
+/// "3 minutes, 20 seconds, 40 percent watched, Downloaded" (`VideoStatusSpeech`). The card or row around it reads its
+/// title, channel and age first and this after them.
 struct ThumbnailView: View {
     let video: VideoSummary
+    /// Whether the watch progress is part of what VoiceOver says. A card that says how much is left in words
+    /// ("12 min left") leaves it out.
+    var speaksProgress = true
 
     @Environment(AppEnvironment.self) private var env
 
@@ -16,6 +23,19 @@ struct ThumbnailView: View {
             .overlay(alignment: .bottomTrailing) { statusBadge }
             .overlay(alignment: .bottomLeading) { downloadedBadge }
             .overlay(alignment: .bottom) { progressBar }
+            .accessibilityElement(children: .ignore)
+            .accessibilityValue(spokenStatus ?? "")
+    }
+
+    /// What the badges and the bar say, in words.
+    private var spokenStatus: String? {
+        VideoStatusSpeech.status(
+            isLive: video.isLive,
+            isUpcoming: video.isUpcoming,
+            durationSeconds: video.durationSeconds,
+            watchedFraction: speaksProgress ? watchedFraction : nil,
+            isDownloaded: env.downloads.completedItem(videoID: video.id) != nil
+        )
     }
 
     /// 480 px wide is sharp enough for a full-width card and plenty for a 160 pt row.
@@ -45,8 +65,6 @@ struct ThumbnailView: View {
             .padding(.vertical, 2)
             .background(background, in: RoundedRectangle(cornerRadius: 4, style: .continuous))
             .padding(6)
-            // The thumbnail is hidden from VoiceOver; the card reads title, channel and age instead.
-            .accessibilityHidden(true)
     }
 
     @ViewBuilder
@@ -58,7 +76,6 @@ struct ThumbnailView: View {
                 .padding(4)
                 .background(Theme.badgeBackground, in: RoundedRectangle(cornerRadius: 4, style: .continuous))
                 .padding(6)
-                .accessibilityLabel("Downloaded")
         }
     }
 
@@ -72,7 +89,6 @@ struct ThumbnailView: View {
                 }
             }
             .frame(height: 3)
-            .accessibilityHidden(true)
         }
     }
 
