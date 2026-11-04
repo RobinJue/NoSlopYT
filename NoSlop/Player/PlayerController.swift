@@ -529,6 +529,16 @@ final class PlayerController {
             guard !isItemReady else { return }
             isItemReady = true
             refreshDuration()
+            #if DEBUG
+            if DebugLaunchHooks.silentPlayback {
+                Task { [weak self] in
+                    await self?.debugDropAudio(of: item)
+                    guard let self, avPlayer.currentItem === item, isItemReady else { return }
+                    beginPlayback()
+                }
+                return
+            }
+            #endif
             beginPlayback()
         case .failed:
             handleFailure(error: item.error, item: item)
@@ -1484,6 +1494,12 @@ extension PlayerController {
             )
         )
         rebuildPlanner()
+    }
+
+    /// `-silentPlayback`: plays the item without its audio rendition, so no audio queue has to start.
+    func debugDropAudio(of item: AVPlayerItem) async {
+        guard let group = try? await item.asset.loadMediaSelectionGroup(for: .audible) else { return }
+        item.select(nil, in: group)
     }
 
     /// Ends the video with the error screen, as a stream that cannot be played would.

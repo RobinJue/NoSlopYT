@@ -42,6 +42,9 @@ final class AudioSessionController {
     /// Configures and activates the session. Safe to call again; failures are not fatal (the video still plays, but
     /// the silent switch mutes it and background audio does not work).
     func activate() {
+        #if DEBUG
+        if DebugLaunchHooks.silentPlayback { return }
+        #endif
         do {
             try session.setCategory(.playback, mode: .moviePlayback, options: [])
             try session.setActive(true)

@@ -16,12 +16,20 @@ import SwiftUI
 /// - `-streamDelay <seconds>`: the mock stream resolver takes that long (0.3 s by default), so a video stays in its
 ///   loading state long enough to look at.
 /// - `-flakySponsorBlock <n>`: the first n SponsorBlock lookups of a mock run fail, the next ones answer.
+/// - `-silentPlayback YES`: the player leaves the audio session alone and plays the picture without the sound. For a
+///   Mac whose audio output does not answer: the simulator then waits 15 s for every audio session and audio queue it
+///   starts, and playback fails with CoreMedia error -66681 after the first frame.
 enum DebugLaunchHooks {
     private static var isPrepared = false
     private static var isSearchTextTaken = false
 
     static var scrollsToEnd: Bool {
         UserDefaults.standard.bool(forKey: "scrollToEnd")
+    }
+
+    /// `-silentPlayback YES`: no audio session, no audio rendition.
+    static var silentPlayback: Bool {
+        UserDefaults.standard.bool(forKey: "silentPlayback")
     }
 
     /// How long the mock stream resolver takes: `-streamDelay`, else its usual 0.3 s.
