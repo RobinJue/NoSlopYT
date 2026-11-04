@@ -1592,30 +1592,53 @@ final class PlayerController {
 
     // MARK: De-clickbait title
 
-    /// Looks up the community title of the video once, when "De-clickbait titles" is on. A title the lists already
-    /// asked for (`DeArrowTitleCache`) is taken at once; otherwise it arrives a moment later and the lock screen is
-    /// told. No answer, and a failed lookup, leave the original title.
+    /// Looks up the community title of the video, when "De-clickbait titles" is on. A title the lists already asked for
+    /// (`DeArrowTitleCache`) is taken at once; otherwise it arrives a moment later and the lock screen is told. No answer
+    /// ("none") leaves the original title.
+    ///
+    /// A lookup that failed is no answer: it is not remembered as "none" (the cache keeps the video from being asked again
+    /// for a minute, nothing more), and the video is not marked as asked, so the next chance asks again: the setting
+    /// switched, the connection coming back (`networkChanged`), the next time the video is opened.
     private func ensureBetterTitle(for videoID: String) {
         guard settings.deArrowTitles, betterTitleRequestedFor != videoID else { return }
         betterTitleRequestedFor = videoID
         titleTask?.cancel()
-        if let known = DeArrowTitleCache.shared.lookup(videoID) {
-            betterTitle = known.title
+        switch DeArrowTitleCache.shared.recall(videoID) {
+        case .answer(let known):
+            betterTitle = known
             return
+        case .waiting:
+            // Asked a moment ago and it failed: the original stays, and a later chance asks again.
+            betterTitleRequestedFor = nil
+            return
+        case .unknown:
+            break
         }
         titleTask = Task { [weak self] in
             guard let self else { return }
-            let title = await self.deArrow.betterTitle(videoID: videoID)
+            let lookup = await self.deArrow.lookup(videoID: videoID)
             guard !Task.isCancelled, self.currentVideo?.id == videoID else { return }
-            DeArrowTitleCache.shared.store(title, for: videoID)
-            self.betterTitle = title
-            self.updateNowPlaying()
+            DeArrowTitleCache.shared.record(lookup, for: videoID)
+            switch lookup {
+            case .title(let title):
+                self.betterTitle = title
+                self.updateNowPlaying()
+            case .none:
+                self.betterTitle = nil
+                self.updateNowPlaying()
+            case .failed:
+                self.betterTitleRequestedFor = nil
+            }
         }
     }
 
     /// The viewer switched "De-clickbait titles" while a video is loaded: the lock screen follows, and the community
-    /// title is looked up if it never was (the setting was off when the video started).
+    /// title is looked up if it never was (the setting was off when the video started), or if the lookup failed.
     func deArrowSettingChanged() {
+        // Switching it on starts afresh: the titles whose lookup failed a moment ago are asked about again.
+        if settings.deArrowTitles {
+            DeArrowTitleCache.shared.retryFailedLookups()
+        }
         guard let id = currentVideo?.id else { return }
         ensureBetterTitle(for: id)
         updateNowPlaying()
@@ -1781,10 +1804,15 @@ final class PlayerController {
         if !qualityIsManual {
             applyDefaultQuality()
         }
+        guard network.isOnline else { return }
+        // The titles that could not be looked up while there was no connection (on the lists and for the video that
+        // plays) are asked about again now. Nothing happens unless one failed.
+        DeArrowTitleCache.shared.retryFailedLookups()
         // A SponsorBlock lookup that failed for good asks again now that there may be a connection. Nothing happens
         // unless one did.
-        if network.isOnline, let id = currentVideo?.id {
+        if let id = currentVideo?.id {
             ensureSegments(for: id)
+            ensureBetterTitle(for: id)
         }
     }
 
@@ -1965,6 +1993,12 @@ extension PlayerController {
         isApplyingDefaultQuality = true
         self.quality = quality
         isApplyingDefaultQuality = false
+    }
+
+    /// What the connection monitor does when the device is online again (the real monitor follows the Mac's network, which
+    /// a simulator check must not cut).
+    func debugNetworkChanged() {
+        networkChanged()
     }
 
     /// Records a minute of the sample video `id` in the history, so that autoplay treats it as watched.

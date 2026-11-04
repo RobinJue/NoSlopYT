@@ -650,16 +650,28 @@ public struct MockSponsorBlock: SponsorBlockProviding {
 }
 
 /// `DeArrowProviding` that has a better title only for `dQw4w9WgXcQ`.
+///
+/// Without a connection (`MockConnection` off) every lookup fails like the real client's does with no network: `lookup`
+/// says `.failed` (and `betterTitle` nil, as it does for "none"), and answers again once the connection is back.
 public struct MockDeArrow: DeArrowProviding {
     private let delay: Duration
+    private let connection: MockConnection?
 
-    public init(delay: Duration = .milliseconds(300)) {
+    /// - Parameter connection: when given and off, every lookup fails.
+    public init(delay: Duration = .milliseconds(300), connection: MockConnection? = nil) {
         self.delay = delay
+        self.connection = connection
     }
 
     public func betterTitle(videoID: String) async -> String? {
+        if case .title(let title) = await lookup(videoID: videoID) { return title }
+        return nil
+    }
+
+    public func lookup(videoID: String) async -> DeArrowLookup {
         await MockDelay.waitQuietly(delay)
-        return videoID == "dQw4w9WgXcQ" ? SampleData.betterTitleForRickroll : nil
+        if connection?.isOnline == false { return .failed }
+        return videoID == "dQw4w9WgXcQ" ? .title(SampleData.betterTitleForRickroll) : DeArrowLookup.none
     }
 }
 

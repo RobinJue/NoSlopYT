@@ -57,6 +57,8 @@ import SwiftUI
 /// - `-offlinePlayerServices YES`: the services a playing video asks (the stream resolver, SponsorBlock, captions) fail like
 ///   the network does, so a download plays with nothing but what it kept. `playerServices=on|off` of `-playerScript`
 ///   switches them while the app runs.
+/// - `-offlineDeArrow YES`: the mock DeArrow service fails every lookup like the real one does without a connection, so the
+///   titles stay the original ones. The UI script switches it (`deArrowServer=on|off`).
 /// - `-uiScript '<steps>'`: taps, pulls and the like at given moments (see `DebugUIScript`).
 enum DebugLaunchHooks {
     private static var isPrepared = false
@@ -115,6 +117,10 @@ enum DebugLaunchHooks {
     /// The connection of the services a playing video asks (stream info, SponsorBlock, captions): on, unless
     /// `-offlinePlayerServices YES`. The player script switches it (`playerServices=on|off`).
     static let playerConnection = MockConnection(isOnline: !UserDefaults.standard.bool(forKey: "offlinePlayerServices"))
+
+    /// The connection of the mock DeArrow service: on, unless `-offlineDeArrow YES`. The UI script switches it
+    /// (`deArrowServer=on|off`).
+    static let deArrowConnection = MockConnection(isOnline: !UserDefaults.standard.bool(forKey: "offlineDeArrow"))
 
     /// How long the mock feeds take: `-feedDelay`, else their usual 0.3 s.
     static var mockFeedDelay: Duration {

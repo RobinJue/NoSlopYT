@@ -49,10 +49,13 @@ private final class SlowHTTPClient: HTTPClient, @unchecked Sendable {
     private var received = 0
     private let delay: Duration
     private let body: Data
+    private let failure: (any Error)?
 
-    init(delay: Duration, body: Data) {
+    /// - Parameter failure: thrown after the delay instead of an answer.
+    init(delay: Duration, body: Data, failure: (any Error)? = nil) {
         self.delay = delay
         self.body = body
+        self.failure = failure
     }
 
     var requestCount: Int {
@@ -62,6 +65,7 @@ private final class SlowHTTPClient: HTTPClient, @unchecked Sendable {
     func send(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
         lock.withLock { received += 1 }
         try await Task.sleep(for: delay)
+        if let failure { throw failure }
         guard let url = request.url, let response = HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil) else {
             throw NoSlopError.network("no response")
         }
@@ -250,5 +254,147 @@ private final class SlowHTTPClient: HTTPClient, @unchecked Sendable {
         let client = DeArrowClient(http: http, baseURL: URL(string: "https://dearrow.example.com")!)
 
         #expect(await client.betterTitle(videoID: "v") == "Mirror")
+    }
+
+    // MARK: Failed, or no better title (performance-3)
+    //
+    // The app remembers what a lookup says for the session. "There is no better title" may be remembered, "the lookup did
+    // not work" may not, so the lookup has to say which of the two it is.
+
+    @Test func lookupSeparatesFailureFromNone() async {
+        // Transport errors and timeouts.
+        let errors: [(String, any Error)] = [
+            ("offline", NoSlopError.network("offline")),
+            ("timeout", URLError(.timedOut)),
+            ("cancelled", NoSlopError.cancelled),
+        ]
+        for (label, error) in errors {
+            let http = MockHTTPClient()
+            http.enqueueError("api/branding/", error)
+            #expect(await DeArrowClient(http: http).lookup(videoID: "v") == .failed, "\(label)")
+        }
+
+        // A server that is busy (429), broken (5xx) or refuses (4xx other than 404) has not said "no better title".
+        for status in [400, 403, 429, 500, 502, 503] {
+            let (client, _) = makeClient(answering: Data("oops".utf8), status: status)
+            #expect(await client.lookup(videoID: "v") == .failed, "HTTP \(status)")
+        }
+
+        // A success whose body is not what the endpoint sends.
+        let bodies = [("html", "<html>"), ("list", "[]"), ("null", "null"), ("empty", "")]
+        for (label, body) in bodies {
+            let (client, _) = makeClient(answering: Data(body.utf8))
+            #expect(await client.lookup(videoID: "v") == .failed, "\(label) body")
+        }
+    }
+
+    @Test func lookupGivesNoneWhenDeArrowHasNoBetterTitle() async {
+        // 404 is the server's way of saying that nothing is known for this prefix.
+        let (notFound, _) = makeClient(answering: Data("Not Found".utf8), status: 404)
+        #expect(await notFound.lookup(videoID: "v") == .none, "404")
+
+        // An answer that does not list the video, or lists nothing at all.
+        let others = Data(#"{"other":{"titles":[{"title":"Not mine","original":false,"votes":9,"locked":true}]}}"#.utf8)
+        let (otherVideo, _) = makeClient(answering: others)
+        #expect(await otherVideo.lookup(videoID: "v") == .none, "another video")
+        let (emptyObject, _) = makeClient(answering: Data("{}".utf8))
+        #expect(await emptyObject.lookup(videoID: "v") == .none, "empty object")
+
+        // The video is listed, but none of its titles is usable.
+        let unusable: [(String, Data)] = [
+            ("no titles", branding("v", titles: [])),
+            ("only the original", branding("v", titles: [rawTitle("The clickbait original", original: true, votes: 99, locked: true)])),
+            ("only unvoted titles", branding("v", titles: [rawTitle("Troll", votes: -1), rawTitle("Worse", votes: -7)])),
+            ("only blank titles", branding("v", titles: [rawTitle(">   "), rawTitle("   ")])),
+            ("no titles field", Data(#"{"v":{"thumbnails":[],"randomTime":0.5}}"#.utf8)),
+            ("titles that are not a list", Data(#"{"v":{"titles":"nope"}}"#.utf8)),
+        ]
+        for (label, body) in unusable {
+            let (client, _) = makeClient(answering: body)
+            #expect(await client.lookup(videoID: "v") == .none, "\(label)")
+        }
+    }
+
+    @Test func lookupGivesTheCommunityTitle() async throws {
+        let (client, _) = makeClient(answering: branding("v", titles: [
+            rawTitle("The clickbait original", original: true, votes: 99),
+            rawTitle("Plain title", votes: 4),
+        ]))
+        #expect(await client.lookup(videoID: "v") == .title("Plain title"))
+
+        let http = MockHTTPClient()
+        http.enqueue("api/branding/5f6b", body: try Fixture.data("dearrow_prefix.json"))
+        #expect(await DeArrowClient(http: http).lookup(videoID: "dQw4w9WgXcQ") == .title(SampleData.betterTitleForRickroll))
+    }
+
+    @Test func aFailedLookupIsNotRememberedSoTheNextOneAsksAgain() async {
+        let http = MockHTTPClient()
+        http.enqueueError("api/branding/", NoSlopError.network("offline"))
+        http.enqueue("api/branding/", body: branding("v", titles: [rawTitle("Back online")]))
+        let client = DeArrowClient(http: http)
+
+        #expect(await client.lookup(videoID: "v") == .failed)
+        #expect(await client.lookup(videoID: "v") == .title("Back online"))
+        #expect(http.requests.count == 2)
+
+        // The answer is remembered, the failure was not: now nothing is asked.
+        #expect(await client.lookup(videoID: "v") == .title("Back online"))
+        #expect(http.requests.count == 2)
+    }
+
+    @Test func aBusyServerIsAskedAgainAfterwards() async {
+        let http = MockHTTPClient()
+        http.enqueue("api/branding/", status: 429, body: Data("Too Many Requests".utf8))
+        http.enqueue("api/branding/", body: branding("v", titles: [rawTitle("Calmer now")]))
+        let client = DeArrowClient(http: http)
+
+        #expect(await client.lookup(videoID: "v") == .failed)
+        #expect(await client.lookup(videoID: "v") == .title("Calmer now"))
+        #expect(http.requests.count == 2)
+    }
+
+    @Test func anAnswerOfNoneIsRememberedByTheClient() async {
+        let (client, http) = makeClient(answering: Data("Not Found".utf8), status: 404)
+
+        #expect(await client.lookup(videoID: "v") == .none)
+        #expect(await client.lookup(videoID: "v") == .none)
+        #expect(http.requests.count == 1)
+    }
+
+    @Test func lookupsThatShareAFailedRequestAllSeeTheFailure() async {
+        // dQw4w9WgXcQ and 1H8_tk_dMLw share the prefix 5f6b, so the three lookups share one request, which fails.
+        let http = SlowHTTPClient(delay: .milliseconds(100), body: Data(), failure: NoSlopError.network("offline"))
+        let client = DeArrowClient(http: http)
+
+        async let first = client.lookup(videoID: "dQw4w9WgXcQ")
+        async let second = client.lookup(videoID: "1H8_tk_dMLw")
+        async let third = client.lookup(videoID: "dQw4w9WgXcQ")
+        let results = await [first, second, third]
+
+        #expect(results == [.failed, .failed, .failed])
+        #expect(http.requestCount == 1)
+    }
+
+    @Test func betterTitleStaysNilForFailureAndNone() async {
+        // The old call cannot tell the two apart, and keeps saying nil for both.
+        let http = MockHTTPClient()
+        http.enqueueError("api/branding/", NoSlopError.network("offline"))
+        #expect(await DeArrowClient(http: http).betterTitle(videoID: "v") == nil)
+        let (notFound, _) = makeClient(answering: Data("Not Found".utf8), status: 404)
+        #expect(await notFound.betterTitle(videoID: "v") == nil)
+    }
+
+    /// A service that only knows `betterTitle`, as every conformer written before `lookup` existed.
+    private struct TitleOnly: DeArrowProviding {
+        let title: String?
+
+        func betterTitle(videoID: String) async -> String? {
+            title
+        }
+    }
+
+    @Test func theDefaultLookupWrapsBetterTitle() async {
+        #expect(await TitleOnly(title: "A title").lookup(videoID: "v") == .title("A title"))
+        #expect(await TitleOnly(title: nil).lookup(videoID: "v") == .none)
     }
 }

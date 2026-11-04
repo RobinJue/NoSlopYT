@@ -74,9 +74,32 @@ public protocol SponsorBlockProviding: Sendable {
     func segments(videoID: String) async throws -> [SponsorSegment]
 }
 
+/// How asking DeArrow for the title of a video ended. A lookup that failed is not an answer: it must never be
+/// remembered as "there is no better title".
+public enum DeArrowLookup: Sendable, Equatable {
+    /// The community title.
+    case title(String)
+    /// DeArrow has no usable title for the video. A definitive answer.
+    case none
+    /// The lookup did not finish: no connection, a timeout, a server that is busy or down (HTTP 429, 5xx) or an answer that
+    /// could not be read. Ask again later.
+    case failed
+}
+
 public protocol DeArrowProviding: Sendable {
-    /// A community title for the video, or nil when there is none (errors are swallowed).
+    /// A community title for the video, or nil when there is none (errors are swallowed: a failed lookup is nil too, so
+    /// callers that remember what they were told use `lookup` instead).
     func betterTitle(videoID: String) async -> String?
+    /// Like `betterTitle`, but a lookup that failed is told from a video that has no better title.
+    func lookup(videoID: String) async -> DeArrowLookup
+}
+
+extension DeArrowProviding {
+    /// For services that cannot fail, or do not say so: the title `betterTitle` has, else `.none`.
+    public func lookup(videoID: String) async -> DeArrowLookup {
+        if let title = await betterTitle(videoID: videoID) { return .title(title) }
+        return .none
+    }
 }
 
 public protocol SubscriptionFeedProviding: Sendable {

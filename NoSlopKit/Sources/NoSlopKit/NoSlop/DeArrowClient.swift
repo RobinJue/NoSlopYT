@@ -10,7 +10,13 @@ import Foundation
 /// - and is not empty once a leading `>` (DeArrow's "do not auto-format" marker) and the whitespace around it are removed.
 ///
 /// The whole prefix response is cached for an hour (reduced to the titles that passed), so the other videos of the
-/// same response cost nothing. Every failure just means "no better title": the original is shown.
+/// same response cost nothing.
+///
+/// `lookup` tells a video that has no better title (the server has no entry for the prefix, or none for the video, or
+/// none that passes the rules above) from a lookup that did not work (no connection, a timeout, HTTP 429 or 5xx or any
+/// other status, a body that is not a JSON object). The first is an answer, and is cached with the rest of the response;
+/// the second is never cached, so the next lookup asks again. `betterTitle` is `lookup` as an optional string: the
+/// original shows for both.
 public actor DeArrowClient: DeArrowProviding {
     static let defaultBaseURL = URL(string: "https://sponsor.ajay.app")!
     private static let cacheTTL: TimeInterval = 3_600
@@ -21,7 +27,7 @@ public actor DeArrowClient: DeArrowProviding {
     private let baseURL: URL
     /// Hash prefix -> (video id -> better title), for the videos of that response that have one.
     private let cache: TTLCache<String, [String: String]>
-    private var inFlight: [String: Task<[String: String]?, Never>] = [:]
+    private var inFlight: [String: Task<Fetched, Never>] = [:]
 
     public init(http: any HTTPClient, baseURL: URL = URL(string: "https://sponsor.ajay.app")!) {
         self.init(http: http, baseURL: baseURL, cacheTTL: Self.cacheTTL, now: { Date() })
@@ -40,10 +46,15 @@ public actor DeArrowClient: DeArrowProviding {
     }
 
     public func betterTitle(videoID: String) async -> String? {
+        if case .title(let title) = await lookup(videoID: videoID) { return title }
+        return nil
+    }
+
+    public func lookup(videoID: String) async -> DeArrowLookup {
         let prefix = HashPrefix.sha256Prefix(videoID)
-        if let titles = await cache.value(for: prefix) { return titles[videoID] }
-        // Lookups that overlap and share a prefix share one request.
-        if let pending = inFlight[prefix] { return await pending.value?[videoID] }
+        if let titles = await cache.value(for: prefix) { return Self.answer(for: videoID, in: .titles(titles)) }
+        // Lookups that overlap and share a prefix share one request, and the failure of it.
+        if let pending = inFlight[prefix] { return Self.answer(for: videoID, in: await pending.value) }
 
         let http = http
         let request = Self.makeRequest(prefix: prefix, baseURL: baseURL)
@@ -51,9 +62,22 @@ public actor DeArrowClient: DeArrowProviding {
         inFlight[prefix] = task
         defer { inFlight[prefix] = nil }
 
-        guard let titles = await task.value else { return nil }
-        await cache.insert(titles, for: prefix)
-        return titles[videoID]
+        let fetched = await task.value
+        // Only an answer is cached; a lookup that failed is tried again next time.
+        if case .titles(let titles) = fetched {
+            await cache.insert(titles, for: prefix)
+        }
+        return Self.answer(for: videoID, in: fetched)
+    }
+
+    private static func answer(for videoID: String, in fetched: Fetched) -> DeArrowLookup {
+        switch fetched {
+        case .titles(let titles):
+            guard let title = titles[videoID] else { return DeArrowLookup.none }
+            return .title(title)
+        case .failed:
+            return .failed
+        }
     }
 
     // MARK: Request
@@ -66,17 +90,25 @@ public actor DeArrowClient: DeArrowProviding {
         return request
     }
 
-    /// The usable titles of a prefix response; nil when the lookup failed (and should be tried again next time).
-    private static func fetch(_ request: URLRequest, with http: any HTTPClient) async -> [String: String]? {
-        guard let (data, response) = try? await http.send(request) else { return nil }
+    /// What a request for a prefix came to.
+    private enum Fetched: Sendable {
+        /// The usable titles of the response (video id -> title); empty when the server knows nothing for the prefix.
+        case titles([String: String])
+        /// No connection, a timeout, a status that says nothing about the titles, or a body that cannot be read.
+        case failed
+    }
+
+    private static func fetch(_ request: URLRequest, with http: any HTTPClient) async -> Fetched {
+        guard let (data, response) = try? await http.send(request) else { return .failed }
         switch response.statusCode {
         case 404:
             // Nothing is known for this prefix, which is an answer too.
-            return [:]
+            return .titles([:])
         case 200..<300:
-            return parse(data)
+            return parse(data).map(Fetched.titles) ?? .failed
         default:
-            return nil
+            // 429 and 5xx: the server is busy or down. Anything else it says says nothing about these videos either.
+            return .failed
         }
     }
 

@@ -184,6 +184,7 @@ final class AppEnvironment {
             MockHomeFeed(delay: DebugLaunchHooks.mockFeedDelay, connection: connection)
         )
         let auth: any GoogleAuthProviding = MockAuth(signedIn: DebugLaunchHooks.signedIn)
+        let deArrow: any DeArrowProviding = MockDeArrow(connection: DebugLaunchHooks.deArrowConnection)
         DebugLaunchHooks.seedDownload(in: scratch.appendingPathComponent("Downloads", isDirectory: true))
         #else
         let youTube = MockYouTubeService()
@@ -193,6 +194,7 @@ final class AppEnvironment {
         let subscriptionFeed: any SubscriptionFeedProviding = MockSubscriptionFeed()
         let homeFeed: any HomeFeedProviding = MockHomeFeed()
         let auth: any GoogleAuthProviding = MockAuth()
+        let deArrow: any DeArrowProviding = MockDeArrow()
         #endif
         let settingsStore = SettingsStore(defaults: defaults)
         let library = LibraryStore(directory: scratch.appendingPathComponent("Library", isDirectory: true))
@@ -212,7 +214,7 @@ final class AppEnvironment {
             subscriptionFeed: subscriptionFeed,
             homeFeed: homeFeed,
             sponsorBlock: sponsorBlock,
-            deArrow: MockDeArrow(),
+            deArrow: deArrow,
             auth: auth,
             account: MockAccountService(),
             library: library,
