@@ -60,6 +60,14 @@ private final class Gate {
         continuation?.resume()
         continuation = nil
     }
+
+    /// Returns once an answer is waiting here. Gives up after a great many turns of the main actor, so a bug fails the
+    /// test instead of hanging the run.
+    func untilWaiting() async {
+        for _ in 0..<100_000 where !isWaiting {
+            await Task.yield()
+        }
+    }
 }
 
 @MainActor
@@ -350,7 +358,8 @@ private func ids(_ model: AccountVideosModel) -> [String] {
         let model = AccountVideosModel()
 
         let older = Task { await model.reload(using: slow) }
-        while !gate.isWaiting { await Task.yield() }
+        await gate.untilWaiting()
+        #expect(gate.isWaiting)
         await model.reload(using: fast)
         #expect(ids(model) == ["new"])
 
@@ -374,7 +383,8 @@ private func ids(_ model: AccountVideosModel) -> [String] {
         await model.reload(using: loader)
 
         let loading = Task { await model.loadMore(using: loader) }
-        while !gate.isWaiting { await Task.yield() }
+        await gate.untilWaiting()
+        #expect(gate.isWaiting)
         await model.reload(using: AccountVideosModel.Loader(source: { _ in page(["fresh"], next: nil) }))
         gate.open()
         await loading.value

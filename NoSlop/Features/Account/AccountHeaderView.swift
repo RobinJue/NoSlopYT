@@ -8,7 +8,9 @@ import SwiftUI
 @Observable
 final class GoogleSignInFlow {
     private(set) var isWorking = false
-    /// Set when a sign-in fails (not when the user simply closes the page); the screen shows it in an alert.
+    /// Set when a sign-in fails (not when the user simply closes the page), or when it worked but the subscriptions
+    /// could not be imported for a reason the viewer can act on (the YouTube Data API is not enabled for the Google
+    /// project, see `AppEnvironment.signIn`: the account stays signed in). The screen shows it in an alert.
     var errorMessage: String?
 
     @ObservationIgnored private let authenticator = ASWebAuthenticator()

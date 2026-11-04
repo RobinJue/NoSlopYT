@@ -50,7 +50,8 @@ private final class ScriptedFetch {
     }
 
     private func makeStore() -> LibraryStore {
-        LibraryStore(directory: directory, saveDelay: .milliseconds(500), now: { referenceDate })
+        // Nothing here waits for the files: a write that would fire after the test must not recreate the directory.
+        LibraryStore(directory: directory, saveDelay: .seconds(3600), now: { referenceDate })
     }
 
     private func sources(_ store: LibraryStore) -> [String: SubscriptionSource] {
