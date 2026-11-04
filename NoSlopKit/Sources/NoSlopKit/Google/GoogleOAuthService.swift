@@ -84,14 +84,19 @@ public actor GoogleOAuthService: GoogleAuthProviding {
         return account
     }
 
-    /// Forgets the credentials at once, then asks Google to revoke the grant (best effort, short timeout).
+    /// Forgets the credentials at once, and asks Google to revoke the grant (best effort, short timeout).
+    ///
+    /// Returns as soon as the credentials are gone: what Google answers changes nothing here, so nobody waits for it.
+    /// The request goes out from a task of its own, which `revokeTimeout` ends. (Waiting for it kept the app showing
+    /// the account, with a busy Sign out button, for as long as a slow connection took to answer.)
     public func signOut() async {
         let previous = try? store.load()
         dropCredentials()
         guard let tokens = previous?.tokens else { return }
         // Revoking the refresh token ends the whole grant, access tokens included.
         let token = tokens.refreshToken.flatMap { $0.isEmpty ? nil : $0 } ?? tokens.accessToken
-        await revoke(token)
+        let http = http
+        Task { await Self.revoke(token, using: http) }
     }
 
     /// A valid access token, refreshed first when it is expired or about to be.
@@ -221,12 +226,12 @@ public actor GoogleOAuthService: GoogleAuthProviding {
         return account
     }
 
-    private func revoke(_ token: String) async {
+    private static func revoke(_ token: String, using http: any HTTPClient) async {
         let encoded = GoogleURLEncoding.percentEncode(token)
-        guard let url = URL(string: "\(Self.revokeEndpoint)?token=\(encoded)") else { return }
+        guard let url = URL(string: "\(revokeEndpoint)?token=\(encoded)") else { return }
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
-        request.timeoutInterval = Self.revokeTimeout
+        request.timeoutInterval = revokeTimeout
         request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
         request.httpBody = Data()
         _ = try? await http.send(request)

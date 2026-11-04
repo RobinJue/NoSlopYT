@@ -66,6 +66,23 @@ private actor GoogleStubAuth: GoogleAuthProviding {
     }
 }
 
+/// What Google answers while the YouTube Data API is not enabled for the project behind the OAuth client.
+private let dataAPINotEnabledBodies = [
+    // The classic shape: errors[].reason.
+    #"""
+    {"error":{"code":403,"message":"YouTube Data API v3 has not been used in project 123 before or it is disabled.","errors":[{"message":"YouTube Data API v3 has not been used in project 123 before or it is disabled.","domain":"usageLimits","reason":"accessNotConfigured","extendedHelp":"https://console.developers.google.com"}]}}
+    """#,
+    // Only the google.rpc.ErrorInfo detail carries the reason.
+    #"""
+    {"error":{"code":403,"message":"Disabled.","status":"PERMISSION_DENIED","details":[{"@type":"type.googleapis.com/google.rpc.ErrorInfo","reason":"SERVICE_DISABLED","domain":"googleapis.com","metadata":{"service":"youtube.googleapis.com","consumer":"projects/123"}}]}}
+    """#,
+    // Both, as Google really sends it.
+    #"""
+    {"error":{"code":403,"message":"Disabled.","errors":[{"message":"Disabled.","domain":"usageLimits","reason":"accessNotConfigured"}],"status":"PERMISSION_DENIED","details":[{"@type":"type.googleapis.com/google.rpc.Help","links":[{"description":"Google developers console API activation","url":"https://console.developers.google.com/apis/api/youtube.googleapis.com/overview?project=123"}]},{"@type":"type.googleapis.com/google.rpc.ErrorInfo","reason":"SERVICE_DISABLED","domain":"googleapis.com"}]}}
+    """#,
+]
+
+
 private struct Rig {
     let http: MockHTTPClient
     let auth: GoogleStubAuth
@@ -149,7 +166,8 @@ private struct RealAuthRig {
         _ = try await rig.client.myPlaylists()
         _ = try await rig.client.playlistItems(playlistID: "PL1", pageToken: nil)
 
-        #expect(rig.http.requests.count == 4)
+        // The playlist page asks `videos` for the lengths of its videos as well (see playlistItemsGetTheirLengths).
+        #expect(rig.http.requests.count == 5)
         for request in rig.http.requests {
             #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer secret-token")
             #expect(request.value(forHTTPHeaderField: "Accept") == "application/json")
@@ -324,10 +342,14 @@ private struct RealAuthRig {
     @Test func playlistItemsSkipPrivateAndDeleted() async throws {
         let rig = Rig()
         rig.http.enqueue("youtube/v3/playlistItems", body: try Fixture.data("dataapi_playlist_items.json"))
+        rig.http.enqueue("youtube/v3/videos", body: body(#"{"items":[{"id":"aqz-KE-bpKQ","contentDetails":{"duration":"PT10M34S"}},{"id":"7pPUE6cGFwI","contentDetails":{"duration":"PT3M"}},{"id":"jNQXAC9IVRw","contentDetails":{"duration":"PT19S"}}]}"#))
 
         let page = try await rig.client.playlistItems(playlistID: "PLx7v0qkWc3tJZ9mXn2RoAyU4DbHsEeFgK", pageToken: nil)
 
-        #expect(rig.http.requests.map(urlString) == [apiBase + "playlistItems?part=snippet,contentDetails&playlistId=PLx7v0qkWc3tJZ9mXn2RoAyU4DbHsEeFgK&maxResults=50"])
+        #expect(rig.http.requests.map(urlString) == [
+            apiBase + "playlistItems?part=snippet,contentDetails&playlistId=PLx7v0qkWc3tJZ9mXn2RoAyU4DbHsEeFgK&maxResults=50",
+            apiBase + "videos?part=contentDetails&id=aqz-KE-bpKQ,7pPUE6cGFwI,jNQXAC9IVRw",
+        ], "the lengths are asked for the videos that are kept, not for the private and deleted placeholders")
         #expect(page.items.map(\.id) == ["aqz-KE-bpKQ", "7pPUE6cGFwI", "jNQXAC9IVRw"], "Private video and Deleted video are dropped")
         #expect(page.continuation == "EAAaBlBUOkNESQ")
 
@@ -337,7 +359,7 @@ private struct RealAuthRig {
         #expect(first.channel == ChannelRef(id: "UCSMOQeBJ2RAnuFungnQOxLg", name: "Blender"), "the video's owner, not the playlist owner")
         #expect(first.publishedAt == utc(2014, 11, 10, 14, 42, 37), "the upload date, not the date it was added to the playlist")
         #expect(first.thumbnails.map(\.width) == [120, 320, 480, 640, 1280])
-        #expect(first.durationSeconds == nil)
+        #expect(first.durationSeconds == 634, "a playlist item has no length of its own: it comes from videos.list")
         #expect(page.items[1].title == "A Little Pony\u{2019}s Big Heart")
         #expect(page.items[1].channel?.name == "PolyFilms")
     }
@@ -345,6 +367,7 @@ private struct RealAuthRig {
     @Test func playlistItemsPassTheContinuationAsPageToken() async throws {
         let rig = Rig()
         rig.http.enqueue("youtube/v3/playlistItems", body: body(#"{"items":[{"snippet":{"title":"T","videoOwnerChannelId":"UC1","videoOwnerChannelTitle":"C"},"contentDetails":{"videoId":"vid"}}]}"#))
+        rig.http.enqueue("youtube/v3/videos", body: body(#"{"items":[{"id":"vid","contentDetails":{"duration":"PT5M"}}]}"#))
         let page = try await rig.client.playlistItems(playlistID: "PL1", pageToken: "EAAaBlBUOkNESQ")
         #expect(urlString(try #require(rig.http.requests.first)) == apiBase + "playlistItems?part=snippet,contentDetails&playlistId=PL1&maxResults=50&pageToken=EAAaBlBUOkNESQ")
         #expect(page.items.map(\.id) == ["vid"])
@@ -473,12 +496,13 @@ private struct RealAuthRig {
 
     @Test func addToPlaylistPostsTheVideoResource() async throws {
         let rig = Rig()
+        rig.http.enqueue("youtube/v3/playlistItems", body: body(#"{"items":[]}"#))  // the video is not in the playlist yet
         rig.http.enqueue("youtube/v3/playlistItems", body: body(#"{"kind":"youtube#playlistItem","id":"item"}"#))
 
         try await rig.client.addToPlaylist(videoID: "dQw4w9WgXcQ", playlistID: "PLx7v0qkWc3tJZ9mXn2RoAyU4DbHsEeFgK")
 
-        let request = try #require(rig.http.requests.first)
-        #expect(rig.http.requests.count == 1)
+        #expect(rig.http.requests.map { $0.httpMethod } == ["GET", "POST"], "it looks first, then adds")
+        let request = try #require(rig.http.requests.last)
         #expect(request.httpMethod == "POST")
         #expect(urlString(request) == apiBase + "playlistItems?part=snippet")
         #expect(request.value(forHTTPHeaderField: "Content-Type")?.hasPrefix("application/json") == true)
@@ -492,6 +516,156 @@ private struct RealAuthRig {
         let rig = Rig()
         rig.http.enqueue("youtube/v3/playlistItems", status: 404, body: apiError(status: 404, reason: "playlistNotFound"))
         await #expect(throws: NoSlopError.http(status: 404)) { try await rig.client.addToPlaylist(videoID: "v", playlistID: "p") }
+    }
+
+    // MARK: Adding a video that is already in the playlist (google-3)
+
+    @Test func addingAVideoThatIsAlreadyInThePlaylistSendsNothingMore() async throws {
+        let rig = Rig()
+        rig.http.enqueue("youtube/v3/playlistItems", body: body(#"{"items":[{"id":"x"}]}"#))
+
+        try await rig.client.addToPlaylist(videoID: "v", playlistID: "p")
+
+        #expect(rig.http.requests.map(urlString) == [apiBase + "playlistItems?part=id&playlistId=p&videoId=v&maxResults=1"])
+        #expect(rig.http.requests.map { $0.httpMethod } == ["GET"], "no insert: the video would be in the playlist twice")
+        #expect(rig.http.requests.first?.httpBody == nil)
+    }
+
+    @Test func addingAVideoThatIsNotThereYetLooksFirstAndThenPostsTheSameBodyAsBefore() async throws {
+        let rig = Rig()
+        rig.http.enqueue("youtube/v3/playlistItems", body: body(#"{"items":[]}"#))
+        rig.http.enqueue("youtube/v3/playlistItems", body: body(#"{"kind":"youtube#playlistItem","id":"item"}"#))
+
+        try await rig.client.addToPlaylist(videoID: "v", playlistID: "p")
+
+        #expect(rig.http.requests.map(urlString) == [
+            apiBase + "playlistItems?part=id&playlistId=p&videoId=v&maxResults=1",
+            apiBase + "playlistItems?part=snippet",
+        ])
+        let post = try #require(rig.http.requests.last)
+        let sent = try #require(rig.http.bodyJSON(of: post))
+        #expect(sent["snippet"]?["playlistId"]?.string == "p")
+        #expect(sent["snippet"]?["resourceId"]?["kind"]?.string == "youtube#video")
+        #expect(sent["snippet"]?["resourceId"]?["videoId"]?.string == "v")
+    }
+
+    @Test func addingTheSameVideoTwiceAddsItOnce() async throws {
+        // A server that behaves like YouTube: the second look finds the video the first call added.
+        let rig = Rig()
+        rig.http.enqueue("youtube/v3/playlistItems", body: body(#"{"items":[]}"#))
+        rig.http.enqueue("youtube/v3/playlistItems", body: body(#"{"id":"item"}"#))
+        rig.http.enqueue("youtube/v3/playlistItems", body: body(#"{"items":[{"id":"item"}]}"#))
+
+        try await rig.client.addToPlaylist(videoID: "v", playlistID: "p")
+        try await rig.client.addToPlaylist(videoID: "v", playlistID: "p")
+
+        #expect(rig.http.requests.map { $0.httpMethod } == ["GET", "POST", "GET"])
+    }
+
+    @Test func aFailedLookUpIsAFailedAddAndNothingIsPosted() async throws {
+        let rig = Rig()
+        rig.http.enqueue("youtube/v3/playlistItems", status: 403, body: try Fixture.data("dataapi_error_quota.json"))
+        await #expect(throws: NoSlopError.quotaExceeded) { try await rig.client.addToPlaylist(videoID: "v", playlistID: "p") }
+        #expect(rig.http.requests.map { $0.httpMethod } == ["GET"])
+
+        let unreadable = Rig()
+        unreadable.http.enqueue("youtube/v3/playlistItems", body: Data("not json".utf8))
+        await #expect { try await unreadable.client.addToPlaylist(videoID: "v", playlistID: "p") } throws: { isDecodingError($0) }
+        #expect(unreadable.http.requests.map { $0.httpMethod } == ["GET"], "when the look-up cannot be read, a duplicate is the worse outcome")
+    }
+
+    // MARK: Shorts and lengths in the account's lists (google-4)
+
+    @Test(arguments: [
+        ("PT45S", true), ("PT1M", true), ("PT59S", true), ("PT1M1S", false), ("PT4M40S", false), ("PT1H", false),
+        ("P0D", false), ("PT0S", false), ("nonsense", false),
+    ])
+    func likedVideosUnderAMinuteAreFlaggedAsShorts(duration: String, isShort: Bool) async throws {
+        let rig = Rig()
+        rig.http.enqueue("youtube/v3/videos", body: body(#"{"items":[{"id":"v","snippet":{"title":"T","channelId":"UC1","channelTitle":"C"},"contentDetails":{"duration":"\#(duration)"}}]}"#))
+
+        let page = try await rig.client.likedVideos(pageToken: nil)
+
+        let video = try #require(page.items.first)
+        #expect(video.isShort == isShort, "\(duration)")
+        // What the viewer's filter does with it follows from the flag.
+        #expect(ContentFilter(settings: AppSettings()).allows(video) == !isShort)
+        var showShorts = AppSettings()
+        showShorts.hideShorts = false
+        #expect(ContentFilter(settings: showShorts).allows(video))
+    }
+
+    @Test func aLikedVideoWithoutALengthIsNeverAShort() async throws {
+        let rig = Rig()
+        rig.http.enqueue("youtube/v3/videos", body: body(#"{"items":[{"id":"nolength","snippet":{"title":"T"}},{"id":"live","snippet":{"title":"L","liveBroadcastContent":"live"},"contentDetails":{"duration":"P0D"}}]}"#))
+        let page = try await rig.client.likedVideos(pageToken: nil)
+        #expect(page.items.map(\.isShort) == [false, false])
+    }
+
+    @Test func theViewersBlocksApplyToLikedVideosToo() async throws {
+        let rig = Rig()
+        rig.http.enqueue("youtube/v3/videos", body: try Fixture.data("dataapi_liked_videos.json"))
+        let page = try await rig.client.likedVideos(pageToken: nil)
+
+        var settings = AppSettings()
+        settings.blockedChannels = [BlockedChannel(id: "UCSMOQeBJ2RAnuFungnQOxLg", name: "Blender")]
+        #expect(ContentFilter(settings: settings).filter(page.items).map(\.id) == ["dQw4w9WgXcQ", "jfKfPfyJRdk"])
+
+        settings.blockedChannels = []
+        settings.blockedKeywords = ["blender"]
+        #expect(ContentFilter(settings: settings).filter(page.items).map(\.id) == ["dQw4w9WgXcQ", "jfKfPfyJRdk"], "two titles say Blender")
+
+        settings.blockedKeywords = []
+        settings.hideLiveAndUpcoming = true
+        #expect(ContentFilter(settings: settings).filter(page.items).map(\.id) == ["mHrHLqQj7Ts", "dQw4w9WgXcQ"], "the live stream and the premiere are known from the liked videos")
+    }
+
+    @Test func playlistItemsGetTheirLengthsAndShortsAreFlagged() async throws {
+        let rig = Rig()
+        rig.http.enqueue("youtube/v3/playlistItems", body: body(#"""
+        {"nextPageToken":"NEXT","items":[
+          {"snippet":{"title":"A long one","videoOwnerChannelId":"UC1","videoOwnerChannelTitle":"One"},"contentDetails":{"videoId":"long1"}},
+          {"snippet":{"title":"A short one","videoOwnerChannelId":"UC2","videoOwnerChannelTitle":"Two"},"contentDetails":{"videoId":"short1"}},
+          {"snippet":{"title":"Private video","description":"This video is private."},"contentDetails":{"videoId":"hidden"}},
+          {"snippet":{"title":"Length unknown","videoOwnerChannelId":"UC3","videoOwnerChannelTitle":"Three"},"contentDetails":{"videoId":"nolength"}}
+        ]}
+        """#))
+        rig.http.enqueue("youtube/v3/videos", body: body(#"{"items":[{"id":"long1","contentDetails":{"duration":"PT12M"}},{"id":"short1","contentDetails":{"duration":"PT42S"}}]}"#))
+
+        let page = try await rig.client.playlistItems(playlistID: "PL1", pageToken: nil)
+
+        #expect(page.items.map(\.id) == ["long1", "short1", "nolength"])
+        #expect(page.items.map(\.durationSeconds) == [720, 42, nil])
+        #expect(page.items.map(\.isShort) == [false, true, false])
+        #expect(page.continuation == "NEXT")
+        #expect(rig.http.requests.map(urlString).last == apiBase + "videos?part=contentDetails&id=long1,short1,nolength")
+        #expect(ContentFilter(settings: AppSettings()).filter(page.items).map(\.id) == ["long1", "nolength"])
+    }
+
+    @Test func aPlaylistPageWithoutVideosAsksForNoLengths() async throws {
+        let rig = Rig()
+        rig.http.enqueue("youtube/v3/playlistItems", body: body(#"{"nextPageToken":"NEXT","items":[{"snippet":{"title":"Deleted video"},"contentDetails":{"videoId":"gone"}}]}"#))
+        let page = try await rig.client.playlistItems(playlistID: "PL1", pageToken: nil)
+        #expect(page.items.isEmpty)
+        #expect(page.continuation == "NEXT", "a page of placeholders still has pages behind it")
+        #expect(rig.http.requests.count == 1)
+    }
+
+    @Test func aPlaylistPageStillArrivesWhenTheLengthsCannotBeLookedUp() async throws {
+        let rig = Rig()
+        rig.http.enqueue("youtube/v3/playlistItems", body: body(#"{"items":[{"snippet":{"title":"T","videoOwnerChannelId":"UC1"},"contentDetails":{"videoId":"vid"}}]}"#))
+        rig.http.enqueue("youtube/v3/videos", status: 500, body: Data("oops".utf8))
+        let page = try await rig.client.playlistItems(playlistID: "PL1", pageToken: nil)
+        #expect(page.items.map(\.id) == ["vid"])
+        #expect(page.items.first?.durationSeconds == nil)
+        #expect(page.items.first?.isShort == false)
+    }
+
+    @Test func aCancelledLookUpOfLengthsIsNotSwallowed() async throws {
+        let rig = Rig()
+        rig.http.enqueue("youtube/v3/playlistItems", body: body(#"{"items":[{"snippet":{"title":"T","videoOwnerChannelId":"UC1"},"contentDetails":{"videoId":"vid"}}]}"#))
+        rig.http.enqueueError("youtube/v3/videos", NoSlopError.cancelled)
+        await #expect(throws: NoSlopError.cancelled) { _ = try await rig.client.playlistItems(playlistID: "PL1", pageToken: nil) }
     }
 }
 
@@ -674,8 +848,43 @@ private struct RealAuthRig {
         await #expect(throws: NoSlopError.quotaExceeded) { try await rig.client.rate(videoID: "v", rating: .like) }
     }
 
+    @Test(arguments: dataAPINotEnabledBodies)
+    func aProjectWithoutTheDataAPIGetsAnActionableError(json: String) async throws {
+        let rig = Rig()
+        rig.http.enqueue("youtube/v3/subscriptions", status: 403, body: body(json))
+        await #expect(throws: NoSlopError.dataAPINotEnabled) { _ = try await rig.client.subscriptions() }
+        #expect(rig.http.requests.count == 1, "no retry: waiting a minute is the owner's part")
+    }
+
+    @Test func theMissingDataAPIIsRecognisedOnEveryCall() async throws {
+        let rig = Rig()
+        rig.http.enqueue("youtube/v3", status: 403, body: body(dataAPINotEnabledBodies[2]))
+        let calls: [(String, @Sendable (YouTubeDataAPIClient) async throws -> Void)] = [
+            ("subscriptions", { _ = try await $0.subscriptions() }),
+            ("subscribe", { _ = try await $0.subscribe(channelID: "UC1") }),
+            ("unsubscribe", { try await $0.unsubscribe(subscriptionID: "S1") }),
+            ("myPlaylists", { _ = try await $0.myPlaylists() }),
+            ("playlistItems", { _ = try await $0.playlistItems(playlistID: "PL1", pageToken: nil) }),
+            ("likedVideos", { _ = try await $0.likedVideos(pageToken: nil) }),
+            ("rating", { _ = try await $0.rating(videoID: "v") }),
+            ("rate", { try await $0.rate(videoID: "v", rating: .like) }),
+            ("addToPlaylist", { try await $0.addToPlaylist(videoID: "v", playlistID: "p") }),
+            ("durations", { _ = try await $0.durations(videoIDs: ["v"]) }),
+        ]
+        for (name, call) in calls {
+            await #expect(throws: NoSlopError.dataAPINotEnabled, "\(name)") { try await call(rig.client) }
+        }
+    }
+
+    @Test func aQuotaReasonStillWinsOverAMissingAPI() async throws {
+        // Both reasons in one body cannot really happen; if they do, the quota is the thing that clears by itself.
+        let rig = Rig()
+        rig.http.enqueue("youtube/v3/subscriptions", status: 403, body: body(#"{"error":{"errors":[{"reason":"quotaExceeded"},{"reason":"accessNotConfigured"}]}}"#))
+        await #expect(throws: NoSlopError.quotaExceeded) { _ = try await rig.client.subscriptions() }
+    }
+
     @Test(arguments: [
-        (403, "forbidden"), (403, "rateLimitExceeded"), (400, "invalidArgument"), (404, "videoNotFound"), (409, "playlistContainsMaximumNumberOfVideos"),
+        (403, "forbidden"), (403, "rateLimitExceeded"), (403, "insufficientPermissions"), (400, "invalidArgument"), (404, "videoNotFound"), (409, "playlistContainsMaximumNumberOfVideos"),
     ])
     func otherErrorsMapToTheHTTPStatus(status: Int, reason: String) async throws {
         let rig = Rig()

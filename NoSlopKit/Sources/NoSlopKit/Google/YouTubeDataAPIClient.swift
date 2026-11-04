@@ -6,8 +6,10 @@ import Foundation
 /// and refresh). When the API answers 401, the token is refreshed once and the request is repeated once; a second 401
 /// is reported as `.http(status: 401)`.
 ///
-/// Errors: `reason` `quotaExceeded` or `dailyLimitExceeded` in the error body maps to `.quotaExceeded`; no
-/// credentials map to `.notSignedIn`; anything else non-2xx maps to `.http(status:)`; transport errors pass through.
+/// Errors: `reason` `quotaExceeded` or `dailyLimitExceeded` in the error body maps to `.quotaExceeded`;
+/// `accessNotConfigured` or `SERVICE_DISABLED` (the YouTube Data API is not enabled for the Google project) to
+/// `.dataAPINotEnabled`; no credentials map to `.notSignedIn`; anything else non-2xx maps to `.http(status:)`;
+/// transport errors pass through.
 public struct YouTubeDataAPIClient: YouTubeAccountService {
     private static let baseURL = "https://www.googleapis.com/youtube/v3/"
     private static let pageSize = "50"
@@ -78,15 +80,52 @@ public struct YouTubeDataAPIClient: YouTubeAccountService {
     }
 
     /// One page of a playlist's videos (private and deleted ones left out). `continuation` is the next page token.
+    ///
+    /// A playlist item carries no length, so the page's videos are looked up with one more request (`videos.list`, one
+    /// quota unit for up to 50 ids). That gives the rows their duration, and lets `GoogleDataAPIMapper.isShort` tell
+    /// the Shorts. When that lookup fails the page is returned without lengths rather than not at all.
     public func playlistItems(playlistID: String, pageToken: String?) async throws -> Page<VideoSummary> {
         let page = try await json(
             path: "playlistItems",
             query: [("part", "snippet,contentDetails"), ("playlistId", playlistID), ("maxResults", Self.pageSize)] + Self.pageTokenItem(pageToken)
         )
-        return Page(items: (page["items"]?.array ?? []).compactMap(GoogleDataAPIMapper.playlistItemVideo), continuation: Self.nextPageToken(in: page))
+        let videos = (page["items"]?.array ?? []).compactMap(GoogleDataAPIMapper.playlistItemVideo)
+        return Page(items: try await withLengths(videos), continuation: Self.nextPageToken(in: page))
     }
 
+    /// `videos` with the length and the Short flag of every one YouTube knows a length for.
+    private func withLengths(_ videos: [VideoSummary]) async throws -> [VideoSummary] {
+        guard !videos.isEmpty else { return videos }
+        let lengths: [String: Int]
+        do {
+            lengths = try await durations(videoIDs: videos.map(\.id))
+        } catch NoSlopError.cancelled {
+            throw NoSlopError.cancelled
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            return videos  // the lengths are a bonus: the quota ran out, the network dropped, or the session ended
+        }
+        return videos.map { video in
+            guard let seconds = lengths[video.id] else { return video }
+            var video = video
+            video.durationSeconds = seconds
+            video.isShort = GoogleDataAPIMapper.isShort(durationSeconds: seconds)
+            return video
+        }
+    }
+
+    /// Adds the video to the playlist, unless it is already in it, so the call is idempotent like `subscribe`.
+    ///
+    /// The Data API does not refuse a duplicate: it puts the video into the playlist a second time, and the app has
+    /// no way to take it out again. So one look comes first (`playlistItems.list` filtered by video, one quota unit).
+    /// A look that fails fails the call, nothing is added then: a duplicate is the worse outcome.
     public func addToPlaylist(videoID: String, playlistID: String) async throws {
+        let existing = try await json(
+            path: "playlistItems",
+            query: [("part", "id"), ("playlistId", playlistID), ("videoId", videoID), ("maxResults", "1")]
+        )
+        if !(existing["items"]?.array ?? []).isEmpty { return }
         let payload: JSON = ["snippet": ["playlistId": .string(playlistID), "resourceId": ["kind": "youtube#video", "videoId": .string(videoID)]]]
         try await expectSuccess(method: "POST", path: "playlistItems", query: [("part", "snippet")], body: try payload.data())
     }
@@ -230,6 +269,11 @@ public struct YouTubeDataAPIClient: YouTubeAccountService {
         let reasons = errorReasons(in: data)
         if reasons.contains("quotaExceeded") || reasons.contains("dailyLimitExceeded") {
             return .quotaExceeded
+        }
+        // The Google project never enabled the YouTube Data API (or did a moment ago): the sign-in works without it,
+        // so this 403 is the first thing the owner sees, and it names the reason twice (`errors[]` and `details[]`).
+        if reasons.contains("accessNotConfigured") || reasons.contains("SERVICE_DISABLED") {
+            return .dataAPINotEnabled
         }
         return .http(status: status)
     }
