@@ -32,6 +32,9 @@ import SwiftUI
 /// - `-searchScroll <points>`: the Search tab's scroll view (results, recents, suggestions) scrolls down by that much,
 ///   once, a moment after it shows while no expanded player covers it. `-searchScroll end` scrolls it to its very end,
 ///   which also works for a `List` (it goes through UIKit's scroll view) and keeps the room the content margins leave.
+/// - `-captionStyle '<parts>'`: the captions are drawn with a caption style as if the viewer had chosen it in Settings
+///   > Accessibility > Subtitles & Captioning, for example `-captionStyle 'size=2;text=yellow;background=clear;edge=shadow'`
+///   (see `CaptionAppearance`).
 enum DebugLaunchHooks {
     private static var isPrepared = false
     private static var isSearchTextTaken = false

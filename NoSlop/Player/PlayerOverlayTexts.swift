@@ -56,18 +56,28 @@ struct PlayerOverlayTexts: View {
     let isFullscreen: Bool
     let undo: () -> Void
 
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
     var body: some View {
+        // The viewer's caption style and text size: they decide how tall a caption is, so what fits between the controls.
+        // Reading the store here redraws the captions when the style is changed in Settings meanwhile.
+        let style = CaptionStyle(
+            appearance: CaptionAppearanceStore.shared.appearance,
+            dynamicTypeScale: CaptionStyle.dynamicTypeScale(for: dynamicTypeSize)
+        )
+
         GeometryReader { proxy in
             let plan = OverlayPlan(
                 height: proxy.size.height,
                 controls: controls,
                 isLarge: isFullscreen,
-                hasNotice: notice != nil
+                hasNotice: notice != nil,
+                captionStyle: style
             )
 
             ZStack(alignment: .top) {
                 if let caption, let slot = plan.caption {
-                    FittingCaptionView(text: caption, isLarge: isFullscreen)
+                    FittingCaptionView(text: caption, isLarge: isFullscreen, style: style)
                         .frame(maxWidth: .infinity)
                         .frame(height: slot.height, alignment: slot.alignment)
                         .offset(y: slot.top)
@@ -110,7 +120,7 @@ private struct OverlayPlan {
     var notice: Slot?
     var caption: Slot?
 
-    init(height: CGFloat, controls: ControlsFootprint?, isLarge: Bool, hasNotice: Bool) {
+    init(height: CGFloat, controls: ControlsFootprint?, isLarge: Bool, hasNotice: Bool, captionStyle: CaptionStyle) {
         let noticeHeight = SkipNoticeView.height
 
         guard let controls else {
@@ -133,7 +143,7 @@ private struct OverlayPlan {
         notice = noticeSlot
 
         let upperIsFree = !(hasNotice && noticeSlot != nil)
-        let roomyLower = lower.height >= CaptionOverlayView.height(lines: 2, size: .regular, isLarge: isLarge)
+        let roomyLower = lower.height >= CaptionOverlayView.height(lines: 2, size: .regular, isLarge: isLarge, style: captionStyle)
         if roomyLower || !upperIsFree || lower.height >= upper.height {
             caption = lower
         } else {
