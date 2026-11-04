@@ -86,7 +86,8 @@ final class PlayerController {
     private(set) var isPictureInPicturePossible = false
     /// Playing a downloaded audio-only file: there is no picture, the thumbnail stays up.
     private(set) var isAudioOnlyPlayback = false
-    /// A live stream: no duration, no scrubbing.
+    /// A live stream: no duration, no scrubbing. The copy of the video the player was opened with sets it first; the
+    /// resolved stream has the last word (see `accept`).
     private(set) var isLive = false
     /// The first frame has played at least once for this video (until then the thumbnail is shown as a poster).
     private(set) var hasStartedPlayback = false
@@ -231,7 +232,8 @@ final class PlayerController {
     // MARK: Loading
 
     /// Starts `video` (resuming at `startAt` or the saved position) and expands the player. `queue` plays afterwards.
-    /// Opening the video that is already loaded only expands the player (and seeks when `startAt` is given).
+    /// Opening the video that is already loaded only expands the player (and seeks when `startAt` is given); after a
+    /// failure it starts over, keeping what the watch page published for it (see `start`).
     func open(_ video: VideoSummary, startAt: Double?, queue: [VideoSummary]) {
         if let current = currentVideo, current.id == video.id, canReuseCurrentPlayback {
             self.queue = queue
@@ -260,7 +262,8 @@ final class PlayerController {
     }
 
     /// The related videos the watch page found, for autoplay once the queue is empty. The watch page calls this only
-    /// while it is on screen; it replaces whatever list autoplay carried over (see `start`).
+    /// while it is on screen; it replaces whatever list autoplay carried over, and a restart of the same video keeps
+    /// it (see `start`).
     func setUpNext(_ videos: [VideoSummary]) {
         upNext = videos
     }
@@ -268,6 +271,11 @@ final class PlayerController {
     /// Starts `video`. A video opened from outside starts with an empty up-next list (the watch page fills it); when
     /// autoplay moves on by itself, `upNext` is what remains of the list, so it can keep going with the player minimized
     /// and no watch page to hand over the next list.
+    ///
+    /// Starting the video that is already current (a link to it opened from the error screen, a queue that repeats it)
+    /// keeps the chapters and the up-next list the watch page published for it. They belong to the video, not to the
+    /// item, and the page, still on screen, publishes them only once. `close` forgets them, so a video opened after
+    /// that is published afresh.
     private func start(
         _ video: VideoSummary,
         startAt: Double?,
@@ -282,15 +290,20 @@ final class PlayerController {
         generation += 1
         let token = generation
 
+        let isSameVideo = currentVideo?.id == video.id
         currentVideo = video
         self.queue = queue
-        self.upNext = upNext
+        if !(isSameVideo && upNext.isEmpty) {
+            self.upNext = upNext
+        }
         streamInfo = nil
         currentTime = max(0, startAt ?? 0)
         duration = Double(video.durationSeconds ?? 0)
         bufferedTime = 0
         segments = []
-        chapters = []
+        if !isSameVideo {
+            chapters = []
+        }
         skipNotice = nil
         captionText = nil
         isPlayingOffline = false
@@ -338,6 +351,12 @@ final class PlayerController {
         if let local = localSource(for: video.id) {
             isPlayingOffline = true
             isAudioOnlyPlayback = local.isAudioOnly
+            // A download is never live, whatever the copy of the video it was opened from says, and offline there is no
+            // stream info to correct it.
+            isLive = false
+            if let current = currentVideo, current.isLive || current.isUpcoming {
+                currentVideo = current.settingLiveState(to: false)
+            }
             Self.log.info("playing the download of \(video.id, privacy: .public)")
             attach(AVPlayerItem(url: local.url))
             loadStreamInfoForOfflinePlayback(of: video.id, token: token)
@@ -412,10 +431,15 @@ final class PlayerController {
 
     /// Takes over the facts of the resolved stream: expiry, length, live, and the title and channel when the video
     /// was opened from a bare link.
+    ///
+    /// The stream is the truth about live and upcoming; the copy of the video the player was opened with, made earlier
+    /// by a list, is not. A card saved while a broadcast was live says so long after it became an ordinary video, and
+    /// would play without a scrubber, without a place in the history and with the lock screen announcing a live stream.
+    /// The copy that goes to the history and to the lock screen is corrected as well.
     private func accept(_ info: StreamInfo) {
         streamInfo = info
+        isLive = info.isLive
         if info.isLive {
-            isLive = true
             pendingStart = 0
         }
         if duration <= 0, info.lengthSeconds > 0 {
@@ -423,6 +447,10 @@ final class PlayerController {
         }
         guard var video = currentVideo, video.id == info.videoID else { return }
         var changed = false
+        if video.isLive != info.isLive || video.isUpcoming {
+            video = video.settingLiveState(to: info.isLive)
+            changed = true
+        }
         if video.title.isEmpty, !info.title.isEmpty {
             video.title = info.title
             changed = true

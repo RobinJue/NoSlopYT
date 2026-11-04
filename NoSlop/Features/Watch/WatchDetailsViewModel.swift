@@ -53,7 +53,9 @@ final class WatchDetailsViewModel {
         if result.publishedText == nil {
             result.publishedText = details.relativeDateText
         }
-        result.isLive = result.isLive || details.isLive
+        // The details are newer than the card the page was opened from: a broadcast saved while it was live is an
+        // ordinary video now, and saving it again must not write the old flag back.
+        result.isLive = details.isLive
         return result
     }
 
