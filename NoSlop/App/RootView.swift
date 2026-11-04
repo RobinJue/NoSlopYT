@@ -54,6 +54,7 @@ struct RootView: View {
         }
         #if DEBUG
         .task {
+            AccessibilityDump.runIfRequested()
             await LaunchURLArgument.openAll(in: env)
         }
         #endif

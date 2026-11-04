@@ -45,6 +45,13 @@ private struct WatchDetailsContent: View {
             .padding(.bottom, 24)
         }
         .scrollBounceBehavior(.basedOnSize)
+        #if DEBUG
+        .debugWatchPageSteps(
+            isLoaded: debugIsLoaded,
+            isTitleExpanded: $isTitleExpanded,
+            isShowingComments: $isShowingComments
+        )
+        #endif
         .task { await model.load(using: env) }
         .task(id: env.googleAccount?.id) { await model.loadRating(using: env) }
         .sheet(isPresented: $isShowingComments) {
@@ -83,6 +90,13 @@ private struct WatchDetailsContent: View {
             Text(model.ratingFailure ?? "")
         }
     }
+
+    #if DEBUG
+    private var debugIsLoaded: Bool {
+        if case .loaded = model.phase { return true }
+        return false
+    }
+    #endif
 
     // MARK: Title
 
@@ -427,6 +441,52 @@ extension View {
     /// than the Rick Astley one. Compiled out of Release builds.
     func debugWatchDetailsSheet() -> some View {
         modifier(DebugWatchDetailsModifier())
+    }
+}
+
+extension View {
+    /// Simulator checks: with the launch argument `-watchPage '<steps>'` the watch page scrolls, expands its title and
+    /// opens the Comments sheet by itself, once the page has loaded (see `DebugLaunchHooks`). Compiled out of Release
+    /// builds.
+    @ViewBuilder
+    fileprivate func debugWatchPageSteps(
+        isLoaded: Bool,
+        isTitleExpanded: Binding<Bool>,
+        isShowingComments: Binding<Bool>
+    ) -> some View {
+        if DebugLaunchHooks.watchPageSteps.isEmpty {
+            self
+        } else {
+            modifier(DebugWatchPageModifier(isLoaded: isLoaded, isTitleExpanded: isTitleExpanded, isShowingComments: isShowingComments))
+        }
+    }
+}
+
+private struct DebugWatchPageModifier: ViewModifier {
+    let isLoaded: Bool
+    @Binding var isTitleExpanded: Bool
+    @Binding var isShowingComments: Bool
+
+    @State private var position = ScrollPosition()
+
+    func body(content: Content) -> some View {
+        content
+            .scrollPosition($position)
+            .task(id: isLoaded) {
+                guard isLoaded else { return }
+                // Lists below the description are still being measured for a moment after the page has loaded.
+                try? await Task.sleep(for: .seconds(1.5))
+                if DebugLaunchHooks.takeWatchPageStep("title") != nil {
+                    isTitleExpanded = true
+                }
+                if let points = DebugLaunchHooks.takeWatchPageStep("scroll").flatMap(Double.init) {
+                    position.scrollTo(y: points)
+                }
+                if DebugLaunchHooks.takeWatchPageStep("comments") != nil {
+                    try? await Task.sleep(for: .seconds(1))
+                    isShowingComments = true
+                }
+            }
     }
 }
 

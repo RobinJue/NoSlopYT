@@ -1685,9 +1685,15 @@ extension PlayerController {
         item.select(nil, in: group)
     }
 
+    /// Adds a highlight (`poi_highlight`: a moment, start and end are the same second) to the loaded segments.
+    func debugAddHighlight(at time: Double) {
+        rawSegments.append(SponsorSegment(id: "debug-highlight-\(time)", category: .poiHighlight, actionType: .poi, start: time, end: time))
+        rebuildPlanner()
+    }
+
     /// Ends the video with the error screen, as a stream that cannot be played would.
-    func debugFail() {
-        fail(message: "Failed on purpose by the player script.")
+    func debugFail(message: String = "Failed on purpose by the player script.") {
+        fail(message: message)
     }
 
     /// Opens the video that is current once more, the way a link to it does.

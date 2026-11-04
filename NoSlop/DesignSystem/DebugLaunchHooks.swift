@@ -19,9 +19,20 @@ import SwiftUI
 /// - `-silentPlayback YES`: the player leaves the audio session alone and plays the picture without the sound. For a
 ///   Mac whose audio output does not answer: the simulator then waits 15 s for every audio session and audio queue it
 ///   starts, and playback fails with CoreMedia error -66681 after the first frame.
+/// - `-assistiveTechnology YES`: the player behaves as if VoiceOver were running (the simulator cannot run it): the
+///   controls stay on screen, skips are announced, the skip notice stays longer.
+/// - `-seedSearches <n>`: n recent searches ("Sample search 1" ...) in the library at launch, so the list of recents
+///   is longer than the screen.
+/// - `-watchPage '<steps>'`: once the watch page has loaded, `scroll=<points>` scrolls it, `title` expands the title,
+///   `description` expands the description and `comments` opens the Comments sheet, for example
+///   `-watchPage 'scroll=700;title;description'`. Each step runs once per launch, so a page that is built again
+///   starts from scratch: that is what the checks of rotation and full screen look for.
+/// - `-axDump '<seconds>,...'`: that long after launch, writes the accessibility elements VoiceOver would walk through
+///   to `<Documents>/ax-<seconds>.txt` (see `AccessibilityDump`).
 enum DebugLaunchHooks {
     private static var isPrepared = false
     private static var isSearchTextTaken = false
+    private static var takenWatchPageSteps: Set<String> = []
 
     static var scrollsToEnd: Bool {
         UserDefaults.standard.bool(forKey: "scrollToEnd")
@@ -30,6 +41,29 @@ enum DebugLaunchHooks {
     /// `-silentPlayback YES`: no audio session, no audio rendition.
     static var silentPlayback: Bool {
         UserDefaults.standard.bool(forKey: "silentPlayback")
+    }
+
+    /// `-assistiveTechnology YES`: act as if VoiceOver were running.
+    static var assistiveTechnology: Bool {
+        UserDefaults.standard.bool(forKey: "assistiveTechnology")
+    }
+
+    /// The steps of `-watchPage`, by name (`scroll` carries its value, the others an empty string).
+    static var watchPageSteps: [String: String] {
+        guard let argument = UserDefaults.standard.string(forKey: "watchPage") else { return [:] }
+        var steps: [String: String] = [:]
+        for step in argument.split(separator: ";") {
+            let parts = step.split(separator: "=", maxSplits: 1).map { $0.trimmingCharacters(in: .whitespaces) }
+            if let name = parts.first { steps[name] = parts.count > 1 ? parts[1] : "" }
+        }
+        return steps
+    }
+
+    /// The value of the `-watchPage` step `name` the first time it is asked for in this launch; nil afterwards and when
+    /// the argument has no such step.
+    static func takeWatchPageStep(_ name: String) -> String? {
+        guard let value = watchPageSteps[name], takenWatchPageSteps.insert(name).inserted else { return nil }
+        return value
     }
 
     /// How long the mock stream resolver takes: `-streamDelay`, else its usual 0.3 s.
@@ -55,6 +89,14 @@ enum DebugLaunchHooks {
                 env.library.subscribe(
                     SubscribedChannel(id: channel.id, name: channel.name, avatarURL: channel.avatarURL, source: .local, subscribedAt: Date())
                 )
+            }
+        }
+
+        let seededSearches = defaults.integer(forKey: "seedSearches")
+        if seededSearches > 0 {
+            // The newest is first, so record them from the last to the first.
+            for number in stride(from: seededSearches, through: 1, by: -1) {
+                env.library.recordSearch("Sample search \(number)")
             }
         }
 

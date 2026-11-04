@@ -13,7 +13,12 @@ struct DescriptionView: View {
     let description: AttributedDescription
 
     @Environment(AppEnvironment.self) private var env
+    #if DEBUG
+    /// `-watchPage 'description'` (simulator checks): the first description of the launch starts expanded.
+    @State private var isExpanded = DebugLaunchHooks.takeWatchPageStep("description") != nil
+    #else
     @State private var isExpanded = false
+    #endif
 
     var body: some View {
         if description.text.isEmpty {
