@@ -156,11 +156,15 @@ and by running it with the mock services (next section).
   refuses, the app fetches a fresh token and tries once more before it shows the message.
 - **Downloads** are plain H.264 video and AAC audio files fetched with HTTP Range requests of 10 MiB each, one
   `URLSession` task per chunk on a background session: a single long request is throttled to a crawl, ranges run at
-  full speed, and the chunks keep arriving while the app is suspended or was killed. Video and audio are then muxed
-  on the device with `AVMutableComposition` and a passthrough `AVAssetExportSession`, nothing is re-encoded.
-  AVFoundation reports twice the real length for YouTube's fragmented MP4 files, so both tracks are cut to the true
-  duration (the format's `approxDurationMs`, else the video's length), for audio-only downloads too. A half-written
-  file never counts as finished. Merging needs room for a second copy of the video.
+  full speed, and the chunks keep arriving while the app is in the background or has been ended by the system. If you
+  swipe the app away in the app switcher, iOS cancels the transfers and does not start the app again, so nothing
+  downloads until you open it (see Troubleshooting). Video and audio are then muxed on the device with
+  `AVMutableComposition` and a passthrough `AVAssetExportSession`, nothing is re-encoded; at most two exports run at
+  a time, however many downloads finish together. AVFoundation reports twice the real length for YouTube's
+  fragmented MP4 files, so both tracks are cut to the true duration (the format's `approxDurationMs`, else the
+  video's length), for audio-only downloads too. A half-written file never counts as finished. Merging needs room
+  for a second copy of the video. A download that fails keeps what it fetched, and so does a merge that the system
+  interrupted: Retry only fetches or merges what is missing.
 - **SponsorBlock and DeArrow** are asked the privacy-preserving way: the app sends only the first 4 hex characters
   of the SHA-256 of the video ID to `sponsor.ajay.app`, the server answers for every video that shares that prefix,
   and the app keeps the entry for its own video. The server never learns what you watch.
@@ -213,7 +217,12 @@ shows a plain "Can't open this link" message.
 - **Playback stops after a long pause or a lost connection.** The app re-resolves the stream and resumes; if that
   fails twice it shows the error with a Retry button.
 - **A download failed or is paused.** Tap Retry: it asks YouTube for fresh stream addresses and reuses the parts
-  that are still good. A nearly full device cannot merge a download.
+  that are still good, so only what is missing is fetched again. When a stream address stops working (it expired, or
+  the phone left the Wi-Fi it was made for), the app asks YouTube for new ones by itself once before it gives up.
+  A nearly full device cannot merge a download.
+- **A download stopped after you swiped the app away.** iOS cancels the background transfers of an app that was
+  force-quit and does not start it again. Open No Slop: the parts that were already fetched are kept, and if the row
+  says Paused, tap Retry.
 - **Lists are empty, videos do not load, or everything fails after a while.** YouTube's web API is unofficial and
   changes. The client versions the app presents itself with live in
   `NoSlopKit/Sources/NoSlopKit/InnerTube/ClientProfile.swift` (`ClientProfile.web` and `ClientProfile.visionOS`:

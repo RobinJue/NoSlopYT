@@ -7,15 +7,22 @@ import UIKit
 /// Chunked background downloads with duration-clamped muxing, and the list of downloaded videos.
 ///
 /// A download is a list of 10 MiB HTTP Range requests, one URLSession task each, on a background session: they keep
-/// going while the app is suspended or killed, and the system relaunches the app to say they are done. Finished
-/// chunks land in `<root>/.work/<item id>/`; when all are there the manager concatenates them per stream, muxes video
-/// and audio into one file whose tracks are cut to the true duration (see `MediaMuxer`), and moves it into
-/// `<root>`. A half-written file is never marked completed: every file appears under its final name only when it is
-/// whole.
+/// going while the app is suspended or the system has ended it, and the system relaunches the app to say they are
+/// done. A person who swipes the app away in the app switcher is different: iOS cancels the transfers of a force-quit
+/// app and does not relaunch it, so nothing downloads until the app is opened again, and those items come back
+/// `.paused`. Finished chunks land in `<root>/.work/<item id>/`; when all are there the manager concatenates them per
+/// stream, muxes video and audio into one file whose tracks are cut to the true duration (see `MediaMuxer`), and
+/// moves it into `<root>`. A half-written file is never marked completed: every file appears under its final name
+/// only when it is whole.
 ///
 /// Persistence: the list lives in `<root>/downloads.json`. Items that were in flight when the app last ran come
 /// back `.paused` (their tasks are gone or unknown); the session is then asked what it kept, and those items pick up
 /// where they were. `retry` asks YouTube for fresh stream URLs and reuses parts that are still valid.
+///
+/// A failed download keeps what it fetched, so a retry only fetches what is missing: the chunks that finished, and
+/// the concatenated streams of a merge that was interrupted. Only a download that is proven bad (an unreadable stream,
+/// a video YouTube no longer offers) is thrown away. A stream address that stops working (it expired, or it was made
+/// for an IP address the phone has left) is replaced once, automatically.
 @MainActor
 @Observable
 public final class DownloadManager {
@@ -38,6 +45,10 @@ public final class DownloadManager {
     /// fetched), kept until it fails, is cancelled or deleted, or is started again. Finished items of an earlier launch
     /// are not in it; `streamsToday(of:info:)` works those out again.
     @ObservationIgnored private var chosenStreams: [String: DownloadStreams] = [:]
+    /// Items whose stream addresses were already replaced once, automatically, since the person last started them: a
+    /// second dead address is a failure to show, not a loop. Cleared when the item is started by hand, fails, is
+    /// cancelled or deleted, or finishes.
+    @ObservationIgnored private var refreshedLinks: Set<String> = []
 
     /// - Parameter sessionConfiguration: nil means the background configuration with the global session id.
     public convenience init(rootDirectory: URL, streams: any StreamResolving, sessionConfiguration: URLSessionConfiguration? = nil) {
@@ -203,27 +214,45 @@ public final class DownloadManager {
     }
 
     /// Begins (or begins again) the item: resolve fresh stream URLs, plan, prepare the directory, start the tasks.
-    private func start(_ id: String) {
+    /// `refreshingLinks` is the item's own restart after its stream addresses stopped working (see `refreshLinks`).
+    private func start(_ id: String, refreshingLinks: Bool = false) {
         if let previous = starts.removeValue(forKey: id) { previous.task.cancel() }
         if let stale = jobs.removeValue(forKey: id) { stale.assembly?.cancel() }
         reservedNames.removeValue(forKey: id)
         // It picks its streams again, from fresh stream info.
         chosenStreams.removeValue(forKey: id)
+        // A start the person asked for gets an automatic refresh of its own.
+        if !refreshingLinks { refreshedLinks.remove(id) }
 
         update(id) { item in
             item.state = .queued
-            item.progress = 0
-            item.bytesDownloaded = 0
-            item.bytesTotal = nil
+            if !refreshingLinks {
+                // A refresh picks up where the item was, so its bar does not drop to zero for a moment.
+                item.progress = 0
+                item.bytesDownloaded = 0
+                item.bytesTotal = nil
+            }
             item.relativeFilePath = nil
             item.errorMessage = nil
         }
         let generation = UUID()
         let task = Task { [weak self] in
             guard let self else { return }
+            // New addresses may be needed while the app is in the background (the phone left its Wi-Fi): the lookup has to
+            // finish before iOS suspends the app again.
+            let extraTime = refreshingLinks ? BackgroundTime(name: "No Slop refresh links") : nil
+            defer { extraTime?.end() }
             await run(id, generation: generation)
         }
         starts[id] = DownloadStart(generation: generation, task: task)
+    }
+
+    /// The stream addresses of a running item stopped working: starts it over with fresh ones, once. The chunks that
+    /// are on disk stay, so only the missing ones are fetched again.
+    private func refreshLinks(of id: String) {
+        teardown(id, keepingWork: true)
+        refreshedLinks.insert(id)
+        start(id, refreshingLinks: true)
     }
 
     private func run(_ id: String, generation: UUID) async {
@@ -422,10 +451,20 @@ public final class DownloadManager {
                   let chunk = job.plan.chunk(for: descriptor), !job.done.contains(descriptor)
             else { return }
             job.inFlightBytes = inFlight
+            jobs[itemID] = job
+
+            // An address that no longer works answers every chunk the same way (a phone that moves from its Wi-Fi to
+            // the mobile network makes all of them 403), and asking it again changes nothing: ask YouTube for new ones,
+            // once, and carry on with the chunks that are missing.
+            if failure.isDeadLink, !refreshedLinks.contains(itemID) {
+                refreshLinks(of: itemID)
+                return
+            }
+
             let used = job.retries[descriptor, default: 0]
             guard failure != .outOfSpace, used < tuning.maxChunkRetries else {
-                jobs[itemID] = job
-                fail(itemID, error: failure)
+                // What was fetched stays: the retry gets fresh addresses and fetches only what is missing.
+                fail(itemID, error: failure, keepingWork: true)
                 return
             }
             job.retries[descriptor] = used + 1
@@ -545,19 +584,22 @@ public final class DownloadManager {
         guard let item = items.first(where: { $0.id == id }), var job = jobs[id], job.assembly == nil else { return }
         let plan = job.plan
         let workspace = workspace
+        let mux = tuning.mux
         let destination = reserveDestination(for: item, plan: plan)
         let generation = job.generation
 
         job.destination = destination
         job.assembly = Task { [weak self] in
             // A download that finishes while the app is suspended is merged right then, on borrowed time.
-            let extraTime = MergeBackgroundTime(name: "No Slop merge")
+            let extraTime = BackgroundTime(name: "No Slop merge")
             defer { extraTime.end() }
             do {
-                let size = try await DownloadAssembler.assemble(plan: plan, workspace: workspace, destination: destination)
+                let size = try await DownloadAssembler.assemble(plan: plan, workspace: workspace, destination: destination, mux: mux)
                 self?.assemblyFinished(id, generation: generation, destination: destination, size: size)
             } catch {
-                self?.assemblyFailed(id, generation: generation, destination: destination, error: error)
+                self?.assemblyFailed(
+                    id, generation: generation, destination: destination, error: error, backgroundTimeRanOut: extraTime.expired
+                )
             }
         }
         jobs[id] = job
@@ -577,6 +619,7 @@ public final class DownloadManager {
         }
         jobs.removeValue(forKey: id)
         reservedNames.removeValue(forKey: id)
+        refreshedLinks.remove(id)
         workspace.discard(itemID: id)
         update(id) { item in
             item.state = .completed
@@ -588,11 +631,20 @@ public final class DownloadManager {
         }
     }
 
-    private func assemblyFailed(_ id: String, generation: UUID, destination: URL, error: any Error) {
+    private func assemblyFailed(_ id: String, generation: UUID, destination: URL, error: any Error, backgroundTimeRanOut: Bool) {
         guard jobs[id]?.generation == generation else { return }
         if error is CancellationError { return }
         try? FileManager.default.removeItem(at: destination)
-        fail(id, error: error)
+        fail(id, error: error, keepingWork: Self.keepsStreams(afterMergeFailure: error, backgroundTimeRanOut: backgroundTimeRanOut))
+    }
+
+    /// Whether the downloaded streams are worth keeping after the merge failed with `error`. They are, unless the merge
+    /// showed the files themselves to be bad (a stream that cannot be read, has no track, or is empty): then a retry
+    /// has to download them again. A failure that says nothing about the files (the export was interrupted, the disk was
+    /// full or could not be written, a part went missing) keeps them, so the retry only merges again. So does any
+    /// failure after iOS ended the extra background time: the app was about to be suspended in the middle of the merge.
+    nonisolated static func keepsStreams(afterMergeFailure error: any Error, backgroundTimeRanOut: Bool) -> Bool {
+        backgroundTimeRanOut || DownloadFailure.from(error).keepsDownloadedData
     }
 
     /// A file name for the finished download: "<title> [<id>].mp4", then with the quality, then numbered, so that two
@@ -616,9 +668,10 @@ public final class DownloadManager {
     // MARK: - Failing and stopping
 
     /// Stops everything for the item, removes its work directory (unless `keepingWork`) and shows why it failed.
-    /// A full disk is not the download's fault: what was fetched stays, and a retry after making room carries on.
+    /// A full disk, or a merge the system interrupted, is not the download's fault: what was fetched stays, and a
+    /// retry after making room carries on.
     private func fail(_ id: String, error: any Error, keepingWork: Bool = false) {
-        teardown(id, keepingWork: keepingWork || (error as? DownloadFailure) == .outOfSpace)
+        teardown(id, keepingWork: keepingWork || (error as? DownloadFailure)?.keepsDownloadedData == true)
         let message = Self.message(for: error)
         update(id) { item in
             item.state = .failed
@@ -638,6 +691,7 @@ public final class DownloadManager {
         }
         reservedNames.removeValue(forKey: id)
         chosenStreams.removeValue(forKey: id)
+        refreshedLinks.remove(id)
         engine.cancelTasks(itemID: id)
         let engine = engine
         Task { await engine.cancelInheritedTasks(itemID: id) }
@@ -676,14 +730,18 @@ public final class DownloadManager {
 // MARK: - Background time
 
 #if canImport(UIKit) && !os(watchOS)
-/// Asks iOS for a little more running time while a merge is in progress, so a download that completes while the
-/// app is in the background is finished before the app is suspended again.
+/// Asks iOS for a little more running time while a merge (or a refresh of stream addresses) is in progress, so a
+/// download that completes while the app is in the background is finished before the app is suspended again.
 @MainActor
-private final class MergeBackgroundTime {
+private final class BackgroundTime {
     private var identifier = UIBackgroundTaskIdentifier.invalid
+    /// True once iOS said the time is up: the app is about to be suspended, so whatever fails after that did not fail
+    /// because of the files.
+    private(set) var expired = false
 
     init(name: String) {
         identifier = UIApplication.shared.beginBackgroundTask(withName: name) { [weak self] in
+            self?.expired = true
             self?.end()
         }
     }
@@ -696,7 +754,9 @@ private final class MergeBackgroundTime {
 }
 #else
 @MainActor
-private final class MergeBackgroundTime {
+private final class BackgroundTime {
+    let expired = false
+
     init(name: String) {}
     func end() {}
 }

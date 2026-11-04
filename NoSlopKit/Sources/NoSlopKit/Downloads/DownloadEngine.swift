@@ -31,6 +31,9 @@ enum DownloadFailure: Error, Equatable, Sendable, LocalizedError {
     case outOfSpace
     case fileSystem(String)
     case mergeFailed(String)
+    /// The system cut the merge short (the app was suspended in the middle of it, media services were reset). Nothing
+    /// is wrong with the downloaded files, so they are kept for the retry.
+    case mergeInterrupted
     case missingParts
 
     var errorDescription: String? {
@@ -59,8 +62,28 @@ enum DownloadFailure: Error, Equatable, Sendable, LocalizedError {
             return "Couldn't save the download to disk."
         case .mergeFailed:
             return "Couldn't combine the video and audio."
+        case .mergeInterrupted:
+            return "Interrupted while combining the video and audio. Retry to finish."
         case .missingParts:
             return "Some downloaded pieces are missing."
+        }
+    }
+
+    /// True when the stream address itself has stopped working, as opposed to the server being busy: 403 is what an
+    /// expired link, or one made for an IP address the phone has since left, is answered with, and 410 says it is gone.
+    /// Asking YouTube for a new address can help; asking the same address again cannot.
+    var isDeadLink: Bool {
+        if case .http(let status) = self { return status == 403 || status == 410 }
+        return false
+    }
+
+    /// Whether what is already on disk is still worth keeping after the download failed like this: a full disk, a merge
+    /// that was interrupted, a disk that could not be written, parts that went missing. None of these says anything
+    /// against the downloaded data, and a retry carries on from it.
+    var keepsDownloadedData: Bool {
+        switch self {
+        case .outOfSpace, .mergeInterrupted, .fileSystem, .missingParts: return true
+        default: return false
         }
     }
 
@@ -68,6 +91,7 @@ enum DownloadFailure: Error, Equatable, Sendable, LocalizedError {
     static func from(_ error: any Error) -> DownloadFailure {
         if let failure = error as? DownloadFailure { return failure }
         if isOutOfSpace(error) { return .outOfSpace }
+        if isInterrupted(error) { return .mergeInterrupted }
         let ns = error as NSError
         if ns.domain == NSURLErrorDomain {
             // URLSession reports a file it cannot write in its own domain; that is the disk's problem, not the network's.
@@ -98,6 +122,25 @@ enum DownloadFailure: Error, Equatable, Sendable, LocalizedError {
         }
         return false
     }
+
+    /// AVFoundation's codes for "the system cut this short": operation interrupted (-11847), session was interrupted
+    /// (-11818), media services were reset (-11819), and decoder / encoder temporarily unavailable (-11839, -11840).
+    /// They are compared as numbers because the first three exist on iOS only: the macOS build the tests run on has no
+    /// names for them.
+    private static let interruptionCodes: Set<Int> = [-11847, -11818, -11819, -11839, -11840]
+
+    /// True when `error`, or an error it wraps, is one of `interruptionCodes`: the system stopped the merge (an app that
+    /// is suspended in the middle of an export is the usual cause), the files are not at fault. The walk is bounded.
+    static func isInterrupted(_ error: any Error) -> Bool {
+        var current: NSError? = error as NSError
+        var depth = 0
+        while let ns = current, depth < 8 {
+            if ns.domain == "AVFoundationErrorDomain" && interruptionCodes.contains(ns.code) { return true }
+            current = ns.userInfo[NSUnderlyingErrorKey] as? NSError
+            depth += 1
+        }
+        return false
+    }
 }
 
 // MARK: - Tuning
@@ -112,9 +155,17 @@ struct DownloadTuning: Sendable {
     var retryDelay: Duration = .milliseconds(400)
     /// At most one progress update per item per this many seconds.
     var progressInterval: TimeInterval = 0.25
+    /// Combines the downloaded streams into one file. Tests replace it to make merges fail (or wait) the way they can on
+    /// a device.
+    var mux: DownloadMuxer = { videoFile, audioFile, durationSeconds, output in
+        try await MediaMuxer.mux(videoFile: videoFile, audioFile: audioFile, durationSeconds: durationSeconds, output: output)
+    }
 
     static let standard = DownloadTuning()
 }
+
+/// What combines a video file and an audio file into the finished file: `MediaMuxer.mux`, unless a test says otherwise.
+typealias DownloadMuxer = @Sendable (_ videoFile: URL?, _ audioFile: URL, _ durationSeconds: Double, _ output: URL) async throws -> Void
 
 // MARK: - Events
 
@@ -467,7 +518,12 @@ enum DownloadAssembler {
     /// Concatenates, muxes with the true duration and moves the result to `destination`. Returns its size.
     /// Cancellable; leaves the work directory for the caller to remove.
     @concurrent
-    static func assemble(plan: DownloadJobPlan, workspace: DownloadWorkspace, destination: URL) async throws -> Int64 {
+    static func assemble(
+        plan: DownloadJobPlan,
+        workspace: DownloadWorkspace,
+        destination: URL,
+        mux: DownloadMuxer = DownloadTuning.standard.mux
+    ) async throws -> Int64 {
         let fileManager = FileManager.default
         var videoFile: URL?
         var audioFile: URL?
@@ -479,7 +535,7 @@ enum DownloadAssembler {
         try Task.checkCancellation()
 
         let merged = workspace.directory(for: plan.itemID).appendingPathComponent("merged.\(plan.fileExtension)")
-        try await MediaMuxer.mux(videoFile: videoFile, audioFile: audioFile, durationSeconds: plan.durationSeconds, output: merged)
+        try await mux(videoFile, audioFile, plan.durationSeconds, merged)
         try Task.checkCancellation()
 
         guard let size = fileSize(merged), size > 0 else { throw DownloadFailure.mergeFailed("The merged file is empty.") }

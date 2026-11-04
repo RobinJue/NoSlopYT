@@ -161,4 +161,28 @@ import Testing
         let other = NSError(domain: AVFoundationErrorDomain, code: AVError.Code.exportFailed.rawValue, userInfo: [NSLocalizedDescriptionKey: "Export failed"])
         #expect(MediaMuxer.failure(forExportError: other) == .mergeFailed("Export failed"))
     }
+
+    @Test func anInterruptedExportIsNotAMergeFailure() {
+        // What AVFoundation reports when the system stops an export that is running, most of all when the app is
+        // suspended in the middle of it: operation interrupted, session was interrupted, media services were reset, and
+        // the decoder / encoder being temporarily unavailable. The files are fine, so the downloaded streams are kept and
+        // the retry only merges again. The codes are written as numbers: three of the names exist on iOS only.
+        for code in [-11847, -11818, -11819, -11839, -11840] {
+            let interrupted = NSError(domain: AVFoundationErrorDomain, code: code, userInfo: [NSLocalizedDescriptionKey: "Interrupted"])
+            #expect(MediaMuxer.failure(forExportError: interrupted) == .mergeInterrupted, "code \(code)")
+
+            // An export reports most things as "export failed" with the real cause underneath.
+            let wrapped = NSError(
+                domain: AVFoundationErrorDomain, code: AVError.Code.exportFailed.rawValue,
+                userInfo: [NSLocalizedDescriptionKey: "Export failed", NSUnderlyingErrorKey: interrupted]
+            )
+            #expect(MediaMuxer.failure(forExportError: wrapped) == .mergeInterrupted, "code \(code), as the cause")
+        }
+
+        // Errors about the files stay merge failures, and so does the same number in another domain.
+        let unreadable = NSError(domain: AVFoundationErrorDomain, code: -11829, userInfo: [NSLocalizedDescriptionKey: "Cannot Open"])
+        #expect(MediaMuxer.failure(forExportError: unreadable) == .mergeFailed("Cannot Open"))
+        let elsewhere = NSError(domain: NSCocoaErrorDomain, code: -11847, userInfo: [NSLocalizedDescriptionKey: "Not an AVFoundation error"])
+        #expect(MediaMuxer.failure(forExportError: elsewhere) == .mergeFailed("Not an AVFoundation error"))
+    }
 }

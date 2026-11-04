@@ -50,11 +50,17 @@ public enum MediaMuxer {
         }
     }
 
-    /// What a failed export means for the download. The export needs room for a second copy of the video, so a nearly
-    /// full device fails right here: that is not the files' fault, and reporting it as a full disk (not as a failed
-    /// merge) keeps the downloaded streams, so a retry after freeing space merges without downloading again.
+    /// What a failed export means for the download. Two things that are not the files' fault are told apart from a
+    /// merge that really failed, so that the downloaded streams are kept and a retry only has to merge again:
+    ///
+    /// - The export needs room for a second copy of the video, so a nearly full device fails right here. That is a full
+    ///   disk (`.outOfSpace`), not a failed merge.
+    /// - The system can stop an export that is in progress, most of all by suspending the app when its background time
+    ///   runs out. AVFoundation then reports an interruption (`.mergeInterrupted`).
     static func failure(forExportError error: any Error) -> DownloadFailure {
-        DownloadFailure.isOutOfSpace(error) ? .outOfSpace : .mergeFailed(error.localizedDescription)
+        if DownloadFailure.isOutOfSpace(error) { return .outOfSpace }
+        if DownloadFailure.isInterrupted(error) { return .mergeInterrupted }
+        return .mergeFailed(error.localizedDescription)
     }
 
     /// Adds the first track of `mediaType` in `file` to `composition`, at most `limit` long.
@@ -71,6 +77,8 @@ public enum MediaMuxer {
         do {
             tracks = try await asset.loadTracks(withMediaType: mediaType)
         } catch {
+            // Cut short by the system while the file was being read: the file may be perfectly good.
+            if DownloadFailure.isInterrupted(error) { throw DownloadFailure.mergeInterrupted }
             throw DownloadFailure.mergeFailed("The downloaded \(kind) can't be read (\(error.localizedDescription)).")
         }
         guard let source = tracks.first else {
