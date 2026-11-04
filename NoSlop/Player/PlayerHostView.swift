@@ -12,6 +12,16 @@ enum PlayerLayout {
     static func isLandscapePhone(verticalSizeClass: UserInterfaceSizeClass?) -> Bool {
         UIDevice.current.userInterfaceIdiom == .phone && verticalSizeClass == .compact
     }
+
+    /// The tab bar is at the top only for an iPad in a regular-width window. An iPhone has it at the bottom (a Plus or
+    /// Max held sideways is regular width too), and so does an iPad window of compact width: Slide Over, a narrow Split
+    /// View, a narrowed window.
+    static func tabBarIsAtTop(horizontalSizeClass: UserInterfaceSizeClass?) -> Bool {
+        MiniPlayerPlacement.tabBarIsAtTop(
+            isPad: UIDevice.current.userInterfaceIdiom == .pad,
+            isRegularWidth: horizontalSizeClass == .regular
+        )
+    }
 }
 
 /// The player itself: the video, its thumbnail until the first frame, captions, the controls, the "skipped sponsor"

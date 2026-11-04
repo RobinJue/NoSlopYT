@@ -6,9 +6,12 @@ import SwiftUI
 /// - Hidden: nothing, and touches go through.
 /// - Expanded: a full-screen panel over the tabs with the 16:9 player at the top (below the status bar) and the
 ///   watch details scrolling underneath. Dragging the player down by more than 120 pt, or the chevron, minimizes it.
+///   For VoiceOver the panel is a screen of its own: modal, with the tabs behind it hidden (`RootView`), and the
+///   two-finger scrub (escape) does what the chevron does.
 /// - Minimized: the mini player bar above the tab bar. Tapping it expands the panel again.
 /// - Full screen (the viewer asked, or an iPhone is held sideways): only the player, edge to edge on black, with the
-///   status bar and home indicator out of the way.
+///   status bar and home indicator out of the way. The watch details stay in the panel, without any height, so that
+///   they are where the viewer left them when full screen ends.
 struct PlayerOverlayContainer: View {
     @Environment(AppEnvironment.self) private var env
     @Environment(\.verticalSizeClass) private var verticalSizeClass
@@ -21,9 +24,6 @@ struct PlayerOverlayContainer: View {
     /// On a wide screen the player and the details share one centred column instead of a 1000 pt wide video. An iPad
     /// in portrait (834 pt and up) still gets the full width.
     private static let columnLimit: CGFloat = 900
-    /// Distance from the bottom safe area to the bottom of the mini player: the iOS 26 floating tab bar rises about 48 pt
-    /// above the safe area, and the mini player floats 10 pt above that.
-    private static let tabBarClearance: CGFloat = 58
     /// The floating tab bar is inset 21 pt from the screen edges; the mini player lines up with it.
     private static let miniPlayerInset: CGFloat = 20
 
@@ -82,12 +82,18 @@ struct PlayerOverlayContainer: View {
                     .frame(width: columnWidth, height: playerHeight)
                     .gesture(minimizeGesture(player), including: fullscreen ? .subviews : .all)
 
-                if !fullscreen {
-                    WatchDetailsView(video: video)
-                        .id(video.id)
-                        .frame(width: columnWidth)
-                        .ignoresSafeArea(edges: .bottom)
-                }
+                // Full screen only collapses the page: it stays in the view tree, without any height, so that turning
+                // the phone or tapping Full screen does not throw away how far the viewer had scrolled, the expanded
+                // title and description and an open Comments sheet (they live in the page's own state). The player
+                // is as tall as the panel then, so the two still add up to the whole of it.
+                WatchDetailsView(video: video)
+                    .id(video.id)
+                    .frame(width: columnWidth, height: fullscreen ? 0 : nil)
+                    .clipped()
+                    .opacity(fullscreen ? 0 : 1)
+                    .allowsHitTesting(!fullscreen)
+                    .accessibilityHidden(fullscreen)
+                    .ignoresSafeArea(edges: .bottom)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         }
@@ -98,6 +104,21 @@ struct PlayerOverlayContainer: View {
         .offset(y: dragOffset)
         .statusBarHidden(fullscreen)
         .persistentSystemOverlays(fullscreen ? .hidden : .automatic)
+        // For VoiceOver the panel is a screen of its own: it is modal (the tabs and the lists behind it, hidden by
+        // `RootView` as well, are not part of it), VoiceOver is moved into it when it appears, and the two-finger
+        // scrub (escape) leaves it the way the chevron does: full screen first, then the panel.
+        .accessibilityElement(children: .contain)
+        .accessibilityAddTraits(.isModal)
+        .accessibilityAction(.escape) {
+            if fullscreen {
+                player.toggleFullscreen()
+            } else {
+                player.minimize()
+            }
+        }
+        .onAppear {
+            AccessibilityNotification.ScreenChanged().post()
+        }
     }
 
     /// Drag the player down to minimize it. The panel follows the finger, then either flies down or springs back.
@@ -122,8 +143,10 @@ struct PlayerOverlayContainer: View {
     // MARK: Minimized
 
     private var minimizedBar: some View {
-        // On iPad the tab bar is at the top, so the bar sits near the bottom edge; on iPhone it clears the tab bar.
-        let clearance = UIDevice.current.userInterfaceIdiom == .pad ? 8 : Self.tabBarClearance
+        // With the tab bar at the top (an iPad in a regular-width window) the bar sits near the bottom edge; otherwise
+        // (an iPhone, also held sideways, and an iPad window of compact width) it clears the tab bar at the bottom.
+        let tabBarIsAtTop = PlayerLayout.tabBarIsAtTop(horizontalSizeClass: horizontalSizeClass)
+        let clearance = MiniPlayerPlacement.bottomClearance(tabBarIsAtTop: tabBarIsAtTop)
 
         return VStack(spacing: 0) {
             Spacer(minLength: 0)

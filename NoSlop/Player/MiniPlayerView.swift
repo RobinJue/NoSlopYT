@@ -8,6 +8,11 @@ struct MiniPlayerView: View {
 
     static let height: CGFloat = 64
     private static let cornerRadius: CGFloat = 16
+    /// The title and the channel stop following the viewer's text size here. The bar is a fixed 64 pt (what
+    /// `Theme.miniPlayerInset` and `MiniPlayerPlacement` are measured for), and two lines of accessibility-size text are
+    /// taller than that: they would be cut off at the top and the bottom. Up to here they fit, and the expanded player
+    /// shows the title at any size.
+    private static let largestTextSize = DynamicTypeSize.xxxLarge
 
     var body: some View {
         let player = env.player
@@ -103,6 +108,7 @@ struct MiniPlayerView: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        .dynamicTypeSize(...Self.largestTextSize)
     }
 
     private func progressLine(_ player: PlayerController) -> some View {
