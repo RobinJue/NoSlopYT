@@ -23,7 +23,7 @@ import UIKit
 /// - `systemPause`, `systemPlay` reach the `AVPlayer` directly, as the Picture in Picture window or an AirPlay remote
 ///   does, without `pause()` and `play()` of the controller
 /// - `fail` ends the video with the error screen (`failLong`: with the long reason YouTube gives for an age-restricted
-///   video), `retry` is its Retry button, `reopen` opens the current video again
+///   video; `failGone`: for a video YouTube will not hand out, whose screen has no Retry), `retry` is its Retry button, `reopen` opens the current video again
 ///   (a link to it), `openStaleLive=<video id>` opens a video whose saved copy still says live and upcoming (a row
 ///   of Watch Later after the broadcast ended)
 /// - `seek=<seconds>`, `seekEnd=<seconds before the end>`, `undo` (the skip notice's Undo)
@@ -114,6 +114,8 @@ enum PlayerDebugScript {
                     message: "This video may be inappropriate for some users. Sign in to confirm your age, or open it on YouTube "
                         + "in a browser where you are signed in. Videos like this one cannot be played in No Slop."
                 )
+            case "failGone":
+                player.debugFail(message: "This video is private.", isWorthRetrying: false)
             case "retry":
                 player.retry()
             case "reopen":

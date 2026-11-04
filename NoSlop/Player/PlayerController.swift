@@ -96,6 +96,9 @@ final class PlayerController {
     private(set) var betterTitle: String?
     /// Recovery is waiting for the device to come back online.
     private(set) var isWaitingForConnection = false
+    /// Whether the error screen offers Retry (`PlayerFailureAdvice`): not for a video YouTube will not hand out, where
+    /// asking again only brings the same message back. Only meaningful while the state is `.failed`.
+    private(set) var failureIsWorthRetrying = true
 
     var isFullscreen = false
 
@@ -381,6 +384,7 @@ final class PlayerController {
         isLive = video.isLive
         hasStartedPlayback = false
         isWaitingForConnection = false
+        failureIsWorthRetrying = true
         isRecovering = false
         forceStreaming = false
         recoveryAttempts = 0
@@ -763,7 +767,7 @@ final class PlayerController {
             recoveryAttempts += 1
             beginReload(at: at, waitForConnection: true)
         case .showError:
-            fail(message: failure.message)
+            fail(message: failure.message, isWorthRetrying: PlayerFailureAdvice.isWorthRetrying(failure))
         }
     }
 
@@ -803,14 +807,16 @@ final class PlayerController {
 
     private func fail(with error: any Error) {
         let message = (error as? LocalizedError)?.errorDescription ?? Self.classify(error: error, item: nil).message
-        fail(message: message)
+        fail(message: message, isWorthRetrying: PlayerFailureAdvice.isWorthRetrying(error, video: currentVideo))
     }
 
-    private func fail(message: String) {
+    /// Ends the video with the error screen. `isWorthRetrying` says whether that screen has a Retry button.
+    private func fail(message: String, isWorthRetrying: Bool = true) {
         Self.log.error("failed: \(message, privacy: .public)")
         stallTask?.cancel()
         isRecovering = false
         isWaitingForConnection = false
+        failureIsWorthRetrying = isWorthRetrying
         state = .failed(message)
         shouldPlayWhenReady = false
         saveProgress(force: true)
@@ -1878,9 +1884,10 @@ extension PlayerController {
         rebuildPlanner()
     }
 
-    /// Ends the video with the error screen, as a stream that cannot be played would.
-    func debugFail(message: String = "Failed on purpose by the player script.") {
-        fail(message: message)
+    /// Ends the video with the error screen, as a stream that cannot be played would. `isWorthRetrying: false` is the
+    /// screen of a video YouTube will not hand out: the reason and "Open on YouTube", without Retry.
+    func debugFail(message: String = "Failed on purpose by the player script.", isWorthRetrying: Bool = true) {
+        fail(message: message, isWorthRetrying: isWorthRetrying)
     }
 
     /// Opens the video that is current once more, the way a link to it does.
