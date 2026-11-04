@@ -1757,7 +1757,7 @@ extension PlayerController {
             captions=\(self.selectedCaption?.id ?? "off", privacy: .public) caption=\(caption, privacy: .public) \
             notice=\(notice, privacy: .public) segments=\(self.segments.count) upNext=\(self.upNext.count) \
             upNextHead=\(self.upNext.first?.id ?? "-", privacy: .public) \
-            chapters=\(self.chapters.count) queue=\(self.queue.count) \
+            chapters=\(self.chapters.count) queue=\(self.queue.count) blocked=\(self.settings.blockedChannels.count) \
             video=\(self.currentVideo?.id ?? "-", privacy: .public) \
             live=\(self.isLive) videoLive=\(self.currentVideo?.isLive ?? false) \
             videoUpcoming=\(self.currentVideo?.isUpcoming ?? false) \
