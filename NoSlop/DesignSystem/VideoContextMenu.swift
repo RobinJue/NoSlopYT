@@ -65,8 +65,9 @@ private struct VideoContextMenuModifier: ViewModifier {
     }
 }
 
-/// "Don't show this channel": adds the channel to the blocked channels in the settings. Every list that is on screen
-/// listens to the settings and drops the channel's videos at once.
+/// "Don't show this channel": adds the channel to the blocked channels in the settings. Every filtered list that is on
+/// screen (feeds, search, channels, playlists, the account's liked videos and playlists) listens to the settings and
+/// drops the channel's videos at once.
 enum ChannelBlocking {
     static func block(_ channel: ChannelRef, using env: AppEnvironment) {
         var settings = env.settingsStore.settings

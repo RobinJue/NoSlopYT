@@ -30,7 +30,10 @@ Design: [`docs/superpowers/specs/2026-11-03-noslop-design.md`](docs/superpowers/
 **It doesn't**
 
 - Show ads, promoted items, Shorts or AI summary blocks, anywhere. There is no Shorts tab, and Shorts are filtered
-  out of every list. A Shorts link opens as an ordinary video.
+  out of Home, Subscriptions, search, channels, playlists, suggested videos and your liked videos and YouTube
+  playlists. (Those two come from the YouTube Data API, which has no Short marker, so there a video of a minute or
+  less counts as a Short.) Your history, Watch Later, your own playlists and downloads show everything you put
+  there. A Shorts link opens as an ordinary video.
 - Contain any analytics, crash reporter, tracker or third-party package. Apple frameworks only. The only servers it
   talks to are YouTube and Google (for the videos, and for your account when you sign in), plus SponsorBlock and
   DeArrow, which are asked about a short hash of a video ID, never the ID itself.
@@ -97,7 +100,8 @@ anyone else's servers. It takes about five minutes, once. The same steps are in 
 "How to set up Google sign-in".
 
 1. In the [Google Cloud console](https://console.cloud.google.com/projectcreate), create a project (any name).
-2. Under **APIs & Services > Library**, find **YouTube Data API v3** and press **Enable**.
+2. Under **APIs & Services > Library**, find **YouTube Data API v3** and press **Enable**. (Signing in works without
+   this step, but nothing else does; see Troubleshooting if the app says the API isn't turned on.)
 3. Under **OAuth consent screen** (Google Auth platform), choose **External** and fill in an app name and your
    email. Either add your own Google account as a **test user**, or publish the app (**In production**).
    - In Testing mode Google ends the sign-in every 7 days, so you would sign in again each week.
@@ -234,6 +238,11 @@ shows a plain "Can't open this link" message.
   run `./scripts/test.sh` and `NOSLOP_LIVE=1 ./scripts/test.sh --filter Live`, and run the app again.
 - **Google sign-in is blocked, or you are signed out every week.** See "Sign in with Google": add yourself as a test
   user, or publish the consent screen to stop the 7-day sign-out.
+- **"The YouTube Data API isn't turned on for your Google project."** Signing in works without it; everything that
+  uses your account does not. Open the Google Cloud project that owns your OAuth client, go to **APIs & Services >
+  Library**, enable **YouTube Data API v3**, wait a minute (a change takes that long to spread), then pull down in
+  the Library to bring your subscriptions. The app shows this message right after you sign in when the subscriptions
+  could not be imported, and wherever a screen needs your account.
 - **The app stops opening after a week** (free Apple ID): run it from Xcode again.
 
 ## Layout

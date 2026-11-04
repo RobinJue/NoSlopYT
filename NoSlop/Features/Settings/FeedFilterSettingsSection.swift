@@ -1,7 +1,8 @@
 import NoSlopKit
 import SwiftUI
 
-/// Feed filters: what Home, Subscriptions, search results and suggestions leave out.
+/// Feed filters: what Home, Subscriptions, search results, channels, playlists, suggestions and the liked videos and
+/// YouTube playlists of the account leave out.
 struct FeedFilterSettingsSection: View {
     @Environment(AppEnvironment.self) private var env
 
@@ -27,7 +28,7 @@ struct FeedFilterSettingsSection: View {
         } header: {
             Text("Feed filters")
         } footer: {
-            Text("Applies to Home, Subscriptions, search results and suggested videos.")
+            Text("Applies to Home, Subscriptions, search results, channels, playlists, suggested videos and your liked videos. History, Watch Later, your own playlists and downloads show everything you put there.")
         }
     }
 
@@ -48,7 +49,7 @@ struct BlockedChannelsView: View {
                 EmptyStateView(
                     title: "No blocked channels",
                     systemImage: "nosign",
-                    message: "Choose \u{201C}Don't show this channel\u{201D} in a video's menu to hide a channel everywhere."
+                    message: "Choose \u{201C}Don't show this channel\u{201D} in a video's menu to hide a channel from your feeds, searches and playlists."
                 )
             } else {
                 List {

@@ -222,7 +222,7 @@ final class WatchDetailsViewModel {
             return
         }
         do {
-            let value = try await env.account.rating(videoID: video.id)
+            let value = try await env.viaAccount { try await $0.rating(videoID: video.id) }
             guard !Task.isCancelled else { return }
             rating = value
             ratingBaseline = value
@@ -240,7 +240,7 @@ final class WatchDetailsViewModel {
         isRating = true
         defer { isRating = false }
         do {
-            try await env.account.rate(videoID: video.id, rating: next)
+            try await env.viaAccount { try await $0.rate(videoID: video.id, rating: next) }
         } catch {
             rating = before
             ratingFailure = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription

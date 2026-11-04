@@ -80,7 +80,8 @@ private struct PlaylistsList: View {
             phase = .loading
         }
         do {
-            let playlists = try await env.account.myPlaylists()
+            // Through the environment, which notices when the failure was a session that Google ended.
+            let playlists = try await env.viaAccount { try await $0.myPlaylists() }
             guard !Task.isCancelled else { return }
             phase = .loaded(playlists)
         } catch {

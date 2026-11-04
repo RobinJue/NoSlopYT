@@ -38,7 +38,7 @@ struct GoogleSetupGuideView: View {
                 GuideStepRow(
                     number: 2,
                     title: "Enable the YouTube Data API",
-                    detail: "In **APIs & Services → Library**, search for **YouTube Data API v3** and press **Enable**."
+                    detail: "In **APIs & Services → Library**, search for **YouTube Data API v3** and press **Enable**.\n\nSigning in works without this step, but nothing else does: if the app later says the YouTube Data API isn't turned on, this is the step to check. A change can take a minute to take effect."
                 ) {
                     EmptyView()
                 }

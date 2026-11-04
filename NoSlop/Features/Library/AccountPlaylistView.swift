@@ -1,8 +1,9 @@
 import NoSlopKit
 import SwiftUI
 
-/// One playlist of the signed-in YouTube account: its videos, loaded page by page. A row plays that video and
-/// queues the ones after it. The summary from the playlist list is enough to draw the header at once.
+/// One playlist of the signed-in YouTube account: its videos, loaded page by page and shown through the feed filters
+/// (Shorts, blocked channels and words), like every other list. A row plays that video and queues the ones after it.
+/// The summary from the playlist list is enough to draw the header at once.
 struct AccountPlaylistView: View {
     let playlist: PlaylistSummary
 
@@ -16,11 +17,13 @@ struct AccountPlaylistView: View {
                 LoadingView()
             case .failed(let error):
                 ErrorStateView(error: error) {
-                    await model.reload(from: source)
+                    await model.reload(using: loader)
                 }
             case .loaded:
                 if model.videos.isEmpty {
-                    EmptyStateView(
+                    AccountVideosEmptyView(
+                        model: model,
+                        loader: loader,
                         title: "No videos",
                         systemImage: "list.bullet.rectangle",
                         message: "This playlist is empty, or its videos are private."
@@ -33,7 +36,15 @@ struct AccountPlaylistView: View {
         // The header of the list carries the full title; a long one would only be cut off up here.
         .navigationTitle("Playlist")
         .navigationBarTitleDisplayMode(.inline)
-        .task { await model.loadIfNeeded(from: source) }
+        .task { await model.loadIfNeeded(using: loader) }
+        // "Don't show this channel" (or any other feed filter) takes effect on the videos on screen, not after a
+        // reload. Also when the screen comes back: the filter may have changed on a screen above it.
+        .onChange(of: env.settings) {
+            Task { await model.refilter(using: loader) }
+        }
+        .onAppear {
+            Task { await model.refilter(using: loader) }
+        }
     }
 
     private var list: some View {
@@ -56,15 +67,15 @@ struct AccountPlaylistView: View {
                 }
                 .listRowSeparator(.hidden)
                 .onAppear {
-                    Task { await model.loadMoreIfNeeded(at: index, from: source) }
+                    Task { await model.loadMoreIfNeeded(at: index, using: loader) }
                 }
             }
 
-            AccountVideosFooter(model: model, source: source)
+            AccountVideosFooter(model: model, loader: loader)
         }
         .listStyle(.plain)
         .miniPlayerClearance()
-        .refreshable { await model.reload(from: source) }
+        .refreshable { await model.reload(using: loader) }
     }
 
     /// "Channel · 14 videos"
@@ -81,8 +92,15 @@ struct AccountPlaylistView: View {
         return parts.joined(separator: " · ")
     }
 
-    private var source: AccountVideosModel.PageSource {
-        { token in try await env.account.playlistItems(playlistID: playlist.id, pageToken: token) }
+    /// Where the pages come from, and what the viewer's filters leave out. Built per call, so it follows the settings.
+    private var loader: AccountVideosModel.Loader {
+        let playlistID = playlist.id
+        return AccountVideosModel.Loader(
+            source: { token in
+                try await env.viaAccount { try await $0.playlistItems(playlistID: playlistID, pageToken: token) }
+            },
+            filter: { videos in env.contentFilter.filter(videos) }
+        )
     }
 }
 
