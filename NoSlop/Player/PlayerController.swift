@@ -127,8 +127,9 @@ final class PlayerController {
     @ObservationIgnored private var itemNotifications: [any NSObjectProtocol] = []
     @ObservationIgnored private var lifecycleNotifications: [any NSObjectProtocol] = []
 
-    /// The viewer's intent: open and play set it, pause clears it. It decides whether the item starts once it is ready
-    /// (and the play/pause button while loading), so it is observed.
+    /// The viewer's intent: open and play set it, pause clears it, and so do the pause and play buttons that reach the
+    /// player without going through here (see `playerRateDidChange`). It decides whether the item starts once it is
+    /// ready (and the play/pause button while loading), so it is observed.
     private var shouldPlayWhenReady = true
     @ObservationIgnored private var isItemReady = false
     @ObservationIgnored private var awaitingInitialStart = false
@@ -1018,6 +1019,8 @@ final class PlayerController {
         ]
 
         let center = NotificationCenter.default
+        // Read here, on the main actor: `AVPlayer`'s constants are main-actor isolated, the observer below is not.
+        let reasonKey = AVPlayer.rateDidChangeReasonKey
         lifecycleNotifications = [
             center.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main) { [weak self] _ in
                 MainActor.assumeIsolated { self?.appDidEnterBackground() }
@@ -1028,7 +1031,51 @@ final class PlayerController {
             center.addObserver(forName: UIApplication.willTerminateNotification, object: nil, queue: .main) { [weak self] _ in
                 MainActor.assumeIsolated { self?.saveProgress(force: true) }
             },
+            center.addObserver(forName: AVPlayer.rateDidChangeNotification, object: avPlayer, queue: .main) { [weak self] note in
+                let reason = note.userInfo?[reasonKey] as? String
+                MainActor.assumeIsolated { self?.playerRateDidChange(reasonNamed: reason) }
+            },
         ]
+    }
+
+    /// The rate of the player changed. When someone *set* it, that someone is the viewer or AVKit acting for the viewer,
+    /// and the wish follows: the pause and play buttons of the Picture in Picture window and the remote of an AirPlay
+    /// receiver reach `AVPlayer` directly, and `pause()` and `play()` here never run for them. Left alone, the wish would
+    /// still say "playing" after a pause in the Picture in Picture window, and the next quality change, or the end of a
+    /// phone call, would start the video again by itself.
+    ///
+    /// What the system does on its own (an interruption, the background) is not the viewer's doing and leaves the wish
+    /// alone: `audioInterruptionBegan` and the background handling rely on it. So does the controller's own `pause()` of
+    /// an item that is going away, which arrives while nothing is ready (`PlaybackIntent` has the rule).
+    private func playerRateDidChange(reasonNamed name: String?) {
+        let isSettled: Bool
+        switch state {
+        case .loading, .playing, .paused, .buffering: isSettled = true
+        case .idle, .ended, .failed: isSettled = false
+        }
+        let wanted = PlaybackIntent.wantsPlayback(
+            afterRateChangeTo: avPlayer.rate,
+            reason: Self.rateChangeReason(named: name),
+            wasWanted: shouldPlayWhenReady,
+            isSettled: isSettled && currentVideo != nil && isItemReady && !isRecovering
+        )
+        if wanted != shouldPlayWhenReady {
+            Self.log.info("the viewer \(wanted ? "resumed" : "paused", privacy: .public) outside the app's own buttons")
+            shouldPlayWhenReady = wanted
+        }
+    }
+
+    /// Why the rate changed, by the name the notification carries (nil when it names none, or one this app does not
+    /// know).
+    private static func rateChangeReason(named name: String?) -> PlaybackIntent.RateChangeReason? {
+        guard let name else { return nil }
+        switch AVPlayer.RateDidChangeReason(rawValue: name) {
+        case .setRateCalled: return .setRateCalled
+        case .setRateFailed: return .setRateFailed
+        case .audioSessionInterrupted: return .audioSessionInterrupted
+        case .appBackgrounded: return .appBackgrounded
+        default: return nil
+        }
     }
 
     private func timeControlStatusChanged() {
@@ -1043,11 +1090,12 @@ final class PlayerController {
             }
             state = .playing
         case .waitingToPlayAtSpecifiedRate:
-            // A seek or a stall; a deliberate pause never lands here.
-            if state != .buffering {
-                state = .buffering
-                watchForStall()
-            }
+            // A seek or a stall; a deliberate pause never lands here. The watch starts at every entry into waiting, not
+            // only when the state turns to buffering: a reload (`beginReload`), a replay and a seek from the end set
+            // `.buffering` before the item starts to wait, and an item that hangs there must end in the error screen
+            // after the second failure just like the first one did.
+            if state != .buffering { state = .buffering }
+            watchForStall()
         case .paused:
             stallTask?.cancel()
             if state != .ended, !awaitingInitialStart {
