@@ -2,7 +2,8 @@ import NoSlopKit
 import SwiftUI
 
 /// A public YouTube playlist: header with "Play all", then the videos as rows that page in as you scroll. Tapping a
-/// video plays it with the videos after it queued, like "Play all" from there.
+/// video plays it with the videos after it queued, like "Play all" from there. Both queue the whole playlist: the part
+/// that is not loaded yet (a playlist of 250 videos has loaded about 100) follows page by page while the queue plays.
 struct PlaylistView: View {
     let playlistID: String
 
@@ -131,15 +132,16 @@ struct PlaylistView: View {
         }
     }
 
-    /// Plays `video` and queues the videos after it, like "Play all" from there.
+    /// Plays `video` and queues the videos after it, like "Play all" from there. What the playlist has behind the
+    /// loaded part is queued page by page as the queue runs low.
     private func play(_ video: VideoSummary) {
-        env.open(video, queue: model.videos(after: video))
+        env.open(video, queue: model.videos(after: video), more: model.queueSource(using: env))
     }
 
-    /// Plays the first video and queues the others.
+    /// Plays the first video and queues the others, the whole playlist and not only the part that is loaded.
     private func playAll() {
         guard let first = model.list.items.first else { return }
-        env.open(first, queue: Array(model.list.items.dropFirst()))
+        env.open(first, queue: Array(model.list.items.dropFirst()), more: model.queueSource(using: env))
     }
 
     #if DEBUG

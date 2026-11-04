@@ -189,9 +189,10 @@ final class AppEnvironment {
 
     // MARK: Playing and navigating
 
-    /// Starts `video` in the player (expanded). `queue` plays after it.
-    func open(_ video: VideoSummary, startAt: Double? = nil, queue: [VideoSummary] = []) {
-        player.open(video, startAt: startAt, queue: queue)
+    /// Starts `video` in the player (expanded). `queue` plays after it, and `more` supplies the rest of the list the
+    /// queue came from while it has pages that are not loaded (a long playlist).
+    func open(_ video: VideoSummary, startAt: Double? = nil, queue: [VideoSummary] = [], more: QueueSource? = nil) {
+        player.open(video, startAt: startAt, queue: queue, more: more)
     }
 
     /// Pushes `route` onto the selected tab; an expanded player shrinks to the mini player first so the screen is visible.

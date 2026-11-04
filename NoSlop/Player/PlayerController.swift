@@ -151,6 +151,13 @@ final class PlayerController {
     @ObservationIgnored private var forceStreaming = false
 
     @ObservationIgnored private var upNext: [VideoSummary] = []
+    /// What follows `queue`: the rest of the list it came from (a playlist), which arrives in pages. The next page is
+    /// asked for when the queue runs low and when it runs out. Nil for a queue that is all there is.
+    @ObservationIgnored private var queueSource: QueueSource?
+    /// The request for the next page of `queueSource` that is on its way.
+    @ObservationIgnored private var refillTask: Task<Void, Never>?
+    /// Set while the player waits for that page because nothing was queued: what to do when it arrives.
+    @ObservationIgnored private var pendingAdvance: QueueAdvance.Request?
     @ObservationIgnored private var progressThrottle = ProgressSaveThrottle()
     @ObservationIgnored private var wasPlayingBeforeInterruption = false
     @ObservationIgnored private var didDetachSurfaces = false
@@ -225,9 +232,10 @@ final class PlayerController {
         streamInfo?.captions ?? []
     }
 
-    /// Whether `playNext` has a queued video to start.
+    /// Whether `playNext` has a video to start: a queued one, or the first of the next page of the list the queue came
+    /// from.
     var canPlayNext: Bool {
-        !queue.isEmpty
+        !queue.isEmpty || queueSource?.hasMore == true
     }
 
     /// The thumbnail shows where the picture is not (yet): nothing has played yet, or the file has no picture. The video
@@ -252,12 +260,15 @@ final class PlayerController {
 
     // MARK: Loading
 
-    /// Starts `video` (resuming at `startAt` or the saved position) and expands the player. `queue` plays afterwards.
+    /// Starts `video` (resuming at `startAt` or the saved position) and expands the player. `queue` plays afterwards,
+    /// and `more` supplies what follows the queue when it comes from a list that is not loaded to its end (a long
+    /// playlist): the next page is taken from it when the queue runs low. A video opened without a `more` plays on
+    /// with `queue` alone.
     /// Opening the video that is already loaded only expands the player (and seeks when `startAt` is given); after a
     /// failure it starts over, keeping what the watch page published for it (see `start`).
-    func open(_ video: VideoSummary, startAt: Double?, queue: [VideoSummary]) {
+    func open(_ video: VideoSummary, startAt: Double?, queue: [VideoSummary], more: QueueSource? = nil) {
         if let current = currentVideo, current.id == video.id, canReuseCurrentPlayback {
-            self.queue = queue
+            adoptQueue(queue, more: more)
             presentation = .expanded
             if let startAt {
                 seek(to: startAt)
@@ -267,7 +278,7 @@ final class PlayerController {
             updateNowPlaying()
             return
         }
-        start(video, startAt: startAt, queue: queue, expand: true)
+        start(video, startAt: startAt, queue: queue, more: more, expand: true)
     }
 
     private var canReuseCurrentPlayback: Bool {
@@ -293,6 +304,9 @@ final class PlayerController {
     /// autoplay moves on by itself, `upNext` is what remains of the list, so it can keep going with the player minimized
     /// and no watch page to hand over the next list.
     ///
+    /// `queue` and `more` are what follows the video (see `adoptQueue`): the queue moving on to its next video passes
+    /// the source it has, an open from outside brings its own, and autoplay leaves the queue behind.
+    ///
     /// Starting the video that is already current (a link to it opened from the error screen, a queue that repeats it)
     /// keeps the chapters and the up-next list the watch page published for it. They belong to the video, not to the
     /// item, and the page, still on screen, publishes them only once. `close` forgets them, so a video opened after
@@ -301,6 +315,7 @@ final class PlayerController {
         _ video: VideoSummary,
         startAt: Double?,
         queue: [VideoSummary],
+        more: QueueSource?,
         upNext: [VideoSummary] = [],
         expand: Bool
     ) {
@@ -313,7 +328,7 @@ final class PlayerController {
 
         let isSameVideo = currentVideo?.id == video.id
         currentVideo = video
-        self.queue = queue
+        adoptQueue(queue, more: more)
         if !(isSameVideo && upNext.isEmpty) {
             self.upNext = upNext
         }
@@ -650,12 +665,18 @@ final class PlayerController {
         updateNowPlaying()
         Self.log.info("ended \(video.id, privacy: .public)")
 
-        if playNext() { return }
-        if settings.autoplayNext, let step = autoplayStep(after: video) {
-            // What stays up next goes along: with the player minimized the watch page is not on screen to replace the
-            // list, and the next hop would find it empty.
-            start(step.next, startAt: nil, queue: [], upNext: step.remaining, expand: false)
-        }
+        // The queue first. With nothing queued but more of the list behind it, the next video is in the page that is
+        // asked for now (`refillFinished`).
+        if advanceQueue(as: .whenEnded) { return }
+        autoplayAfterQueue(of: video)
+    }
+
+    /// The queue is over: autoplay chooses the next video, when the viewer turned it on.
+    private func autoplayAfterQueue(of video: VideoSummary) {
+        guard settings.autoplayNext, let step = autoplayStep(after: video) else { return }
+        // What stays up next goes along: with the player minimized the watch page is not on screen to replace the
+        // list, and the next hop would find it empty. Autoplay leaves the list of the queue behind.
+        start(step.next, startAt: nil, queue: [], more: nil, upNext: step.remaining, expand: false)
     }
 
     /// The first up-next suggestion the viewer has not watched, and the suggestions that stay up next behind it.
@@ -874,12 +895,101 @@ final class PlayerController {
         seek(to: notice.segment.start)
     }
 
-    /// Starts the next queued video; returns false when the queue is empty.
+    /// Starts the next queued video (the Next button of the lock screen); returns false when there is none to start,
+    /// now or once the next page of the list behind the queue has arrived.
     @discardableResult
     func playNext() -> Bool {
-        guard let next = queue.first else { return false }
-        start(next, startAt: nil, queue: Array(queue.dropFirst()), expand: false)
+        advanceQueue(as: .now)
+    }
+
+    // MARK: Queue
+
+    /// Starts the first queued video. With nothing queued but more of the list behind the queue, asks for the next page
+    /// instead and starts its first video when it arrives (`refillFinished`). Returns false when there is nothing to
+    /// start, now or later.
+    private func advanceQueue(as request: QueueAdvance.Request) -> Bool {
+        if let next = queue.first {
+            start(next, startAt: nil, queue: Array(queue.dropFirst()), more: queueSource, expand: false)
+            return true
+        }
+        guard let source = queueSource, source.hasMore else { return false }
+        // A viewer who pressed Next keeps asking for the next video, whether or not the one that plays has ended since.
+        if pendingAdvance != .now {
+            pendingAdvance = request
+        }
+        refill(from: source)
         return true
+    }
+
+    /// Takes over the queue a list handed in: the videos that follow the current one, and the source of the rest of the
+    /// list. A source other than the one in hand ends the wait for a page of the old one.
+    private func adoptQueue(_ videos: [VideoSummary], more: QueueSource?) {
+        queue = videos
+        if more !== queueSource {
+            refillTask?.cancel()
+            refillTask = nil
+            pendingAdvance = nil
+            queueSource = more
+        }
+        refillQueueIfNeeded()
+    }
+
+    /// Asks the source for its next page when the queue is running low, so that it is there before the queue runs out.
+    private func refillQueueIfNeeded() {
+        guard let source = queueSource, source.needsRefill(queued: queue.count) else { return }
+        refill(from: source)
+    }
+
+    /// Asks `source` for its next page, unless one is on its way already.
+    ///
+    /// A page that arrives for a source the player has left (another list was opened, or the player was closed) is
+    /// dropped: the identity of the source is the guard here, not the video, because the queue goes on from video to
+    /// video with the same source.
+    private func refill(from source: QueueSource) {
+        guard refillTask == nil else { return }
+        refillTask = Task { [weak self] in
+            let page: [VideoSummary]?
+            do {
+                page = try await source.next()
+            } catch {
+                if !Task.isCancelled {
+                    Self.log.error("the next page of the queue could not be loaded: \(String(describing: error), privacy: .public)")
+                }
+                page = nil
+            }
+            guard let self, self.queueSource === source else { return }
+            self.refillTask = nil
+            self.refillFinished(with: page, from: source)
+        }
+    }
+
+    /// The page the queue asked for has come in (`nil` when it could not be loaded).
+    private func refillFinished(with page: [VideoSummary]?, from source: QueueSource) {
+        let added = page ?? []
+        queue += added
+        Self.log.info("queue: +\(added.count), \(self.queue.count) queued, more: \(source.hasMore)")
+        // The list is over: nothing is left to ask for.
+        if !source.hasMore {
+            queueSource = nil
+        }
+
+        let request = pendingAdvance
+        pendingAdvance = nil
+        switch QueueAdvance.action(for: request, queued: queue.count, isEnded: state == .ended) {
+        case .startNext:
+            _ = advanceQueue(as: .now)
+        case .autoplay:
+            if let video = currentVideo {
+                autoplayAfterQueue(of: video)
+            }
+        case .nothing:
+            // A page can hold a video or two only (the filter hid the rest): still low, so the next one is asked for. A
+            // page that failed or brought nothing waits for the next chance (the next video, the end of the queue).
+            if !added.isEmpty {
+                refillQueueIfNeeded()
+            }
+        }
+        updateNowPlaying()
     }
 
     private func seekPlayer(to seconds: Double) {
@@ -948,6 +1058,10 @@ final class PlayerController {
         streamInfo = nil
         state = .idle
         queue = []
+        refillTask?.cancel()
+        refillTask = nil
+        pendingAdvance = nil
+        queueSource = nil
         upNext = []
         segments = []
         chapters = []
@@ -1757,7 +1871,8 @@ extension PlayerController {
             captions=\(self.selectedCaption?.id ?? "off", privacy: .public) caption=\(caption, privacy: .public) \
             notice=\(notice, privacy: .public) segments=\(self.segments.count) upNext=\(self.upNext.count) \
             upNextHead=\(self.upNext.first?.id ?? "-", privacy: .public) \
-            chapters=\(self.chapters.count) queue=\(self.queue.count) blocked=\(self.settings.blockedChannels.count) \
+            chapters=\(self.chapters.count) queue=\(self.queue.count) more=\(self.queueSource?.hasMore ?? false) \
+            blocked=\(self.settings.blockedChannels.count) \
             video=\(self.currentVideo?.id ?? "-", privacy: .public) \
             live=\(self.isLive) videoLive=\(self.currentVideo?.isLive ?? false) \
             videoUpcoming=\(self.currentVideo?.isUpcoming ?? false) \

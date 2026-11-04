@@ -132,4 +132,24 @@ final class PlaylistViewModel {
         guard let index = list.items.firstIndex(where: { $0.id == video.id }) else { return [] }
         return Array(list.items.suffix(from: index + 1))
     }
+
+    /// The rest of the playlist behind what is loaded, for the player's queue: a long playlist has loaded its first
+    /// page (about 100 videos) and "Play all" must not stop there. Nil when the list is loaded to its end.
+    ///
+    /// Starts at the page the list would load next, so it follows `videos(after:)` and `list.items` without a gap
+    /// or an overlap, and holds on to nothing of this model: the screen is popped long before a long queue is over.
+    /// The playlist keeps loading for the screen while the queue plays on; the two do not share pages.
+    func queueSource(using env: AppEnvironment) -> QueueSource? {
+        guard let token = list.continuation else { return nil }
+        return QueueSource(
+            continuation: token,
+            knownIDs: list.arrivedIDs,
+            fetch: { [weak env] token in
+                guard let env else { return Page() }
+                return try await env.youTube.playlistMore(continuation: token)
+            },
+            // Built per page, so a channel blocked while the queue plays counts from the next page on.
+            filter: { [weak env] videos in env?.contentFilter.filter(videos) ?? videos }
+        )
+    }
 }
