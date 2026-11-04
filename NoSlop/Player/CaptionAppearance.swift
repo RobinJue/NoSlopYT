@@ -123,7 +123,7 @@ final class CaptionAppearanceStore {
         appearance = CaptionAppearance.current()
         CFNotificationCenterAddObserver(
             CFNotificationCenterGetLocalCenter(),
-            nil,
+            Unmanaged.passUnretained(self).toOpaque(),
             captionAppearanceSettingsChanged,
             kMACaptionAppearanceSettingsChangedNotification,
             nil,
