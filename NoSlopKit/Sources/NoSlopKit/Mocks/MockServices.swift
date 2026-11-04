@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 
 // Mock implementations of every service protocol, returning `SampleData` after an artificial delay.
 // They back SwiftUI previews and `-mockServices YES` launches, and give UI work something to talk to while the
@@ -30,6 +31,30 @@ private func newestFirst(_ videos: [VideoSummary]) -> [VideoSummary] {
     videos.sorted { ($0.publishedAt ?? .distantPast) > ($1.publishedAt ?? .distantPast) }
 }
 
+// MARK: - Connection
+
+/// The connection of a mock run, as a switch. While it is off, the mocks that were given it fail the way the real
+/// services do without a network (`NoSlopError.network`), and come back when it is turned on. Simulator checks of the
+/// offline screens use it (`-mockOffline`); a mock that was not given one is always online.
+public final class MockConnection: Sendable {
+    private let online: Mutex<Bool>
+
+    public init(isOnline: Bool = true) {
+        online = Mutex(isOnline)
+    }
+
+    public var isOnline: Bool {
+        get { online.withLock { $0 } }
+        set { online.withLock { $0 = newValue } }
+    }
+
+    func requireOnline() throws {
+        if !isOnline {
+            throw NoSlopError.network("The mock connection is off.")
+        }
+    }
+}
+
 // MARK: - YouTube service
 
 /// `YouTubeService` over `SampleData`.
@@ -40,9 +65,18 @@ private func newestFirst(_ videos: [VideoSummary]) -> [VideoSummary] {
 ///   `noslop://channel/<id>`, `noslop://playlist/<id>` and `noslop://search?q=…`, and maps any `@handle` to Blender.
 public struct MockYouTubeService: YouTubeService {
     private let delay: Duration
+    private let connection: MockConnection?
 
-    public init(delay: Duration = .milliseconds(300)) {
+    /// - Parameter connection: when given and off, every call fails with `NoSlopError.network`.
+    public init(delay: Duration = .milliseconds(300), connection: MockConnection? = nil) {
         self.delay = delay
+        self.connection = connection
+    }
+
+    /// What every call starts with: the connection it needs, then the time the answer takes.
+    private func reachNetwork() async throws {
+        try connection?.requireOnline()
+        try await MockDelay.wait(delay)
     }
 
     private static let pageSize = 10
@@ -50,18 +84,18 @@ public struct MockYouTubeService: YouTubeService {
     // MARK: Search
 
     public func search(query: String, filter: SearchFilter) async throws -> Page<SearchItem> {
-        try await MockDelay.wait(delay)
+        try await reachNetwork()
         return Self.page(of: Self.results(for: filter), cursor: SearchCursor(filter: filter, page: 0))
     }
 
     public func searchMore(continuation: String) async throws -> Page<SearchItem> {
-        try await MockDelay.wait(delay)
+        try await reachNetwork()
         guard let cursor = SearchCursor(token: continuation) else { return Page() }
         return Self.page(of: Self.results(for: cursor.filter), cursor: cursor)
     }
 
     public func suggestions(for query: String) async throws -> [String] {
-        try await MockDelay.wait(delay)
+        try await reachNetwork()
         let q = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard !q.isEmpty else { return [] }
         return [q, "\(q) tutorial", "\(q) for beginners", "\(q) 2026", "\(q) full course", "\(q) tips and tricks"]
@@ -155,7 +189,7 @@ public struct MockYouTubeService: YouTubeService {
     // MARK: Watch page
 
     public func videoDetails(id: String) async throws -> VideoDetails {
-        try await MockDelay.wait(delay)
+        try await reachNetwork()
         let video = SampleData.video(id: id) ?? VideoSummary(
             id: id,
             title: "Sample video",
@@ -166,7 +200,7 @@ public struct MockYouTubeService: YouTubeService {
     }
 
     public func moreRelated(continuation: String) async throws -> Page<VideoSummary> {
-        try await MockDelay.wait(delay)
+        try await reachNetwork()
         // "mock-related:<videoID>:<page>"
         let parts = continuation.split(separator: ":", omittingEmptySubsequences: false).map(String.init)
         guard parts.count == 3, parts[0] == "mock-related", let page = Int(parts[2]) else { return Page() }
@@ -181,7 +215,7 @@ public struct MockYouTubeService: YouTubeService {
     }
 
     public func comments(continuation: String) async throws -> CommentsPage {
-        try await MockDelay.wait(delay)
+        try await reachNetwork()
         let parts = continuation.split(separator: ":", omittingEmptySubsequences: false).map(String.init)
         switch parts.first {
         case "mock-replies":
@@ -209,7 +243,7 @@ public struct MockYouTubeService: YouTubeService {
     // MARK: Channels
 
     public func channel(id: String) async throws -> ChannelPage {
-        try await MockDelay.wait(delay)
+        try await reachNetwork()
         let summary = SampleData.channel(id: id) ?? ChannelSummary(
             id: id,
             name: "Sample channel",
@@ -235,7 +269,7 @@ public struct MockYouTubeService: YouTubeService {
     }
 
     public func channelTab(channelID: String, tab: ChannelTabKind) async throws -> Page<SearchItem> {
-        try await MockDelay.wait(delay)
+        try await reachNetwork()
         switch tab {
         case .videos:
             return Page(items: Self.channelVideos(channelID).map(SearchItem.video))
@@ -247,7 +281,7 @@ public struct MockYouTubeService: YouTubeService {
     }
 
     public func channelMore(continuation: String) async throws -> Page<SearchItem> {
-        try await MockDelay.wait(delay)
+        try await reachNetwork()
         return Page()
     }
 
@@ -260,7 +294,7 @@ public struct MockYouTubeService: YouTubeService {
     // MARK: Playlists
 
     public func playlist(id: String) async throws -> PlaylistPage {
-        try await MockDelay.wait(delay)
+        try await reachNetwork()
         let (info, videos) = Self.playlistContent(id)
         let first = Array(videos.prefix(Self.pageSize))
         return PlaylistPage(
@@ -271,7 +305,7 @@ public struct MockYouTubeService: YouTubeService {
     }
 
     public func playlistMore(continuation: String) async throws -> Page<VideoSummary> {
-        try await MockDelay.wait(delay)
+        try await reachNetwork()
         // "mock-playlist:<playlistID>:<page>"
         let parts = continuation.split(separator: ":", omittingEmptySubsequences: false).map(String.init)
         guard parts.count == 3, parts[0] == "mock-playlist", let page = Int(parts[2]) else { return Page() }
@@ -298,7 +332,7 @@ public struct MockYouTubeService: YouTubeService {
     // MARK: URLs
 
     public func resolve(url: URL) async throws -> ResolvedURL? {
-        try await MockDelay.wait(delay)
+        try await reachNetwork()
         return MockURLResolver.resolve(url)
     }
 }
@@ -619,47 +653,78 @@ public struct MockDeArrow: DeArrowProviding {
 // MARK: - Feeds
 
 /// `SubscriptionFeedProviding` that returns the sample uploads of the given channels, newest first.
-/// There is no disk cache: `cachedFeed()` is empty.
+///
+/// Like the real service it remembers the feed it built last: `cachedFeed()` is what the last `feed(...)` returned, or
+/// what the mock was started with (`cached`, the feed on disk from an earlier session), and empty before that.
 public struct MockSubscriptionFeed: SubscriptionFeedProviding {
     private let delay: Duration
+    private let connection: MockConnection?
+    private let remembered: Remembered
 
-    public init(delay: Duration = .milliseconds(300)) {
+    /// - Parameters:
+    ///   - connection: when given and off, `feed(...)` fails with `NoSlopError.network` and the cache stays as it is.
+    ///   - cached: the feed `cachedFeed()` starts with, as if an earlier session had left it on disk.
+    public init(delay: Duration = .milliseconds(300), connection: MockConnection? = nil, cached: [VideoSummary] = []) {
         self.delay = delay
+        self.connection = connection
+        self.remembered = Remembered(cached)
     }
 
     public func cachedFeed() async -> [VideoSummary] {
-        []
+        remembered.feed
     }
 
     public func feed(channels: [SubscribedChannel], forceRefresh: Bool) async throws -> [VideoSummary] {
+        try connection?.requireOnline()
         try await MockDelay.wait(delay)
         let ids = Set(channels.map(\.id))
-        return newestFirst(SampleData.videos.filter { video in
+        let feed = newestFirst(SampleData.videos.filter { video in
             video.channel.map { ids.contains($0.id) } ?? false
         })
+        remembered.feed = feed
+        return feed
+    }
+
+    private final class Remembered: Sendable {
+        private let state: Mutex<[VideoSummary]>
+
+        init(_ feed: [VideoSummary]) {
+            state = Mutex(feed)
+        }
+
+        var feed: [VideoSummary] {
+            get { state.withLock { $0 } }
+            set { state.withLock { $0 = newValue } }
+        }
     }
 }
 
 /// `HomeFeedProviding` that always has something to show: "Continue watching" from the history (same rules as the
 /// real service) and "For you" from the subscription videos followed by the sample videos, minus what was watched.
+///
+/// Without a connection (`MockConnection` off) it behaves like the real service that cannot reach YouTube: "For you"
+/// is the subscription videos that were not watched, and a history to ask about makes the feed `relatedUnavailable`.
 public struct MockHomeFeed: HomeFeedProviding {
     private let delay: Duration
+    private let connection: MockConnection?
 
-    public init(delay: Duration = .milliseconds(300)) {
+    public init(delay: Duration = .milliseconds(300), connection: MockConnection? = nil) {
         self.delay = delay
+        self.connection = connection
     }
 
     public func homeFeed(history: [HistoryEntry], subscriptionVideos: [VideoSummary]) async -> HomeFeed {
         await MockDelay.waitQuietly(delay)
-        let continueWatching = history
-            .filter { $0.progressSeconds >= 30 && !$0.isFinished && !$0.video.isShort }
-            .prefix(10)
-        let watchedIDs = Set(history.map(\.id))
-        var seen = watchedIDs
+        let isOnline = connection?.isOnline ?? true
+        var seen = Set(history.map(\.id))
         var forYou: [VideoSummary] = []
-        for video in subscriptionVideos + SampleData.videos where seen.insert(video.id).inserted {
+        for video in isOnline ? subscriptionVideos + SampleData.videos : subscriptionVideos where seen.insert(video.id).inserted {
             forYou.append(video)
         }
-        return HomeFeed(continueWatching: Array(continueWatching), forYou: Array(forYou.prefix(60)))
+        return HomeFeed(
+            continueWatching: HomeFeed.continueWatching(in: history),
+            forYou: Array(forYou.prefix(60)),
+            relatedUnavailable: !isOnline && history.contains { !$0.video.isShort }
+        )
     }
 }
