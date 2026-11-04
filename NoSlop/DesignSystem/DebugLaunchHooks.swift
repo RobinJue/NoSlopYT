@@ -57,6 +57,8 @@ import SwiftUI
 /// - `-offlinePlayerServices YES`: the services a playing video asks (the stream resolver, SponsorBlock, captions) fail like
 ///   the network does, so a download plays with nothing but what it kept. `playerServices=on|off` of `-playerScript`
 ///   switches them while the app runs.
+/// - `-accountDelay <seconds>`: the mock Google account (liked videos, playlists, subscriptions) takes that long to answer
+///   (0.3 s by default), so that "Play all" on a list can be tapped while its next page is still on its way.
 /// - `-offlineDeArrow YES`: the mock DeArrow service fails every lookup like the real one does without a connection, so the
 ///   titles stay the original ones. The UI script switches it (`deArrowServer=on|off`).
 /// - `-uiScript '<steps>'`: taps, pulls and the like at given moments (see `DebugUIScript`).
@@ -117,6 +119,12 @@ enum DebugLaunchHooks {
     /// The connection of the services a playing video asks (stream info, SponsorBlock, captions): on, unless
     /// `-offlinePlayerServices YES`. The player script switches it (`playerServices=on|off`).
     static let playerConnection = MockConnection(isOnline: !UserDefaults.standard.bool(forKey: "offlinePlayerServices"))
+
+    /// How long the mock Google account takes: `-accountDelay`, else its usual 0.3 s.
+    static var mockAccountDelay: Duration {
+        let seconds = UserDefaults.standard.double(forKey: "accountDelay")
+        return seconds > 0 ? .milliseconds(Int(seconds * 1_000)) : .milliseconds(300)
+    }
 
     /// The connection of the mock DeArrow service: on, unless `-offlineDeArrow YES`. The UI script switches it
     /// (`deArrowServer=on|off`).

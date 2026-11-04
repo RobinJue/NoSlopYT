@@ -7,7 +7,8 @@ import SwiftUI
 /// controls themselves.
 ///
 /// - Top: chevron (minimize, or leave full screen), title, AirPlay, captions on/off, settings menu.
-/// - Centre: back 10 s, play/pause (a spinner while buffering), forward 10 s.
+/// - Centre: back 10 s, play/pause (a spinner while buffering), forward 10 s, and Next (the next queued video, or the first
+///   unwatched one of Up next; off when there is none).
 /// - Bottom: position / length, Picture in Picture, full screen, and the seek bar.
 ///
 /// While the video plays the controls fade out after three seconds without a touch. Whenever it is not playing
@@ -362,7 +363,24 @@ struct PlayerControlsView: View {
             .disabled(player.isLive)
             .opacity(player.isLive ? 0.3 : 1)
             .accessibilityLabel("Forward 10 seconds")
+
+            nextButton(player)
         }
+    }
+
+    /// The next queued video, or without a queue the first unwatched one of Up next, as autoplay would choose it. Dimmed and
+    /// off when there is none. The lock screen's Next asks the same question (`PlayerController.canPlayNext`).
+    private func nextButton(_ player: PlayerController) -> some View {
+        let available = player.canPlayNext
+        return Button {
+            player.playNext()
+            show()
+        } label: {
+            iconLabel("forward.end.fill", size: 24)
+        }
+        .disabled(!available)
+        .opacity(available ? 1 : 0.3)
+        .accessibilityLabel("Next video")
     }
 
     /// The video is not playing although the viewer wants it to: loading, buffering, or waiting for the connection.

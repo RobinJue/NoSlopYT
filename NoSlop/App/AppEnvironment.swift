@@ -185,6 +185,7 @@ final class AppEnvironment {
         )
         let auth: any GoogleAuthProviding = MockAuth(signedIn: DebugLaunchHooks.signedIn)
         let deArrow: any DeArrowProviding = MockDeArrow(connection: DebugLaunchHooks.deArrowConnection)
+        let account: any YouTubeAccountService = MockAccountService(delay: DebugLaunchHooks.mockAccountDelay)
         DebugLaunchHooks.seedDownload(in: scratch.appendingPathComponent("Downloads", isDirectory: true))
         #else
         let youTube = MockYouTubeService()
@@ -195,6 +196,7 @@ final class AppEnvironment {
         let homeFeed: any HomeFeedProviding = MockHomeFeed()
         let auth: any GoogleAuthProviding = MockAuth()
         let deArrow: any DeArrowProviding = MockDeArrow()
+        let account: any YouTubeAccountService = MockAccountService()
         #endif
         let settingsStore = SettingsStore(defaults: defaults)
         let library = LibraryStore(directory: scratch.appendingPathComponent("Library", isDirectory: true))
@@ -216,7 +218,7 @@ final class AppEnvironment {
             sponsorBlock: sponsorBlock,
             deArrow: deArrow,
             auth: auth,
-            account: MockAccountService(),
+            account: account,
             library: library,
             settingsStore: settingsStore,
             downloads: downloads
@@ -226,9 +228,16 @@ final class AppEnvironment {
     // MARK: Playing and navigating
 
     /// Starts `video` in the player (expanded). `queue` plays after it, and `more` supplies the rest of the list the
-    /// queue came from while it has pages that are not loaded (a long playlist).
-    func open(_ video: VideoSummary, startAt: Double? = nil, queue: [VideoSummary] = [], more: QueueSource? = nil) {
-        player.open(video, startAt: startAt, queue: queue, more: more)
+    /// queue came from while it has pages that are not loaded (a long playlist). `queueName` is what the watch page calls
+    /// that list ("Playing from <name>").
+    func open(
+        _ video: VideoSummary,
+        startAt: Double? = nil,
+        queue: [VideoSummary] = [],
+        more: QueueSource? = nil,
+        queueName: String? = nil
+    ) {
+        player.open(video, startAt: startAt, queue: queue, more: more, queueName: queueName)
     }
 
     /// Pushes `route` onto the selected tab; an expanded player shrinks to the mini player first so the screen is visible.

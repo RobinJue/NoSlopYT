@@ -82,6 +82,12 @@ final class PlayerController {
     private(set) var isPictureInPictureActive = false
     /// Videos that play after the current one, in order.
     private(set) var queue: [VideoSummary] = []
+    /// The list the queue came from ("Liked videos", the title of a playlist), for the watch page's "Playing from ...".
+    /// Nil for a queue that has no name, and while no queue plays.
+    private(set) var queueName: String?
+    /// Where the video that plays is in its queue: 1 for the video a list was opened with, and one more for every video
+    /// the queue moves on to (also when the viewer jumps ahead in it). 0 while no queue plays.
+    private(set) var queuePosition = 0
 
     /// Picture in Picture could start right now.
     private(set) var isPictureInPicturePossible = false
@@ -156,12 +162,14 @@ final class PlayerController {
     @ObservationIgnored private var isRecovering = false
     @ObservationIgnored private var forceStreaming = false
 
-    @ObservationIgnored private var upNext: [VideoSummary] = []
+    /// Observed: whether Next has a video to start depends on it (`canPlayNext`).
+    private var upNext: [VideoSummary] = []
     /// The video whose chapters and up-next list were handed over (`setUpNext`), the page's or the owner's.
     @ObservationIgnored private var detailsHandedOverFor: String?
     /// What follows `queue`: the rest of the list it came from (a playlist), which arrives in pages. The next page is
-    /// asked for when the queue runs low and when it runs out. Nil for a queue that is all there is.
-    @ObservationIgnored private var queueSource: QueueSource?
+    /// asked for when the queue runs low and when it runs out. Nil for a queue that is all there is. Observed, because the
+    /// watch page says whether more is to come ("3 of 100+") and Next is enabled while it is.
+    private var queueSource: QueueSource?
     /// The request for the next page of `queueSource` that is on its way.
     @ObservationIgnored private var refillTask: Task<Void, Never>?
     /// Set while the player waits for that page because nothing was queued: what to do when it arrives.
@@ -248,10 +256,26 @@ final class PlayerController {
         DownloadExtras.captionTracks(live: streamInfo?.captions, kept: keptCaptionTracks)
     }
 
-    /// Whether `playNext` has a video to start: a queued one, or the first of the next page of the list the queue came
-    /// from.
+    /// Whether `playNext` has a video to start: a queued one, the first of the next page of the list the queue came from,
+    /// or, without a queue, the first Up next video that autoplay would start. The Next button of the controls and the one
+    /// of the lock screen both ask this, and both start what `playNext` starts.
     var canPlayNext: Bool {
-        !queue.isEmpty || queueSource?.hasMore == true
+        nextVideo.isAvailable
+    }
+
+    /// What Next would start right now (`NextVideo` has the order).
+    private var nextVideo: NextVideo {
+        NextVideo.choose(
+            queued: queue.count,
+            listHasMore: queueSource?.hasMore == true,
+            suggestion: currentVideo.flatMap { autoplayStep(after: $0) }
+        )
+    }
+
+    /// The queue that plays, as the watch page describes it ("Playing from Liked videos", "3 of 100+" and the next few
+    /// videos); nil while no queue plays.
+    var queueOutline: QueueOutline? {
+        QueueOutline(name: queueName, position: queuePosition, queued: queue, hasMore: queueSource?.hasMore == true)
     }
 
     /// The thumbnail shows where the picture is not (yet): nothing has played yet, or the file has no picture. The video
@@ -279,10 +303,18 @@ final class PlayerController {
     /// Starts `video` (resuming at `startAt` or the saved position) and expands the player. `queue` plays afterwards,
     /// and `more` supplies what follows the queue when it comes from a list that is not loaded to its end (a long
     /// playlist): the next page is taken from it when the queue runs low. A video opened without a `more` plays on
-    /// with `queue` alone.
+    /// with `queue` alone. `queueName` is what the watch page calls the list the queue came from ("Playing from ...");
+    /// a queue without one is called "your queue", and a video opened with no queue at all has no such section.
     /// Opening the video that is already loaded only expands the player (and seeks when `startAt` is given); after a
     /// failure it starts over, keeping what the watch page published for it (see `start`).
-    func open(_ video: VideoSummary, startAt: Double?, queue: [VideoSummary], more: QueueSource? = nil) {
+    func open(
+        _ video: VideoSummary,
+        startAt: Double?,
+        queue: [VideoSummary],
+        more: QueueSource? = nil,
+        queueName: String? = nil
+    ) {
+        beginQueueRun(named: queueName, hasQueue: !queue.isEmpty || more != nil)
         if let current = currentVideo, current.id == video.id, canReuseCurrentPlayback {
             adoptQueue(queue, more: more)
             presentation = .expanded
@@ -319,6 +351,8 @@ final class PlayerController {
     func setUpNext(_ videos: [VideoSummary]) {
         upNext = videos
         detailsHandedOverFor = currentVideo?.id
+        // Without a queue the Next button of the lock screen is on when there is a suggestion to start.
+        updateNowPlaying()
     }
 
     /// Completes the current video with what its watch page says (`VideoSummary.filledIn(from:)`). A video opened from a
@@ -772,6 +806,7 @@ final class PlayerController {
         guard settings.autoplayNext, let step = autoplayStep(after: video) else { return }
         // What stays up next goes along: with the player minimized the watch page is not on screen to replace the
         // list, and the next hop would find it empty. Autoplay leaves the list of the queue behind.
+        endQueueRun()
         start(step.next, startAt: nil, queue: [], more: nil, upNext: step.remaining, expand: false)
     }
 
@@ -1001,11 +1036,32 @@ final class PlayerController {
         seek(to: notice.segment.start)
     }
 
-    /// Starts the next queued video (the Next button of the lock screen); returns false when there is none to start,
-    /// now or once the next page of the list behind the queue has arrived.
+    /// Starts the next video (the Next button of the controls and of the lock screen): the next queued one, and without a
+    /// queue the first Up next video that is unwatched and that autoplay may start, as autoplay would (also when
+    /// "Autoplay next video" is off: the viewer asked). Returns false when there is none to start, now or once the next
+    /// page of the list behind the queue has arrived. `canPlayNext` says the same beforehand.
     @discardableResult
     func playNext() -> Bool {
-        advanceQueue(as: .now)
+        switch nextVideo {
+        case .queued, .nextPage:
+            return advanceQueue(as: .now)
+        case .suggested(let step):
+            // The queue is over, or there never was one: what stays up next goes along, as with autoplay.
+            endQueueRun()
+            start(step.next, startAt: nil, queue: [], more: nil, upNext: step.remaining, expand: false)
+            return true
+        case .nothing:
+            return false
+        }
+    }
+
+    /// Jumps ahead in the queue to the video at `index` (0 is the one that plays next), as a tap on a row of "Playing
+    /// from ..." does. The videos before it are skipped, and the rest of the queue stays behind it, with the list it came
+    /// from. Does nothing when the queue has moved on since the row was drawn and the video is no longer there.
+    func playQueued(at index: Int, expecting videoID: String) {
+        guard queue.indices.contains(index), queue[index].id == videoID else { return }
+        queuePosition += index + 1
+        start(queue[index], startAt: nil, queue: Array(queue.dropFirst(index + 1)), more: queueSource, expand: false)
     }
 
     // MARK: Queue
@@ -1015,6 +1071,7 @@ final class PlayerController {
     /// start, now or later.
     private func advanceQueue(as request: QueueAdvance.Request) -> Bool {
         if let next = queue.first {
+            queuePosition += 1
             start(next, startAt: nil, queue: Array(queue.dropFirst()), more: queueSource, expand: false)
             return true
         }
@@ -1025,6 +1082,19 @@ final class PlayerController {
         }
         refill(from: source)
         return true
+    }
+
+    /// A video was opened from outside: a new queue run begins when it comes with a queue (or with the rest of a list), at
+    /// the first position; one that does not leaves the queue the player had.
+    private func beginQueueRun(named name: String?, hasQueue: Bool) {
+        queueName = hasQueue ? name : nil
+        queuePosition = hasQueue ? 1 : 0
+    }
+
+    /// The player is not playing from a queue any more (autoplay or Next went on to a suggestion, the player was closed).
+    private func endQueueRun() {
+        queueName = nil
+        queuePosition = 0
     }
 
     /// Takes over the queue a list handed in: the videos that follow the current one, and the source of the rest of the
@@ -1168,6 +1238,7 @@ final class PlayerController {
         streamInfo = nil
         state = .idle
         queue = []
+        endQueueRun()
         refillTask?.cancel()
         refillTask = nil
         pendingAdvance = nil
@@ -2039,6 +2110,8 @@ extension PlayerController {
             upNextHead=\(self.upNext.first?.id ?? "-", privacy: .public) \
             chapters=\(self.chapters.count) tracks=\(self.captionTracks.count) kept=\(self.debugKeptSummary) \
             queue=\(self.queue.count) more=\(self.queueSource?.hasMore ?? false) \
+            queueName=\(self.queueName ?? "-", privacy: .public) queuePosition=\(self.queuePosition) \
+            queueHead=\(self.queue.first?.id ?? "-", privacy: .public) canNext=\(self.canPlayNext) \
             blocked=\(self.settings.blockedChannels.count) \
             video=\(self.currentVideo?.id ?? "-", privacy: .public) \
             live=\(self.isLive) videoLive=\(self.currentVideo?.isLive ?? false) \

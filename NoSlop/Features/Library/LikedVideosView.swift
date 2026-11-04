@@ -2,7 +2,8 @@ import NoSlopKit
 import SwiftUI
 
 /// The videos liked on the signed-in Google account, newest like first, loaded page by page and shown through the
-/// feed filters (Shorts, blocked channels and words), like every other list.
+/// feed filters (Shorts, blocked channels and words), like every other list. "Play all" and a row queue the whole list,
+/// the pages that are not loaded yet included.
 struct LikedVideosView: View {
     @Environment(AppEnvironment.self) private var env
 
@@ -61,11 +62,13 @@ private struct LikedVideosList: View {
         }
     }
 
+    private static let queueName = "Liked videos"
+
     private var list: some View {
         let videos = model.videos
         return List {
             HStack {
-                LibraryPlayAllButton(videos: videos)
+                LibraryPlayAllButton(videos: videos, queueName: Self.queueName, more: queueSource)
                 Spacer(minLength: 0)
             }
             .listRowSeparator(.hidden)
@@ -73,7 +76,9 @@ private struct LikedVideosList: View {
             // Offsets, not video ids: nothing stops YouTube from listing a video twice.
             ForEach(Array(videos.enumerated()), id: \.offset) { index, video in
                 LibraryVideoRow(video: video) {
-                    env.open(video, queue: Array(videos[(index + 1)...]))
+                    // "Play all" and a row queue the whole list: what is not loaded yet (a list of 3,000 likes has loaded
+                    // 50) follows page by page while the queue plays.
+                    env.open(video, queue: Array(videos[(index + 1)...]), more: queueSource(), queueName: Self.queueName)
                 }
                 .listRowSeparator(.hidden)
                 .onAppear {
@@ -94,6 +99,12 @@ private struct LikedVideosList: View {
             source: { token in try await env.viaAccount { try await $0.likedVideos(pageToken: token) } },
             filter: { videos in env.contentFilter.filter(videos) }
         )
+    }
+
+    /// The pages of the list behind what is loaded, for the player's queue; nil when it is loaded to its end. Asked when
+    /// the viewer taps, so it starts where the list is by then.
+    private func queueSource() -> QueueSource? {
+        model.queueSource(using: env) { account, token in try await account.likedVideos(pageToken: token) }
     }
 }
 

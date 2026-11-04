@@ -167,6 +167,20 @@ public final class AccountVideosModel {
         }
     }
 
+    // MARK: Playing the list
+
+    /// The rest of the list behind what has arrived, as the source of a play queue ("Play all", a tap on a row): the page
+    /// the list would load next and the pages after it, which the player asks for as the queue runs low. Nil when the
+    /// list is loaded to its end.
+    ///
+    /// The source knows every video that arrived, shown or hidden by the list's filter, so a video the filter hid once is
+    /// not new when it comes round on a later page. `fetch` and `filter` are the caller's: the model is gone when its
+    /// screen is popped, long before a long queue is over, so a source must not refer to it (or to the screen).
+    public func queueSource(fetch: @escaping QueueSource.Fetch, filter: @escaping QueueSource.Filter) -> QueueSource? {
+        guard let token = continuation else { return nil }
+        return QueueSource(continuation: token, knownIDs: Set(arrived.map(\.id)), fetch: fetch, filter: filter)
+    }
+
     // MARK: Filtering
 
     /// The filter changed: shows what has arrived through it. What it hides now goes away at once and what it lets

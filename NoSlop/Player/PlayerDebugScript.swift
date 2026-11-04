@@ -16,8 +16,10 @@ import UIKit
 /// - `hops=<count>[,<seconds before the end>]` plays on from video to video: for each hop it waits until the video plays,
 ///   jumps to the end (2 s before it unless told otherwise), waits up to 25 s for another video to start and logs the
 ///   state (`hop <n>`). It stops at the first hop that no video follows.
-/// - `next` is the Next button of the lock screen (`playNext`), `watched=<video id>[,<video id>...]` records a minute of
-///   each sample video in the history, so that autoplay passes it over, `scrollPage=<points>` scrolls the watch page
+/// - `next` is the Next button of the controls and of the lock screen (`playNext`: the next queued video, or without a
+///   queue the first unwatched Up next video), `jump=<n>` a tap on the n-th row of "Playing from ..." on the watch page (1
+///   is the next video of the queue), `watched=<video id>[,<video id>...]` records a minute of each sample video in the
+///   history, so that autoplay passes it over, `scrollPage=<points>` scrolls the watch page
 /// - `quality=<auto|1080|720|480|360>` (a pick), `capQuality=<...>` (only the cap, as the connection sets it),
 ///   `rate=<speed>`, `pause`, `play`
 /// - `systemPause`, `systemPlay` reach the `AVPlayer` directly, as the Picture in Picture window or an AirPlay remote
@@ -90,6 +92,10 @@ enum PlayerDebugScript {
                 }
             case "next":
                 _ = player.playNext()
+            case "jump":
+                if let number = Int(value), number >= 1, number <= player.queue.count {
+                    player.playQueued(at: number - 1, expecting: player.queue[number - 1].id)
+                }
             case "scrollPage":
                 if let points = Double(value) { DebugLaunchHooks.scrollWatchPage(to: points) }
             case "watched":
