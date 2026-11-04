@@ -59,7 +59,12 @@ struct PlayerHostView: View {
 
             // Below the controls, so the chevron (and the controls generally) stay usable on the error screen.
             if let message = player.failureMessage {
-                PlayerFailureView(message: message, video: player.currentVideo, retry: { player.retry() })
+                PlayerFailureView(
+                    message: message,
+                    video: player.currentVideo,
+                    canRetry: player.failureIsWorthRetrying,
+                    retry: { player.retry() }
+                )
             }
 
             PlayerControlsView(isFullscreen: fullscreen)
@@ -74,7 +79,9 @@ struct PlayerHostView: View {
     }
 }
 
-/// What the player area shows when the video cannot be played: the reason, Retry, and the way out to YouTube.
+/// What the player area shows when the video cannot be played: the reason, Retry (only when asking again could end
+/// differently: not for a video YouTube will not hand out, `PlayerFailureAdvice`), and the way out to YouTube. The top
+/// bar with the chevron that minimizes the player stays above it either way.
 ///
 /// The area is the 16:9 frame of the player, which does not grow with the text. So the text follows the viewer's text
 /// size only as far as the player controls do, and the content makes room as the reason gets longer: first it sits
@@ -83,6 +90,7 @@ struct PlayerHostView: View {
 private struct PlayerFailureView: View {
     let message: String
     let video: VideoSummary?
+    let canRetry: Bool
     let retry: () -> Void
 
     @Environment(\.openURL) private var openURL
@@ -137,8 +145,10 @@ private struct PlayerFailureView: View {
 
     private var buttons: some View {
         HStack(spacing: 10) {
-            Button("Retry", action: retry)
-                .buttonStyle(.borderedProminent)
+            if canRetry {
+                Button("Retry", action: retry)
+                    .buttonStyle(.borderedProminent)
+            }
             if let video {
                 Button("Open on YouTube") { openURL(video.watchURL) }
                     .buttonStyle(.bordered)

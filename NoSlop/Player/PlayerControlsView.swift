@@ -7,7 +7,8 @@ import SwiftUI
 /// controls themselves.
 ///
 /// - Top: chevron (minimize, or leave full screen), title, AirPlay, captions on/off, settings menu.
-/// - Centre: back 10 s, play/pause (a spinner while buffering), forward 10 s.
+/// - Centre: back 10 s, play/pause (a spinner while buffering), forward 10 s, and Next (the next queued video, or the first
+///   unwatched one of Up next; off when there is none).
 /// - Bottom: position / length, Picture in Picture, full screen, and the seek bar.
 ///
 /// While the video plays the controls fade out after three seconds without a touch. Whenever it is not playing
@@ -39,6 +40,8 @@ struct PlayerControlsView: View {
 
     private static let jump = 10.0
     private static let autoHideDelay = 3.0
+    /// The room the centre buttons keep to the sides of a narrow player.
+    private static let centerRowMargin: CGFloat = 12
     /// The text of the bars and of the centre buttons stops following the viewer's text size here. Beyond it the bars
     /// grow taller than `ControlsFootprint` says, and the controls would overlap each other and the strips between them
     /// that the skip notice and the captions use. (Video players keep their chrome at one size, for the same reason.)
@@ -339,8 +342,19 @@ struct PlayerControlsView: View {
         }
     }
 
+    /// Five slots with play/pause in the middle one, so that it sits at the centre of the video: where the spinner is drawn
+    /// while the controls are hidden, which must not jump sideways when they fade in or out. Next is the fifth slot, and
+    /// the first one is empty, its counterweight. The gaps share the room the player has, up to `spacing` each, with a
+    /// margin at the sides: a narrow player brings the buttons closer together instead of cutting Next off.
     private func centerButtons(_ player: PlayerController, spacing: CGFloat) -> some View {
-        HStack(spacing: spacing) {
+        HStack(spacing: 0) {
+            Color.clear
+                .frame(width: ControlsFootprint.barButton, height: ControlsFootprint.barButton)
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+
+            Spacer(minLength: 0)
+
             Button {
                 player.skip(by: -Self.jump)
                 show()
@@ -351,7 +365,11 @@ struct PlayerControlsView: View {
             .opacity(player.isLive ? 0.3 : 1)
             .accessibilityLabel("Back 10 seconds")
 
+            Spacer(minLength: 0)
+
             centerButton(player)
+
+            Spacer(minLength: 0)
 
             Button {
                 player.skip(by: Self.jump)
@@ -362,7 +380,28 @@ struct PlayerControlsView: View {
             .disabled(player.isLive)
             .opacity(player.isLive ? 0.3 : 1)
             .accessibilityLabel("Forward 10 seconds")
+
+            Spacer(minLength: 0)
+
+            nextButton(player)
         }
+        .frame(maxWidth: 4 * ControlsFootprint.barButton + ControlsFootprint.centerButton + 4 * spacing)
+        .padding(.horizontal, Self.centerRowMargin)
+    }
+
+    /// The next queued video, or without a queue the first unwatched one of Up next, as autoplay would choose it. Dimmed and
+    /// off when there is none. The lock screen's Next asks the same question (`PlayerController.canPlayNext`).
+    private func nextButton(_ player: PlayerController) -> some View {
+        let available = player.canPlayNext
+        return Button {
+            player.playNext()
+            show()
+        } label: {
+            iconLabel("forward.end.fill", size: 24)
+        }
+        .disabled(!available)
+        .opacity(available ? 1 : 0.3)
+        .accessibilityLabel("Next video")
     }
 
     /// The video is not playing although the viewer wants it to: loading, buffering, or waiting for the connection.

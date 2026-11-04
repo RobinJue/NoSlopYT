@@ -15,6 +15,9 @@ import UIKit
 /// - `pull`: pull to refresh on the biggest scroll view on screen that has a refresh control
 /// - `tab=<home|subscriptions|library|search>`: a tap on a tab of the tab bar
 /// - `offline=on|off`: the mock connection (`-mockOffline`) goes away or comes back
+/// - `deArrowServer=on|off`: the mock DeArrow service (`-offlineDeArrow`) comes back or goes away
+/// - `connectionBack`: what the player's connection monitor does when the device is online again (`PlayerController`
+///   `networkChanged`), without touching the Mac's network: the titles whose lookup failed are asked about again
 /// - `play=<sample video id>`: a tap on a row of that video (`AppEnvironment.open`, as the Up next rows do)
 /// - `minimize`, `expand`: the chevron of the player and a tap on the mini player
 /// - `accountSubscribe=<sample channel id>`: the signed-in mock account subscribes to a channel behind the app's back,
@@ -63,6 +66,10 @@ enum DebugUIScript {
                 if let tab = tabs[value] { env.router.selectedTab = tab }
             case "offline":
                 DebugLaunchHooks.mockConnection.isOnline = value != "on"
+            case "deArrowServer":
+                DebugLaunchHooks.deArrowConnection.isOnline = value == "on"
+            case "connectionBack":
+                env.player.debugNetworkChanged()
             case "play":
                 if let video = SampleData.video(id: value) { env.open(video) }
             case "minimize":

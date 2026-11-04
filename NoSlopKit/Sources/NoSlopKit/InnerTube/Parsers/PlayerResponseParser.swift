@@ -1,13 +1,15 @@
 import Foundation
 
 /// Turns a `player` response into a `StreamInfo`. The only parser that throws: playability errors
-/// (`.botCheck`, `.unplayable`) are surfaced to the user.
+/// (`.botCheck`, `.unplayable`, `.notPlayableYet`) are surfaced to the user.
 ///
 /// - `playabilityStatus`: `OK` continues; `LOGIN_REQUIRED` with a reason that mentions a bot is `.botCheck`;
-///   any other status is `.unplayable` with YouTube's reason (or the status itself when there is none).
+///   `LIVE_STREAM_OFFLINE` (a live event or premiere that has not begun) is `.notPlayableYet`, which will play later and is
+///   worth asking for again; any other status is `.unplayable`, YouTube's verdict about the video. Both carry YouTube's
+///   reason (or the status itself when there is none).
 /// - Formats come from `streamingData.formats` (progressive) and `adaptiveFormats`. Entries without a plain `url`
 ///   (ciphered or SABR-only) are skipped. A response with neither an HLS manifest nor a usable format is
-///   unplayable.
+///   `.notPlayableYet` too: that is a statement about the answer, not a verdict about the video.
 public enum PlayerResponseParser {
     /// `streamingData.expiresInSeconds` is about six hours; this is used when the response does not say.
     static let defaultLifetime: TimeInterval = 21_540
@@ -26,7 +28,7 @@ public enum PlayerResponseParser {
         let formats = formats(in: streaming?["formats"], isProgressive: true)
             + formats(in: streaming?["adaptiveFormats"], isProgressive: false)
         guard hlsURL != nil || !formats.isEmpty else {
-            throw NoSlopError.unplayable(reason: noStreamsReason)
+            throw NoSlopError.notPlayableYet(reason: noStreamsReason)
         }
 
         let lifetime = streaming?["expiresInSeconds"]?.double.flatMap { $0.isFinite && $0 > 0 ? $0 : nil } ?? defaultLifetime
@@ -59,6 +61,11 @@ public enum PlayerResponseParser {
         let reason = reason(in: playability)
         if status == "LOGIN_REQUIRED", let reason, isBotCheck(reason) {
             throw NoSlopError.botCheck
+        }
+        // A live event or premiere that has not begun ("This live event will begin in 2 hours.") is no verdict about the
+        // video: it will play, and the player's Retry is worth pressing.
+        if status == "LIVE_STREAM_OFFLINE" {
+            throw NoSlopError.notPlayableYet(reason: reason ?? status)
         }
         throw NoSlopError.unplayable(reason: reason ?? status)
     }

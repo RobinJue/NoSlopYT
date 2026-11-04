@@ -767,7 +767,7 @@ private func makeMarkedHTTP() throws -> MockHTTPClient {
         #expect(!NoSlopError.unavailable(reason: "Gone.").isWorthRetrying)
         let retryable: [NoSlopError] = [
             .network("x"), .http(status: 500), .http(status: 404), .decoding("x"), .botCheck, .unplayable(reason: "Private."),
-            .notSignedIn, .googleNotConfigured, .oauth("x"), .quotaExceeded, .dataAPINotEnabled, .cancelled, .notImplemented("x"),
+            .notPlayableYet(reason: "This live event will begin in 2 hours."), .notSignedIn, .googleNotConfigured, .oauth("x"), .quotaExceeded, .dataAPINotEnabled, .cancelled, .notImplemented("x"),
         ]
         for error in retryable {
             #expect(error.isWorthRetrying, "\(error)")
@@ -775,6 +775,7 @@ private func makeMarkedHTTP() throws -> MockHTTPClient {
         #expect(NoSlopError.unavailable(reason: "Gone.").errorDescription == "Gone.")
         #expect(NoSlopError.unavailable(reason: "Gone.") == .unavailable(reason: "Gone."))
         #expect(NoSlopError.unavailable(reason: "Gone.") != .unplayable(reason: "Gone."))
+        #expect(NoSlopError.notPlayableYet(reason: "Soon.") != .unplayable(reason: "Soon."))
     }
 
     private func expectDecodingError(_ body: () async throws -> Void) async {

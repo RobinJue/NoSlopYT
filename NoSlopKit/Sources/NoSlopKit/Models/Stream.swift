@@ -92,7 +92,7 @@ public struct CaptionTrack: Codable, Hashable, Sendable, Identifiable {
     }
 }
 
-public struct CaptionCue: Hashable, Sendable {
+public struct CaptionCue: Codable, Hashable, Sendable {
     public var start: Double
     public var end: Double
     public var text: String

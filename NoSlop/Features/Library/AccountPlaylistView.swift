@@ -2,7 +2,8 @@ import NoSlopKit
 import SwiftUI
 
 /// One playlist of the signed-in YouTube account: its videos, loaded page by page and shown through the feed filters
-/// (Shorts, blocked channels and words), like every other list. A row plays that video and queues the ones after it.
+/// (Shorts, blocked channels and words), like every other list. A row plays that video and queues the ones after it, and
+/// "Play all" queues the playlist: both go on through the pages that are not loaded yet while the queue plays.
 /// The summary from the playlist list is enough to draw the header at once.
 struct AccountPlaylistView: View {
     let playlist: PlaylistSummary
@@ -56,14 +57,15 @@ struct AccountPlaylistView: View {
                 Text(subtitle)
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
-                LibraryPlayAllButton(videos: videos)
+                LibraryPlayAllButton(videos: videos, queueName: playlist.title, more: queueSource)
             }
             .listRowSeparator(.hidden)
 
             // Offsets, not video ids: a playlist may hold the same video twice.
             ForEach(Array(videos.enumerated()), id: \.offset) { index, video in
                 LibraryVideoRow(video: video) {
-                    env.open(video, queue: Array(videos[(index + 1)...]))
+                    // "Play all" and a row queue the whole playlist: the pages that are not loaded yet follow while it plays.
+                    env.open(video, queue: Array(videos[(index + 1)...]), more: queueSource(), queueName: playlist.title)
                 }
                 .listRowSeparator(.hidden)
                 .onAppear {
@@ -90,6 +92,15 @@ struct AccountPlaylistView: View {
             parts.append(count == 1 ? "1 video" : "\(count) videos")
         }
         return parts.joined(separator: " · ")
+    }
+
+    /// The pages of the playlist behind what is loaded, for the player's queue; nil when it is loaded to its end. Asked when
+    /// the viewer taps, so it starts where the list is by then.
+    private func queueSource() -> QueueSource? {
+        let playlistID = playlist.id
+        return model.queueSource(using: env) { account, token in
+            try await account.playlistItems(playlistID: playlistID, pageToken: token)
+        }
     }
 
     /// Where the pages come from, and what the viewer's filters leave out. Built per call, so it follows the settings.

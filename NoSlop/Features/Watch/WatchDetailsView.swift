@@ -3,7 +3,7 @@ import SwiftUI
 
 /// The watch page under the player, inside the expanded player overlay: title, views and date, the channel with
 /// Subscribe, action chips (Like, Watch Later, Save, Download, Share), the description, chapters, a comments
-/// teaser and the "Up next" list.
+/// teaser, the queue that plays ("Playing from ...") and the "Up next" list.
 ///
 /// It scrolls by itself and needs no navigation stack: links go through `AppEnvironment` (`open`, `show`), which
 /// shrinks the player to the mini player before a channel or playlist page is pushed.
@@ -43,6 +43,10 @@ private struct WatchDetailsContent: View {
                 channelRow
                 actionChips
                 pageContent
+                // The queue belongs to the player, not to the page: it shows while the page loads and when it could not be
+                // loaded, and sits right above "Up next".
+                QueueSectionView()
+                upNext
             }
             .padding(.bottom, 24)
         }
@@ -401,8 +405,6 @@ private struct WatchDetailsContent: View {
         }
 
         commentsTeaser(details)
-
-        relatedList
     }
 
     // MARK: Comments teaser
@@ -454,6 +456,14 @@ private struct WatchDetailsContent: View {
     }
 
     // MARK: Up next
+
+    /// The related videos, once the page has loaded.
+    @ViewBuilder
+    private var upNext: some View {
+        if case .loaded = model.phase {
+            relatedList
+        }
+    }
 
     @ViewBuilder
     private var relatedList: some View {

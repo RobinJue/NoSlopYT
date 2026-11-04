@@ -375,6 +375,26 @@ import Testing
         #expect(await deArrow.betterTitle(videoID: "aqz-KE-bpKQ") == nil)
     }
 
+    @Test func deArrowLookupSaysTitleOrNone() async {
+        let deArrow = MockDeArrow(delay: .zero)
+        #expect(await deArrow.lookup(videoID: "dQw4w9WgXcQ") == .title(SampleData.betterTitleForRickroll))
+        #expect(await deArrow.lookup(videoID: "aqz-KE-bpKQ") == DeArrowLookup.none)
+    }
+
+    @Test func deArrowFailsWithoutAConnectionAndAnswersAgainWhenItIsBack() async {
+        let connection = MockConnection(isOnline: false)
+        let deArrow = MockDeArrow(delay: .zero, connection: connection)
+
+        // Offline is a failure, which is not the same as "no better title".
+        #expect(await deArrow.lookup(videoID: "dQw4w9WgXcQ") == .failed)
+        #expect(await deArrow.lookup(videoID: "aqz-KE-bpKQ") == .failed)
+        #expect(await deArrow.betterTitle(videoID: "dQw4w9WgXcQ") == nil)
+
+        connection.isOnline = true
+        #expect(await deArrow.lookup(videoID: "dQw4w9WgXcQ") == .title(SampleData.betterTitleForRickroll))
+        #expect(await deArrow.lookup(videoID: "aqz-KE-bpKQ") == DeArrowLookup.none)
+    }
+
     @MainActor private final class NoWebAuthenticator: WebAuthenticating {
         func authenticate(url: URL, callbackScheme: String) async throws -> URL { url }
     }

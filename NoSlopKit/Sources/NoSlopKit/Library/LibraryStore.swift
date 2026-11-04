@@ -20,7 +20,9 @@ import Observation
 /// Changes are written in the background: the first change after a write starts a 0.5 s timer, and everything
 /// that changed until it fires goes to disk together, encoded and written off the main thread. Writes happen in
 /// the order they were started. `flush()` writes immediately and returns once the data is on disk, so call it
-/// when the app goes to the background; changes made in the last half second before the process is killed are lost.
+/// when the app goes to the background. `flushNow()` does the same without an `await`, blocking the caller for a
+/// moment, for the one place where nothing can be awaited: the notice that the process is about to end. A process that
+/// is killed without any notice loses the changes of the last half second.
 @MainActor
 @Observable
 public final class LibraryStore {
@@ -52,18 +54,28 @@ public final class LibraryStore {
     @ObservationIgnored private var timerGeneration = 0
     /// The most recent background write; each new write waits for the one before it.
     @ObservationIgnored private var lastWrite: Task<Void, Never>?
+    /// The background writes that were started and have not finished. `flushNow` waits on it; nothing else does.
+    @ObservationIgnored private let writesInFlight = DispatchGroup()
+    /// Runs in each background write before it touches a file. Tests slow a write down with it.
+    @ObservationIgnored private let beforeWrite: (@Sendable () -> Void)?
 
     /// Loads the five files from `directory` (created on the first write).
     public convenience init(directory: URL) {
         self.init(directory: directory, saveDelay: .milliseconds(500), now: { Date() })
     }
 
-    /// Tests choose the write delay and the clock.
-    init(directory: URL, saveDelay: Duration, now: @escaping @Sendable () -> Date) {
+    /// Tests choose the write delay and the clock, and can make the background writes slow.
+    init(
+        directory: URL,
+        saveDelay: Duration,
+        now: @escaping @Sendable () -> Date,
+        beforeWrite: (@Sendable () -> Void)? = nil
+    ) {
         let files = JSONFileStore(directory: directory)
         self.files = files
         self.saveDelay = saveDelay
         self.now = now
+        self.beforeWrite = beforeWrite
 
         subscriptions = Self.unique(files.loadList(LibraryFile.subscriptions.rawValue), by: \SubscribedChannel.id)
         // Videos that earlier builds stored with text that was only true on the day (see `VideoSummary.forLibrary`) are
@@ -355,6 +367,32 @@ public final class LibraryStore {
         await lastWrite?.value
     }
 
+    /// Writes everything that changed, on the calling thread, and returns once it is on disk. For the last moment of the
+    /// process only: iOS announces it with `UIApplication.willTerminateNotification` and ends the process as soon as the
+    /// observers return, so an `await` (`flush()`) never gets to finish there and the half-second timer never fires.
+    /// Everywhere else use `flush()`: this blocks the thread it is called on.
+    ///
+    /// A background write that is already running is waited for first, for at most `timeout` seconds. Otherwise it
+    /// could finish after the write below and put the older content back on top of the newer. If it does not finish in
+    /// time (the disk hangs) nothing is written, and the call returns false: the changes stay marked as changed. The
+    /// wait cannot deadlock, because the background writes never need the main actor.
+    ///
+    /// - Returns: whether everything that changed is on disk.
+    @discardableResult
+    public func flushNow(timeout: TimeInterval = 2) -> Bool {
+        timerGeneration += 1
+        timer?.cancel()
+        timer = nil
+        guard writesInFlight.wait(timeout: .now() + timeout) == .success else { return false }
+        // Nothing runs in the background now, and nothing can start one: starting is the main actor's, and this is it.
+        let snapshots = dirty.map { snapshot(of: $0) }
+        dirty.removeAll()
+        for snapshot in snapshots {
+            snapshot.write(to: files)
+        }
+        return true
+    }
+
     private func markDirty(_ file: LibraryFile) {
         dirty.insert(file)
         guard timer == nil else { return }
@@ -380,8 +418,13 @@ public final class LibraryStore {
         dirty.removeAll()
         let previous = lastWrite
         let files = files
+        let beforeWrite = beforeWrite
+        let writesInFlight = writesInFlight
+        writesInFlight.enter()
         lastWrite = Task.detached(priority: .utility) {
+            defer { writesInFlight.leave() }
             await previous?.value
+            beforeWrite?()
             for snapshot in snapshots {
                 snapshot.write(to: files)
             }

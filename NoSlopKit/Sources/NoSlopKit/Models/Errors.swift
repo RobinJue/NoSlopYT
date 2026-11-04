@@ -9,7 +9,15 @@ public enum NoSlopError: Error, Equatable, Sendable, LocalizedError {
     case decoding(String)
     /// YouTube asked the client to prove it is not a bot (`LOGIN_REQUIRED` on `player`).
     case botCheck
+    /// YouTube's verdict on a video: removed, private, terminated channel, age-restricted, made for kids, blocked in the
+    /// country. The payload is its reason. Asking again gets the same verdict, which is why the player's error screen has
+    /// no Retry for it (`PlayerFailureAdvice`). A video that is only not playable yet is `notPlayableYet`.
     case unplayable(reason: String)
+    /// YouTube has nothing to play for the video yet, but has not ruled it out: a live event or a premiere that has not
+    /// begun ("This live event will begin in 2 hours."), or an answer that came without any stream to play. Unlike
+    /// `unplayable` this is not a verdict: asking again can end differently, so it is worth a Retry (`isWorthRetrying`).
+    /// The payload is the reason to show.
+    case notPlayableYet(reason: String)
     /// YouTube says that the video, playlist or channel is gone: removed, private, terminated. The payload is
     /// YouTube's own wording ("The playlist does not exist."), which says it better than any sentence of ours. Asking
     /// again cannot change the answer (`isWorthRetrying`).
@@ -36,7 +44,7 @@ public enum NoSlopError: Error, Equatable, Sendable, LocalizedError {
             return "Couldn't read the response from YouTube."
         case .botCheck:
             return "YouTube asked to confirm you're not a bot. Try again in a minute, or open the video on YouTube."
-        case .unplayable(let reason), .unavailable(let reason):
+        case .unplayable(let reason), .notPlayableYet(let reason), .unavailable(let reason):
             return reason
         case .notSignedIn:
             return "Sign in with Google to use this."

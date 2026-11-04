@@ -425,4 +425,103 @@ private func ids(_ model: AccountVideosModel) -> [String] {
         #expect(model.hiddenCount == 2, "the screen can say that the filters hid everything instead of \"nothing here\"")
         #expect(!model.hasMore && !model.isPaused)
     }
+
+    // MARK: Playing the list (spec-7)
+
+    /// A fetch for a queue source: the pages by token, and the tokens asked for in order.
+    @MainActor
+    private final class QueueFetches {
+        let pages: [String: Page<VideoSummary>]
+        private(set) var asked: [String] = []
+
+        init(_ pages: [String: Page<VideoSummary>]) { self.pages = pages }
+
+        func fetch(_ token: String) async throws -> Page<VideoSummary> {
+            asked.append(token)
+            return pages[token] ?? Page()
+        }
+    }
+
+    @Test func theQueueSourceContinuesWhereTheListStopped() async throws {
+        // "Play all" on a list that has loaded its first page: the queue gets the rest, page by page.
+        let pages = Pages(["first": page(["a", "b", "c"], next: "2")])
+        let model = AccountVideosModel()
+        await model.reload(using: pages.loader())
+        let fetches = QueueFetches(["2": page(["d", "e"], next: "3"), "3": page(["f"])])
+
+        let made = model.queueSource(fetch: { try await fetches.fetch($0) }, filter: { $0 })
+        let source = try #require(made)
+
+        #expect(source.continuation == "2")
+        #expect(source.hasMore)
+        #expect(try await source.next().map(\.id) == ["d", "e"])
+        #expect(try await source.next().map(\.id) == ["f"])
+        #expect(!source.hasMore)
+        #expect(fetches.asked == ["2", "3"])
+        #expect(pages.asked == ["first"], "the list itself asked for nothing")
+    }
+
+    @Test func theQueueSourceKnowsEveryVideoThatArrivedAlsoTheOnesTheListHides() async throws {
+        // "b" was hidden by the list's filter on the first page. When it comes round again on the next page, it is not a
+        // new video: nobody saw it, but it arrived.
+        let pages = Pages(["first": page(["a", "b", "c"], next: "2")])
+        let model = AccountVideosModel()
+        await model.reload(using: pages.loader(hiding: Hiding(["b"])))
+        #expect(ids(model) == ["a", "c"])
+        let fetches = QueueFetches(["2": page(["b", "c", "d"])])
+
+        let made = model.queueSource(fetch: { try await fetches.fetch($0) }, filter: { $0 })
+        let source = try #require(made)
+
+        #expect(try await source.next().map(\.id) == ["d"])
+    }
+
+    @Test func theQueueSourceAppliesTheFilterItWasGivenToEveryPage() async throws {
+        let pages = Pages(["first": page(["a"], next: "2")])
+        let model = AccountVideosModel()
+        await model.reload(using: pages.loader())
+        let fetches = QueueFetches(["2": page(["b", "blocked", "c"], next: "3"), "3": page(["blocked too", "d"])])
+        let hidden: Set<String> = ["blocked", "blocked too"]
+
+        let made = model.queueSource(
+            fetch: { try await fetches.fetch($0) },
+            filter: { videos in videos.filter { !hidden.contains($0.id) } }
+        )
+        let source = try #require(made)
+
+        #expect(try await source.next().map(\.id) == ["b", "c"])
+        #expect(try await source.next().map(\.id) == ["d"])
+    }
+
+    @Test func aListLoadedToItsEndHasNothingToQueueBehindIt() async {
+        let pages = Pages(["first": page(["a", "b"])])
+        let model = AccountVideosModel()
+        await model.reload(using: pages.loader())
+
+        let atTheEnd = model.queueSource(fetch: { _ in Page() }, filter: { $0 })
+        #expect(atTheEnd == nil)
+        // And before anything is loaded.
+        let beforeLoading = AccountVideosModel().queueSource(fetch: { _ in Page() }, filter: { $0 })
+        #expect(beforeLoading == nil)
+    }
+
+    @Test func theQueueSourceStartsAtThePageTheListWouldLoadNext() async throws {
+        // The list went on to its second page before the viewer tapped "Play all".
+        let pages = Pages([
+            "first": page(["a", "b"], next: "2"),
+            "2": page(["c", "d"], next: "3"),
+        ])
+        let model = AccountVideosModel()
+        let loader = pages.loader()
+        await model.reload(using: loader)
+        await model.loadMore(using: loader)
+        let fetches = QueueFetches(["3": page(["e"])])
+
+        let made = model.queueSource(fetch: { try await fetches.fetch($0) }, filter: { $0 })
+        let source = try #require(made)
+
+        #expect(source.continuation == "3")
+        #expect(try await source.next().map(\.id) == ["e"])
+        #expect(fetches.asked == ["3"], "nothing the list already has is fetched again")
+    }
 }
