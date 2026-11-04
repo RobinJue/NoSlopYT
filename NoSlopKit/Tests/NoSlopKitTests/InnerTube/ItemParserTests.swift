@@ -186,14 +186,23 @@ import Testing
 
     // MARK: lockupViewModel (video)
 
-    /// A video lockup shaped like the captures. `rows` are the metadata rows (each a list of part texts).
+    /// A video lockup shaped like the captures. `rows` are the metadata rows (each a list of part texts), `badges`
+    /// the badges over the thumbnail, and `chips` the status chips ("New", "CC", "Members only") that YouTube puts in
+    /// a row of their own after the text rows: `{"badges":[{"badgeViewModel":{"badgeText":…,"badgeStyle":…}}]}`.
     private func videoLockup(
         id: String = "lockupvid01", title: String = "A lockup", rows: [[String]] = [], badges: [(text: String, style: String)] = [],
-        channelID: String? = nil, extra: String = ""
+        chips: [(text: String, style: String)] = [], channelID: String? = nil, extra: String = ""
     ) throws -> JSON {
-        let rowsJSON = rows.map { row in
+        var rowObjects = rows.map { row in
             #"{"metadataParts":["# + row.map { #"{"text":{"content":"\#($0)"}}"# }.joined(separator: ",") + "]}"
-        }.joined(separator: ",")
+        }
+        if !chips.isEmpty {
+            let chipsJSON = chips.map {
+                #"{"badgeViewModel":{"badgeText":"\#($0.text)","badgeStyle":"\#($0.style)","iconName":"SPONSORSHIP_STAR"}}"#
+            }.joined(separator: ",")
+            rowObjects.append(#"{"badges":["# + chipsJSON + "]}")
+        }
+        let rowsJSON = rowObjects.joined(separator: ",")
         let badgesJSON = badges.map { #"{"thumbnailBadgeViewModel":{"text":"\#($0.text)","badgeStyle":"\#($0.style)"}}"# }.joined(separator: ",")
         let avatar = channelID.map {
             #"""
@@ -333,6 +342,88 @@ import Testing
         let video = try #require(ItemParser.video(fromLockup: lockup))
         #expect(video.isMembersOnly)
         #expect(video.durationSeconds == 600)
+    }
+
+    // The members-only mark of a lockup is a status chip, not a thumbnail badge: `metadataRows[].badges[].badgeViewModel`,
+    // in a row of its own after the text rows. A captured one reads {"badgeText":"Members only",
+    // "badgeStyle":"BADGE_MEMBERS_ONLY","iconName":"SPONSORSHIP_STAR"} (see MembersOnlyVideosTests); only the text is
+    // translated, the style is the same in every language.
+
+    @Test func theMembersOnlyChipMarksALockup() throws {
+        let lockup = try videoLockup(
+            rows: [["Chan"], ["1K views", "1 day ago"]],
+            badges: [("10:00", "THUMBNAIL_OVERLAY_BADGE_STYLE_DEFAULT")],
+            chips: [("Members only", "BADGE_MEMBERS_ONLY")]
+        )
+        let video = try #require(ItemParser.video(fromLockup: lockup))
+        #expect(video.isMembersOnly)
+        // The chip row is no text row: duration, views and age are read as they are without it.
+        #expect(video.durationSeconds == 600)
+        #expect(video.viewCount == 1_000)
+        #expect(video.viewCountText == "1K views")
+        #expect(video.publishedText == "1 day ago")
+    }
+
+    @Test func aChannelTabLockupWithJustAnAgeAndTheChip() throws {
+        // How a members-only video looks on a channel's Videos tab: one text row (no views), then the chip row.
+        let lockup = try videoLockup(
+            rows: [["1 day ago"]],
+            badges: [("31:00", "THUMBNAIL_OVERLAY_BADGE_STYLE_DEFAULT")],
+            chips: [("Members only", "BADGE_MEMBERS_ONLY")]
+        )
+        let video = try #require(ItemParser.video(fromLockup: lockup))
+        #expect(video.isMembersOnly)
+        #expect(video.durationSeconds == 1_860)
+        #expect(video.publishedText == "1 day ago")
+        #expect(video.viewCountText == nil)
+    }
+
+    @Test(arguments: [
+        ("Nur f\u{00FC}r Kanalmitglieder", "BADGE_MEMBERS_ONLY"),  // the German chip of a captured channel tab
+        ("Solo para miembros", "BADGE_MEMBERS_ONLY"),
+        ("\u{30E1}\u{30F3}\u{30D0}\u{30FC}\u{9650}\u{5B9A}", "BADGE_MEMBERS_ONLY"),
+        ("", "BADGE_MEMBERS_ONLY"),
+    ])
+    func theMembersOnlyChipIsRecognisedByItsStyleInEveryLanguage(text: String, style: String) throws {
+        let lockup = try videoLockup(rows: [["Chan"], ["1K views", "1 day ago"]], chips: [(text, style)])
+        #expect(try #require(ItemParser.video(fromLockup: lockup)).isMembersOnly)
+    }
+
+    @Test func theEnglishChipTextIsTheFallbackWhenTheStyleIsUnknown() throws {
+        let lockup = try videoLockup(rows: [["Chan"], ["1K views", "1 day ago"]], chips: [("Members only", "BADGE_DEFAULT")])
+        #expect(try #require(ItemParser.video(fromLockup: lockup)).isMembersOnly)
+    }
+
+    @Test func theMembersOnlyChipIsFoundAmongOtherChips() throws {
+        let lockup = try videoLockup(
+            rows: [["Chan"], ["1K views", "1 day ago"]],
+            chips: [("New", "BADGE_DEFAULT"), ("Members only", "BADGE_MEMBERS_ONLY")]
+        )
+        #expect(try #require(ItemParser.video(fromLockup: lockup)).isMembersOnly)
+    }
+
+    @Test(arguments: [
+        ("New", "BADGE_DEFAULT"),
+        ("CC", "BADGE_DEFAULT"),
+        ("Auto-dubbed", "BADGE_DEFAULT"),
+        ("Fundraiser", "BADGE_COMMERCE"),
+    ])
+    func otherChipsDoNotMakeALockupMembersOnly(text: String, style: String) throws {
+        let lockup = try videoLockup(rows: [["Chan"], ["1K views", "1 day ago"]], chips: [(text, style)])
+        let video = try #require(ItemParser.video(fromLockup: lockup))
+        #expect(!video.isMembersOnly)
+        // …and they are no text row either.
+        #expect(video.viewCountText == "1K views")
+        #expect(video.publishedText == "1 day ago")
+    }
+
+    @Test(arguments: [#"{"badges":[]}"#, #"{"badges":[{"somethingElse":{}}]}"#, #"{"badges":[7,null,"x"]}"#, #"{"badges":{}}"#, #"{"badges":null}"#])
+    func oddChipRowsAreIgnored(row: String) throws {
+        // The last row in shapes YouTube might send: no badges, a badge without a view model, scalars, an object.
+        let rows = try json(#"[{"metadataParts":[{"text":{"content":"Chan"}}]},"# + row + "]")
+        let edited = BrowseJSONEdit.replacingFirstValue(forKey: "metadataRows", in: try videoLockup()) { _ in rows }
+        let video = try #require(ItemParser.video(fromLockup: edited))
+        #expect(!video.isMembersOnly)
     }
 
     @Test func shortInALockupIsFlagged() throws {

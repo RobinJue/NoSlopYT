@@ -31,7 +31,6 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.robinjungerich.noslopyt
         INFOPLIST_KEY_CFBundleDisplayName: "No Slop"
-        INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
         INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents: YES
         SWIFT_VERSION: "6.0"
         SWIFT_DEFAULT_ACTOR_ISOLATION: MainActor
@@ -49,6 +48,12 @@ targets:
       properties:
         CFBundleShortVersionString: "$(MARKETING_VERSION)"
         CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
+        # One window only. The router, the player and Picture in Picture are process-wide: a second window (iPadOS "New
+        # Window", App Exposé, "Designed for iPad" on a Mac) would show and steer the same navigation and the same player.
+        # This replaces INFOPLIST_KEY_UIApplicationSceneManifest_Generation, which makes Xcode write
+        # UIApplicationSupportsMultipleScenes = true. Split View and Slide Over with other apps are not affected.
+        UIApplicationSceneManifest:
+          UIApplicationSupportsMultipleScenes: false
         UIBackgroundModes:
           - audio
         UIFileSharingEnabled: true

@@ -1,7 +1,8 @@
 import NoSlopKit
 import SwiftUI
 
-/// Feed filters: what Home, Subscriptions, search results and suggestions leave out.
+/// Feed filters: what Home, Subscriptions, search results, channels, playlists, suggestions and the liked videos and
+/// YouTube playlists of the account leave out.
 struct FeedFilterSettingsSection: View {
     @Environment(AppEnvironment.self) private var env
 
@@ -27,7 +28,9 @@ struct FeedFilterSettingsSection: View {
         } header: {
             Text("Feed filters")
         } footer: {
-            Text("Applies to Home, Subscriptions, search results and suggested videos.")
+            // The two filters that need YouTube's own marks cannot work on the uploads that come from channel feeds
+            // (RSS): those carry no members-only, live or upcoming mark.
+            Text("Applies to Home, Subscriptions, search results, channels, playlists, suggested videos and your liked videos. History, Watch Later, your own playlists and downloads show everything you put there.\n\nMembers-only and live or upcoming videos are hidden only where YouTube marks them, such as in search, on channel pages and in suggestions. The Subscriptions tab and the subscription uploads on Home come from the channels\u{2019} feeds, which carry no such marks.")
         }
     }
 
@@ -36,7 +39,8 @@ struct FeedFilterSettingsSection: View {
     }
 }
 
-/// The channels hidden with "Don't show this channel". Swipe a row to unblock it.
+/// The channels hidden with "Don't show this channel". Swipe a row to unblock it, or choose "Show this channel again"
+/// in the menu of one of its videos.
 struct BlockedChannelsView: View {
     @Environment(AppEnvironment.self) private var env
 
@@ -48,7 +52,7 @@ struct BlockedChannelsView: View {
                 EmptyStateView(
                     title: "No blocked channels",
                     systemImage: "nosign",
-                    message: "Choose \u{201C}Don't show this channel\u{201D} in a video's menu to hide a channel everywhere."
+                    message: "Choose \u{201C}Don't show this channel\u{201D} in a video's menu to hide a channel from your feeds, searches and playlists."
                 )
             } else {
                 List {
@@ -76,11 +80,12 @@ struct BlockedChannelsView: View {
     }
 
     private func unblock(_ channel: BlockedChannel) {
-        env.settingsStore.settings.blockedChannels.removeAll { $0.id == channel.id }
+        ChannelBlocking.unblock(channelID: channel.id, using: env)
     }
 }
 
-/// Words and phrases that hide a video when its title contains them (case and accents are ignored).
+/// Words and phrases that hide a video when its title contains them (case and accents are ignored). A short word of
+/// up to three letters or digits only counts as a whole word (`ContentFilter`).
 struct BlockedKeywordsView: View {
     @Environment(AppEnvironment.self) private var env
     @State private var draft = ""
@@ -101,7 +106,7 @@ struct BlockedKeywordsView: View {
                         .disabled(trimmedDraft.isEmpty)
                 }
             } footer: {
-                Text("Videos whose title contains one of these words or phrases are hidden.")
+                Text("Videos whose title contains one of these words or phrases are hidden; case and accents don\u{2019}t matter. Words of up to three letters or digits, such as \u{201C}AI\u{201D}, only match whole words. Longer words and phrases also match inside other words.")
             }
 
             if !keywords.isEmpty {

@@ -8,6 +8,10 @@ import SwiftUI
 /// The message is `LocalizedError.errorDescription` when the error has one (every `NoSlopError` does), otherwise
 /// a generic sentence. "Open on YouTube" appears only when a URL is given. `retry` may be async:
 /// `ErrorStateView(error: e) { await model.load() }`.
+///
+/// There is no "Retry" for an error that says trying again cannot help (`NoSlopError.isWorthRetrying`): a video,
+/// playlist or channel that YouTube says is gone would only be asked about again. The screen then says what YouTube
+/// said under "Not available", not "Something went wrong".
 struct ErrorStateView: View {
     let error: Error
     let retry: (@MainActor () async -> Void)?
@@ -30,11 +34,11 @@ struct ErrorStateView: View {
 
     var body: some View {
         ContentUnavailableView {
-            Label("Something went wrong", systemImage: "exclamationmark.triangle")
+            Label(isWorthRetrying ? "Something went wrong" : "Not available", systemImage: "exclamationmark.triangle")
         } description: {
             Text(message)
         } actions: {
-            if let retry {
+            if let retry, isWorthRetrying {
                 Button("Retry") {
                     Task { await retry() }
                 }
@@ -50,6 +54,10 @@ struct ErrorStateView: View {
 
     private var message: String {
         (error as? LocalizedError)?.errorDescription ?? "Something went wrong. Please try again."
+    }
+
+    private var isWorthRetrying: Bool {
+        (error as? NoSlopError)?.isWorthRetrying ?? true
     }
 }
 
@@ -88,6 +96,10 @@ struct LoadingView: View {
 
 #Preview("Error") {
     ErrorStateView(error: NoSlopError.network("offline"), retry: {}, openURL: URL(string: "https://www.youtube.com"))
+}
+
+#Preview("Gone") {
+    ErrorStateView(error: NoSlopError.unavailable(reason: "The playlist does not exist."), retry: {}, openURL: URL(string: "https://www.youtube.com"))
 }
 
 #Preview("Empty") {

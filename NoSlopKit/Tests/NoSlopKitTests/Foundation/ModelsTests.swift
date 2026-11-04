@@ -473,6 +473,63 @@ import Testing
         #expect(NoSlopError.http(status: 503).errorDescription?.contains("503") == true)
     }
 
+    @Test func anOAuthMessageThatIsAlreadyASentenceIsNotWrapped() {
+        let refusal = "YouTube access wasn't granted. Sign in again and allow access to your YouTube account."
+        #expect(NoSlopError.oauth(refusal).errorDescription == refusal)
+        #expect(NoSlopError.oauth("The sign-in page could not be opened.").errorDescription == "The sign-in page could not be opened.")
+        #expect(NoSlopError.oauth("The sign-in page returned no result.").errorDescription == "The sign-in page returned no result.")
+        #expect(NoSlopError.oauth("Is this working?").errorDescription == "Is this working?")
+        #expect(NoSlopError.oauth("  Padded sentence.\n").errorDescription == "Padded sentence.")
+    }
+
+    @Test func aBareOAuthReasonKeepsItsFrame() {
+        #expect(NoSlopError.oauth("access_denied").errorDescription == "Google sign-in failed (access_denied).")
+        #expect(NoSlopError.oauth("state mismatch").errorDescription == "Google sign-in failed (state mismatch).")
+        #expect(NoSlopError.oauth("no authorization code").errorDescription == "Google sign-in failed (no authorization code).")
+        // Google's description ends in a full stop of its own: it must not come out as ".)."
+        let withDescription = NoSlopError.oauth("invalid_client: The OAuth client was not found.").errorDescription
+        #expect(withDescription == "Google sign-in failed (invalid_client: The OAuth client was not found).")
+        #expect(NoSlopError.oauth("").errorDescription == "Google sign-in failed.")
+        #expect(NoSlopError.oauth("  \n").errorDescription == "Google sign-in failed.")
+        #expect(NoSlopError.oauth(".").errorDescription == "Google sign-in failed.")
+    }
+
+    @Test(arguments: [
+        "YouTube access wasn't granted. Sign in again and allow access to your YouTube account.",
+        "access_denied", "invalid_client: The OAuth client was not found.", "state mismatch", "",
+    ])
+    func noOAuthMessageEndsInADoubledPunctuation(message: String) {
+        let text = NoSlopError.oauth(message).errorDescription ?? ""
+        #expect(!text.contains(".)"), "\(text)")
+        #expect(!text.hasSuffix(".."), "\(text)")
+        #expect(!text.isEmpty)
+    }
+
+    @Test func aMissingDataAPIExplainsHowToEnableIt() {
+        let text = NoSlopError.dataAPINotEnabled.errorDescription ?? ""
+        #expect(text.contains("YouTube Data API v3"))
+        #expect(text.contains("enable"))
+        #expect(text.contains("wait a minute"))
+        #expect(text.hasSuffix("."))
+        #expect(NoSlopError.dataAPINotEnabled == .dataAPINotEnabled)
+        #expect(NoSlopError.dataAPINotEnabled != .http(status: 403))
+    }
+
+    @Test func onlyFailuresTheViewerCanActOnAreShownAfterSignIn() {
+        // Shown: nothing else will tell the viewer why the import keeps failing.
+        for error: NoSlopError in [.dataAPINotEnabled, .quotaExceeded, .http(status: 403), .http(status: 500), .decoding("x"), .oauth("Keychain: x")] {
+            #expect(NoSlopError.isWorthShowingAfterSignIn(error), "\(error)")
+        }
+        // Not shown: the signed-out screens say it, the connection says it, or nobody is waiting for an answer.
+        for error: NoSlopError in [.notSignedIn, .network("offline"), .cancelled] {
+            #expect(!NoSlopError.isWorthShowingAfterSignIn(error), "\(error)")
+        }
+        #expect(!NoSlopError.isWorthShowingAfterSignIn(CancellationError()))
+        // An error the kit does not know is still worth saying.
+        struct Unknown: Error {}
+        #expect(NoSlopError.isWorthShowingAfterSignIn(Unknown()))
+    }
+
     @Test func errorsCompareByCaseAndPayload() {
         #expect(NoSlopError.http(status: 404) == .http(status: 404))
         #expect(NoSlopError.http(status: 404) != .http(status: 500))

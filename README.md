@@ -30,7 +30,10 @@ Design: [`docs/superpowers/specs/2026-11-03-noslop-design.md`](docs/superpowers/
 **It doesn't**
 
 - Show ads, promoted items, Shorts or AI summary blocks, anywhere. There is no Shorts tab, and Shorts are filtered
-  out of every list. A Shorts link opens as an ordinary video.
+  out of Home, Subscriptions, search, channels, playlists, suggested videos and your liked videos and YouTube
+  playlists. (Those two come from the YouTube Data API, which has no Short marker, so there a video of a minute or
+  less counts as a Short.) Your history, Watch Later, your own playlists and downloads show everything you put
+  there. A Shorts link opens as an ordinary video.
 - Contain any analytics, crash reporter, tracker or third-party package. Apple frameworks only. The only servers it
   talks to are YouTube and Google (for the videos, and for your account when you sign in), plus SponsorBlock and
   DeArrow, which are asked about a short hash of a video ID, never the ID itself.
@@ -97,7 +100,8 @@ anyone else's servers. It takes about five minutes, once. The same steps are in 
 "How to set up Google sign-in".
 
 1. In the [Google Cloud console](https://console.cloud.google.com/projectcreate), create a project (any name).
-2. Under **APIs & Services > Library**, find **YouTube Data API v3** and press **Enable**.
+2. Under **APIs & Services > Library**, find **YouTube Data API v3** and press **Enable**. (Signing in works without
+   this step, but nothing else does; see Troubleshooting if the app says the API isn't turned on.)
 3. Under **OAuth consent screen** (Google Auth platform), choose **External** and fill in an app name and your
    email. Either add your own Google account as a **test user**, or publish the app (**In production**).
    - In Testing mode Google ends the sign-in every 7 days, so you would sign in again each week.
@@ -156,19 +160,25 @@ and by running it with the mock services (next section).
   refuses, the app fetches a fresh token and tries once more before it shows the message.
 - **Downloads** are plain H.264 video and AAC audio files fetched with HTTP Range requests of 10 MiB each, one
   `URLSession` task per chunk on a background session: a single long request is throttled to a crawl, ranges run at
-  full speed, and the chunks keep arriving while the app is suspended or was killed. Video and audio are then muxed
-  on the device with `AVMutableComposition` and a passthrough `AVAssetExportSession`, nothing is re-encoded.
-  AVFoundation reports twice the real length for YouTube's fragmented MP4 files, so both tracks are cut to the true
-  duration (the format's `approxDurationMs`, else the video's length), for audio-only downloads too. A half-written
-  file never counts as finished. Merging needs room for a second copy of the video.
+  full speed, and the chunks keep arriving while the app is in the background or has been ended by the system. If you
+  swipe the app away in the app switcher, iOS cancels the transfers and does not start the app again, so nothing
+  downloads until you open it (see Troubleshooting). Video and audio are then muxed on the device with
+  `AVMutableComposition` and a passthrough `AVAssetExportSession`, nothing is re-encoded; at most two exports run at
+  a time, however many downloads finish together. AVFoundation reports twice the real length for YouTube's
+  fragmented MP4 files, so both tracks are cut to the true duration (the format's `approxDurationMs`, else the
+  video's length), for audio-only downloads too. A half-written file never counts as finished. Merging needs room
+  for a second copy of the video, so before it fetches anything the app checks the free space and refuses a download
+  that would not fit, saying how much it needs and how much is free. A download that fails keeps what it fetched, and
+  so does a merge that the system interrupted: Retry only fetches or merges what is missing.
 - **SponsorBlock and DeArrow** are asked the privacy-preserving way: the app sends only the first 4 hex characters
   of the SHA-256 of the video ID to `sponsor.ajay.app`, the server answers for every video that shares that prefix,
   and the app keeps the entry for its own video. The server never learns what you watch.
 - **Your data** stays on the device: subscriptions, history, Watch Later, playlists and recent searches are JSON
   files in Application Support, written half a second after a change and at once when the app leaves the foreground;
-  settings are in `UserDefaults`; the Google tokens are in the Keychain; downloads are in Documents. A file that
-  cannot be read is moved aside as `<name>.corrupt` instead of being deleted, and a setting that an older save does
-  not have yet takes its default.
+  settings are in `UserDefaults`; the Google tokens are in the Keychain; downloads are in Documents. A file that is
+  damaged is moved aside as `<name>.corrupt` instead of being deleted, a file that exists but cannot be read (the
+  phone was restarted and not unlocked yet) is left untouched and nothing is saved over it until it can be read, and
+  a setting that an older save does not have yet takes its default.
 
 ## Debug launch arguments and app links
 
@@ -213,7 +223,13 @@ shows a plain "Can't open this link" message.
 - **Playback stops after a long pause or a lost connection.** The app re-resolves the stream and resumes; if that
   fails twice it shows the error with a Retry button.
 - **A download failed or is paused.** Tap Retry: it asks YouTube for fresh stream addresses and reuses the parts
-  that are still good. A nearly full device cannot merge a download.
+  that are still good, so only what is missing is fetched again. When a stream address stops working (it expired, or
+  the phone left the Wi-Fi it was made for), the app asks YouTube for new ones by itself once before it gives up.
+  "There isn't enough free space" means the download, plus a second copy for the merge, would not fit: free some
+  space and tap Retry, the parts that were fetched are kept.
+- **A download stopped after you swiped the app away.** iOS cancels the background transfers of an app that was
+  force-quit and does not start it again. Open No Slop: the parts that were already fetched are kept, and if the row
+  says Paused, tap Retry.
 - **Lists are empty, videos do not load, or everything fails after a while.** YouTube's web API is unofficial and
   changes. The client versions the app presents itself with live in
   `NoSlopKit/Sources/NoSlopKit/InnerTube/ClientProfile.swift` (`ClientProfile.web` and `ClientProfile.visionOS`:
@@ -222,6 +238,11 @@ shows a plain "Can't open this link" message.
   run `./scripts/test.sh` and `NOSLOP_LIVE=1 ./scripts/test.sh --filter Live`, and run the app again.
 - **Google sign-in is blocked, or you are signed out every week.** See "Sign in with Google": add yourself as a test
   user, or publish the consent screen to stop the 7-day sign-out.
+- **"The YouTube Data API isn't turned on for your Google project."** Signing in works without it; everything that
+  uses your account does not. Open the Google Cloud project that owns your OAuth client, go to **APIs & Services >
+  Library**, enable **YouTube Data API v3**, wait a minute (a change takes that long to spread), then pull down in
+  the Library to bring your subscriptions. The app shows this message right after you sign in when the subscriptions
+  could not be imported, and wherever a screen needs your account.
 - **The app stops opening after a week** (free Apple ID): run it from Xcode again.
 
 ## Layout

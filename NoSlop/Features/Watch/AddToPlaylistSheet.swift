@@ -17,7 +17,9 @@ struct AddToPlaylistSheet: View {
     }
 
     @State private var remote: RemoteState = .idle
-    /// YouTube playlists the video was added to from this sheet; the Data API cannot tell what a playlist holds.
+    /// YouTube playlists the video is known to be in: where it was added from this sheet, or where a tap found it
+    /// already. The sheet does not look into every playlist when it opens (a request each), but adding does, and
+    /// adds nothing to a playlist that holds the video: a row tapped again later just turns to a checkmark.
     @State private var addedRemote: Set<String> = []
     @State private var addingRemote: Set<String> = []
     @State private var isCreating = false
@@ -189,7 +191,7 @@ struct AddToPlaylistSheet: View {
         }
         remote = .loading
         do {
-            let playlists = try await env.account.myPlaylists()
+            let playlists = try await env.viaAccount { try await $0.myPlaylists() }
             guard !Task.isCancelled else { return }
             remote = .loaded(playlists)
         } catch {
@@ -203,7 +205,7 @@ struct AddToPlaylistSheet: View {
         addingRemote.insert(playlist.id)
         defer { addingRemote.remove(playlist.id) }
         do {
-            try await env.account.addToPlaylist(videoID: video.id, playlistID: playlist.id)
+            try await env.viaAccount { try await $0.addToPlaylist(videoID: video.id, playlistID: playlist.id) }
             addedRemote.insert(playlist.id)
         } catch {
             failureMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription

@@ -8,7 +8,9 @@ import SwiftUI
 @Observable
 final class GoogleSignInFlow {
     private(set) var isWorking = false
-    /// Set when a sign-in fails (not when the user simply closes the page); the screen shows it in an alert.
+    /// Set when a sign-in fails (not when the user simply closes the page), or when it worked but the subscriptions
+    /// could not be imported for a reason the viewer can act on (the YouTube Data API is not enabled for the Google
+    /// project, see `AppEnvironment.signIn`: the account stays signed in). The screen shows it in an alert.
     var errorMessage: String?
 
     @ObservationIgnored private let authenticator = ASWebAuthenticator()
@@ -82,6 +84,7 @@ struct GoogleSignOutButton: View {
 /// in a `List` section.
 struct AccountHeaderView: View {
     @Environment(AppEnvironment.self) private var env
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @State private var flow = GoogleSignInFlow()
     @State private var isShowingGuide = false
 
@@ -165,27 +168,40 @@ struct AccountHeaderView: View {
     // MARK: Signed in
 
     private func signedIn(_ account: GoogleAccount) -> some View {
-        HStack(spacing: 14) {
-            ChannelAvatarView(url: account.pictureURL, size: 56)
+        // Next to the avatar and the name, "Sign out" leaves the name a few letters at accessibility text sizes. There
+        // the name and email wrap over the whole width and the button goes under them.
+        let stacked = dynamicTypeSize.isAccessibilitySize
+        let layout = stacked
+            ? AnyLayout(VStackLayout(alignment: .leading, spacing: 12))
+            : AnyLayout(HStackLayout(spacing: 14))
 
-            VStack(alignment: .leading, spacing: 2) {
-                Text(displayName(for: account))
-                    .font(.headline)
-                    .lineLimit(1)
-                if account.name != nil, let email = account.email {
-                    Text(email)
-                        .font(.subheadline)
+        return layout {
+            HStack(spacing: 14) {
+                ChannelAvatarView(url: account.pictureURL, size: 56)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(displayName(for: account))
+                        .font(.headline)
+                        .lineLimit(stacked ? nil : 1)
+                    if account.name != nil, let email = account.email {
+                        Text(email)
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(stacked ? nil : 1)
+                    }
+                    Text("Signed in with Google")
+                        .font(.caption)
                         .foregroundStyle(.secondary)
-                        .lineLimit(1)
                 }
-                Text("Signed in with Google")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
             }
 
-            Spacer(minLength: 8)
+            if !stacked {
+                Spacer(minLength: 8)
+            }
 
+            // The button keeps its width; a long name is what gets cut.
             GoogleSignOutButton(flow: flow)
+                .fixedSize(horizontal: true, vertical: false)
         }
     }
 

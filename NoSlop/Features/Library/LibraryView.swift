@@ -170,25 +170,42 @@ struct LibraryView: View {
 }
 
 /// A Library row: an accent-coloured icon, the title and, on the right, a count or short status.
+///
+/// At accessibility text sizes the title and the status cannot share a line without the title being cut to a few
+/// letters, so the title may wrap and the status goes under it.
 private struct LibraryRowLabel: View {
     let title: String
     let systemImage: String
     let detail: String?
 
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
     var body: some View {
-        HStack(spacing: 12) {
+        let stacked = dynamicTypeSize.isAccessibilitySize
+        HStack(alignment: stacked ? .firstTextBaseline : .center, spacing: 12) {
             Image(systemName: systemImage)
                 .font(.body)
                 .foregroundStyle(Theme.accent)
                 .frame(width: 28)
                 .accessibilityHidden(true)
-            Text(title)
-                .lineLimit(1)
-            Spacer(minLength: 8)
-            if let detail {
-                Text(detail)
-                    .foregroundStyle(.secondary)
+            if stacked {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title)
+                    if let detail {
+                        Text(detail)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                Spacer(minLength: 0)
+            } else {
+                Text(title)
                     .lineLimit(1)
+                Spacer(minLength: 8)
+                if let detail {
+                    Text(detail)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
             }
         }
     }
@@ -200,4 +217,13 @@ private struct LibraryRowLabel: View {
             .navigationDestination(for: Route.self) { RouteDestinationView(route: $0) }
     }
     .environment(AppEnvironment.preview())
+}
+
+#Preview("Accessibility text size") {
+    NavigationStack {
+        LibraryView()
+            .navigationDestination(for: Route.self) { RouteDestinationView(route: $0) }
+    }
+    .environment(AppEnvironment.preview())
+    .dynamicTypeSize(.accessibility2)
 }

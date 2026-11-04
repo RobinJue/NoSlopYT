@@ -2,10 +2,13 @@ import NoSlopKit
 import SwiftUI
 
 /// The downloads, in three groups: running (progress, cancel), stopped (failed or paused: retry, delete) and
-/// finished (tap to play offline, swipe to delete), with the space they use at the bottom.
+/// finished (tap to play offline, swipe to delete), with the space they use at the bottom. Cancelling a running
+/// download and deleting one both ask first: they throw away what was downloaded.
 struct DownloadsView: View {
     @Environment(AppEnvironment.self) private var env
-    @State private var itemToDelete: DownloadItem?
+    @State private var removal: DownloadRemoval?
+    /// What the downloads really take on disk, unfinished ones included; nil until it has been measured.
+    @State private var usedBytes: Int64?
 
     var body: some View {
         let items = env.downloads.items
@@ -25,7 +28,9 @@ struct DownloadsView: View {
                     if !running.isEmpty {
                         Section("Downloading") {
                             ForEach(running) { item in
-                                RunningDownloadRow(item: item)
+                                RunningDownloadRow(item: item) {
+                                    removal = DownloadRemoval(kind: .cancel, item: item)
+                                }
                             }
                         }
                     }
@@ -34,7 +39,7 @@ struct DownloadsView: View {
                         Section("Failed or paused") {
                             ForEach(stopped) { item in
                                 StoppedDownloadRow(item: item) {
-                                    itemToDelete = item
+                                    removal = DownloadRemoval(kind: .delete, item: item)
                                 }
                             }
                         }
@@ -44,16 +49,16 @@ struct DownloadsView: View {
                         Section("Downloaded") {
                             ForEach(finished) { item in
                                 FinishedDownloadRow(item: item) {
-                                    itemToDelete = item
+                                    removal = DownloadRemoval(kind: .delete, item: item)
                                 }
                             }
                         }
                     }
 
                     Section {
-                        LabeledContent("Space used", value: StorageSizeText.string(env.downloads.bytesOnDisk))
+                        LabeledContent("Space used", value: usedBytes.map { StorageSizeText.string($0) } ?? "–")
                     } footer: {
-                        Text("Downloaded videos are also in the Files app, in the No Slop folder.")
+                        Text("Includes downloads that are not finished. Downloaded videos are also in the Files app, in the No Slop folder.")
                     }
                 }
                 .miniPlayerClearance()
@@ -61,23 +66,12 @@ struct DownloadsView: View {
         }
         .navigationTitle("Downloads")
         .navigationBarTitleDisplayMode(.inline)
+        .task(id: env.downloads.diskUsageKey) {
+            usedBytes = await env.downloads.diskUsage()
+        }
         // An alert, shown from the list itself: a swipe action closes its row, and a dialog attached to that row
         // would be lost with it.
-        .alert(
-            "Delete this download?",
-            isPresented: Binding(
-                get: { itemToDelete != nil },
-                set: { if !$0 { itemToDelete = nil } }
-            ),
-            presenting: itemToDelete
-        ) { item in
-            Button("Delete", role: .destructive) {
-                env.downloads.delete(id: item.id)
-            }
-            Button("Cancel", role: .cancel) {}
-        } message: { item in
-            Text(item.state == .completed ? "You can download the video again later." : "The partial download is discarded.")
-        }
+        .confirmingDownloadRemoval($removal)
     }
 
     private static let runningStates: [DownloadState] = [.queued, .downloading, .merging]
@@ -128,16 +122,14 @@ private struct DownloadRowLayout<Trailing: View, Detail: View>: View {
     }
 }
 
-/// Queued, downloading or merging: a progress bar, how much is done, and Cancel.
+/// Queued, downloading or merging: a progress bar, how much is done, and Cancel (which asks first).
 private struct RunningDownloadRow: View {
     let item: DownloadItem
-    @Environment(AppEnvironment.self) private var env
+    let onCancel: () -> Void
 
     var body: some View {
         DownloadRowLayout(item: item) {
-            Button {
-                env.downloads.cancel(id: item.id)
-            } label: {
+            Button(action: onCancel) {
                 Image(systemName: "xmark.circle.fill")
                     .font(.title2)
                     .foregroundStyle(.secondary)
@@ -146,7 +138,7 @@ private struct RunningDownloadRow: View {
             }
             // Plain, not borderless: the borderless style would tint the symbol with the accent colour.
             .buttonStyle(.plain)
-            .accessibilityLabel("Cancel download")
+            .accessibilityLabel(item.video.title.isEmpty ? "Cancel download" : "Cancel download of \(item.video.title)")
         } detail: {
             ProgressView(value: min(1, max(0, item.progress)))
                 .tint(Theme.accent)
@@ -159,7 +151,7 @@ private struct RunningDownloadRow: View {
 
     /// "720p · 12.3 MB of 45.6 MB", "720p · Waiting to start", "720p · Finishing up"
     private var statusText: String {
-        let quality = item.quality.label
+        let quality = item.qualityLabel
         switch item.state {
         case .queued:
             return "\(quality) · Waiting to start"
@@ -193,14 +185,18 @@ private struct StoppedDownloadRow: View {
             }
             .buttonStyle(.bordered)
             .controlSize(.small)
+            .accessibilityLabel(item.video.title.isEmpty ? "Retry download" : "Retry download of \(item.video.title)")
         } detail: {
-            Text(item.quality.label)
+            Text(item.qualityLabel)
                 .font(.caption)
                 .foregroundStyle(.secondary)
+            // No line limit: beside the thumbnail and the Retry button this column is narrow, and a reason such as "There
+            // isn't enough free space: this needs about 6.44 GB to finish, 2.15 GB is free." needs several lines in it.
+            // Cut off after two, the figures it exists to give would be the part that is hidden.
             Text(reason)
                 .font(.caption)
                 .foregroundStyle(item.state == .failed ? Color.red : Color.secondary)
-                .lineLimit(2)
+                .lineLimit(nil)
         }
         .swipeActions(edge: .trailing, allowsFullSwipe: false) {
             Button(role: .destructive, action: onDelete) {
@@ -253,7 +249,7 @@ private struct FinishedDownloadRow: View {
     /// "720p · 45.6 MB"
     private var sizeLine: String {
         let bytes = item.bytesTotal ?? item.bytesDownloaded
-        return bytes > 0 ? "\(item.quality.label) · \(StorageSizeText.string(bytes))" : item.quality.label
+        return bytes > 0 ? "\(item.qualityLabel) · \(StorageSizeText.string(bytes))" : item.qualityLabel
     }
 }
 

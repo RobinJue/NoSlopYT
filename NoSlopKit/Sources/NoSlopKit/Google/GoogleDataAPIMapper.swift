@@ -70,17 +70,32 @@ enum GoogleDataAPIMapper {
         guard let id = nonEmpty(item["id"]?.string) else { return nil }
         let snippet = item["snippet"]
         let broadcast = snippet?["liveBroadcastContent"]?.string
+        let duration = seconds(fromISO8601: item["contentDetails"]?["duration"]?.string)
         return VideoSummary(
             id: id,
             title: snippet?["title"]?.string ?? "",
             channel: channelRef(id: snippet?["channelId"]?.string, name: snippet?["channelTitle"]?.string),
             thumbnails: thumbnails(snippet?["thumbnails"]),
-            durationSeconds: seconds(fromISO8601: item["contentDetails"]?["duration"]?.string),
+            durationSeconds: duration,
             viewCount: item["statistics"]?["viewCount"]?.int,  // a string in the API; nil when the owner hides it
             publishedAt: date(snippet?["publishedAt"]?.string),
             isLive: broadcast == "live",
-            isUpcoming: broadcast == "upcoming"
+            isUpcoming: broadcast == "upcoming",
+            isShort: isShort(durationSeconds: duration)
         )
+    }
+
+    /// The longest a video can be and still count as a Short here.
+    static let shortMaximumSeconds = 60
+
+    /// Whether a video of this length counts as a Short. The Data API has no Short flag (the InnerTube parsers see
+    /// the Shorts shelves and `/shorts/` links the Data API never shows), so the account's lists go by length, the
+    /// limit Shorts began with. YouTube allows up to three minutes since 2024, but a limit that long would hide
+    /// ordinary videos of two minutes, which is worse than letting a long Short through. A video without a known
+    /// length (a live stream, a premiere) is never one.
+    static func isShort(durationSeconds: Int?) -> Bool {
+        guard let durationSeconds, durationSeconds > 0 else { return false }
+        return durationSeconds <= shortMaximumSeconds
     }
 
     /// The length in seconds, or nil when missing, unparsable or zero ("P0D" is what live streams and premieres report).

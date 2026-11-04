@@ -126,8 +126,9 @@ struct JSONFileStore: Sendable {
         }
     }
 
-    /// Whether the error says "there is no such file" (possibly as the underlying error of another one).
-    private static func isMissing(_ error: any Error) -> Bool {
+    /// Whether the error says "there is no such file" (possibly as the underlying error of another one). The downloads
+    /// list tells a first launch from an unreadable file the same way.
+    static func isMissing(_ error: any Error) -> Bool {
         var current: NSError? = error as NSError
         for _ in 0..<5 {
             guard let nsError = current else { return false }

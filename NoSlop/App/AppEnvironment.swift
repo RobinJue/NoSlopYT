@@ -233,7 +233,8 @@ final class AppEnvironment {
 
     // MARK: Google account
 
-    /// Reads the signed-in account and, when there is one, syncs the Google subscriptions into the library.
+    /// Reads the signed-in account and, when there is one, syncs the Google subscriptions into the library. A sync that
+    /// fails is not reported here: at launch and on pull to refresh the library just keeps what it had.
     func refreshAccount() async {
         googleAccount = await auth.currentAccount()
         if googleAccount != nil {
@@ -243,33 +244,49 @@ final class AppEnvironment {
 
     /// Runs the Google sign-in with the Client ID from Settings, then imports the account's subscriptions.
     /// Throws `.googleNotConfigured` while no Client ID is set, and `.cancelled` when the user backs out.
+    ///
+    /// The account is signed in once the sign-in page is done. If the import of its subscriptions then fails for a
+    /// reason the viewer can act on (`NoSlopError.isWorthShowingAfterSignIn`: above all `.dataAPINotEnabled`, the
+    /// Google project's YouTube Data API is not turned on), that error is thrown as well, so it reaches the sign-in
+    /// alert instead of leaving a signed-in Library with no subscriptions and no word why. The account stays signed in.
     func signIn(authenticator: any WebAuthenticating) async throws {
         let clientID = settings.googleClientID.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !clientID.isEmpty else { throw NoSlopError.googleNotConfigured }
         googleAccount = try await auth.signIn(clientID: clientID, authenticator: authenticator)
-        await syncGoogleSubscriptions()
+        if let failure = await syncGoogleSubscriptions(), NoSlopError.isWorthShowingAfterSignIn(failure) {
+            throw failure
+        }
     }
 
     /// Signs out. Subscriptions that came from the account stay as local ones, so the feed never vanishes.
+    /// `auth.signOut()` returns as soon as the credentials are gone, without waiting for Google to answer the
+    /// revocation, so the screens turn to the signed-out state at once.
     func signOut() async {
         await auth.signOut()
         googleAccount = nil
         library.convertGoogleSubscriptionsToLocal()
     }
 
-    /// Imports the account's subscriptions. A failed sync keeps the subscriptions the library already has, and is not
-    /// reported to anyone, but it may mean that Google ended the session, so the account is looked at again.
-    private func syncGoogleSubscriptions() async {
+    /// Imports the account's subscriptions (see `LibraryStore.syncGoogleSubscriptions`: a list that the viewer's own
+    /// subscribing or unsubscribing overtook is fetched again, not applied). A failed sync keeps the subscriptions the
+    /// library already has. The error is returned for `signIn` to report, and is left alone by the other callers. It may
+    /// mean that Google ended the session, so the account is looked at again.
+    @discardableResult
+    private func syncGoogleSubscriptions() async -> (any Error)? {
         do {
-            library.replaceGoogleSubscriptions(try await account.subscriptions())
+            try await library.syncGoogleSubscriptions { [account] in try await account.subscriptions() }
+            return nil
         } catch {
             await reconcileGoogleAccount()
+            return error
         }
     }
 
     /// Runs a call on the Google account. When it fails, the account is looked at again before the error goes on to
     /// the caller, so the screens already show the signed-out state when the failure was a session that had ended.
-    private func viaAccount<Value>(_ call: (any YouTubeAccountService) async throws -> Value) async throws -> Value {
+    ///
+    /// Every screen that talks to the account goes through this, none calls `account` directly.
+    func viaAccount<Value>(_ call: (any YouTubeAccountService) async throws -> Value) async throws -> Value {
         do {
             return try await call(account)
         } catch {
@@ -287,7 +304,7 @@ final class AppEnvironment {
     /// credential store that could not be read for a moment looks the same as a sign-out from here; the next
     /// `refreshAccount` or sign-in brings the `.google` subscriptions back, so nothing is lost by it.
     ///
-    /// Screens that call `account` directly can call this when their call fails.
+    /// `viaAccount` calls this when a call fails.
     func reconcileGoogleAccount() async {
         let current = await auth.currentAccount()
         guard current != googleAccount else { return }

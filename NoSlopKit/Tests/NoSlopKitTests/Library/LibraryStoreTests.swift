@@ -614,6 +614,143 @@ private func eventually(timeout: Duration = .seconds(60), _ condition: () -> Boo
         #expect(store.searchHistory.count == 50)
         #expect(store.searchHistory.first == "q0")
     }
+
+    // MARK: What was only true on the day a video was saved
+    //
+    // The store keeps a video as it was when it was saved and is read months later: "3 days ago" has to become a
+    // date, and a stream that was live or a premiere that was upcoming is neither by then. (The rules are pinned in
+    // LibraryVideoTests; here they are shown to apply wherever a video enters the library.)
+
+    private func stale(_ id: String = "a") -> VideoSummary {
+        VideoSummary(
+            id: id, title: "A", channel: ChannelRef(id: "UC1", name: "Chan"), viewCountText: "1,204 watching",
+            publishedText: "3 days ago", isLive: true
+        )
+    }
+
+    private func expectKeptWithADate(_ video: VideoSummary?, sourceLocation: SourceLocation = #_sourceLocation) {
+        #expect(video?.publishedText == nil, sourceLocation: sourceLocation)
+        #expect(video?.publishedAt == referenceDate.addingTimeInterval(-3 * 86_400), sourceLocation: sourceLocation)
+        #expect(video?.isLive == false, sourceLocation: sourceLocation)
+        #expect(video?.viewCountText == nil, sourceLocation: sourceLocation)
+        #expect(video?.viewCount == nil, sourceLocation: sourceLocation)
+        #expect(video?.channel == ChannelRef(id: "UC1", name: "Chan"), sourceLocation: sourceLocation)
+    }
+
+    @Test func watchLaterKeepsADateInsteadOfTheRelativeAge() {
+        let store = makeStore()
+        store.toggleWatchLater(stale())
+        expectKeptWithADate(store.watchLater.first)
+    }
+
+    @Test func aPlaylistKeepsADateInsteadOfTheRelativeAge() {
+        let store = makeStore()
+        let playlist = store.createPlaylist(title: "P")
+        store.add(stale(), toPlaylist: playlist.id)
+        expectKeptWithADate(store.playlists.first?.videos.first)
+    }
+
+    @Test func theHistoryKeepsADateInsteadOfTheRelativeAge() {
+        let store = makeStore()
+        store.recordProgress(video: stale(), seconds: 10, duration: 100)
+        expectKeptWithADate(store.history.first?.video)
+        expectKeptWithADate(store.progress(for: "a")?.video)
+
+        // The player reports every few seconds, each time with the video as it was opened.
+        store.recordProgress(video: stale(), seconds: 20, duration: 100)
+        expectKeptWithADate(store.history.first?.video)
+        #expect(store.history.count == 1)
+    }
+
+    @Test func aPremiereThatWasUpcomingIsNotUpcomingAnyMoreOnceSaved() {
+        let premiere = VideoSummary(
+            id: "p", title: "Premiere", viewCountText: "12 waiting", publishedText: "Scheduled for 11/3/26, 8:00 PM", isUpcoming: true
+        )
+        let store = makeStore()
+        store.toggleWatchLater(premiere)
+        let playlist = store.createPlaylist(title: "P")
+        store.add(premiere, toPlaylist: playlist.id)
+        store.recordProgress(video: premiere, seconds: 5, duration: nil)
+
+        for kept in [store.watchLater.first, store.playlists.first?.videos.first, store.history.first?.video] {
+            #expect(kept?.isUpcoming == false)
+            #expect(kept?.viewCountText == nil)
+            #expect(kept?.publishedText == nil)
+            #expect(kept?.publishedAt == nil, "a date that cannot be read leaves no age")
+        }
+    }
+
+    @Test func aVideoWithADateOrNoAgeIsKeptAsItIs() {
+        let rss = VideoSummary(id: "r", title: "RSS", viewCountText: "1.2M views", publishedAt: referenceDate.addingTimeInterval(-9 * 86_400))
+        let plain = VideoSummary(id: "n", title: "Plain", viewCount: 5, viewCountText: "5 views")
+        let store = makeStore()
+        store.toggleWatchLater(rss)
+        store.toggleWatchLater(plain)
+        #expect(store.watchLater == [plain, rss])
+    }
+
+    @Test func whatWasKeptSurvivesARestart() async {
+        let store = makeStore()
+        store.toggleWatchLater(stale("w"))
+        let playlist = store.createPlaylist(title: "P")
+        store.add(stale("p"), toPlaylist: playlist.id)
+        store.recordProgress(video: stale("h"), seconds: 10, duration: 100)
+        await store.flush()
+
+        let reloaded = makeStore()
+        expectKeptWithADate(reloaded.watchLater.first)
+        expectKeptWithADate(reloaded.playlists.first?.videos.first)
+        expectKeptWithADate(reloaded.history.first?.video)
+    }
+
+    @Test func entriesAlreadyOnDiskAreCorrectedWhenTheLibraryLoads() async throws {
+        // Written by an earlier build, months ago: the stale texts are in the files.
+        let video = #"{"id":"%@","title":"T","viewCountText":"1,204 watching","publishedText":"3 days ago","isLive":true,"isMembersOnly":true}"#
+        let oldPremiere = #"{"id":"u","title":"U","viewCountText":"12 waiting","publishedText":"Scheduled for 11/3/26, 8:00 PM","isUpcoming":true}"#
+        let german = #"{"id":"g","title":"G","viewCountText":"9,8 Tsd. Aufrufe","publishedText":"vor 3 Tagen"}"#
+        // The history knows when each video was watched: 5 days before the (fixed) "now" of these tests.
+        let watched = "2027-01-10T08:00:00Z"
+        let watchedAt = referenceDate.addingTimeInterval(-5 * 86_400)
+        try write(
+            #"[{"video":\#(String(format: video, "h")),"lastWatchedAt":"\#(watched)","progressSeconds":42,"durationSeconds":100}]"#,
+            to: "history.json"
+        )
+        try write("[\(String(format: video, "w")),\(oldPremiere),\(german)]", to: "watch-later.json")
+        try write(
+            #"[{"id":"D3B0C6E0-8C8D-4B7E-9D55-0A0F6C1B2A11","title":"P","createdAt":"\#(watched)","updatedAt":"\#(watched)","videos":[\#(String(format: video, "p"))]}]"#,
+            to: "playlists.json"
+        )
+        let before = try Data(contentsOf: url("history.json"))
+
+        let store = makeStore()
+
+        // History: counted back from the day it was watched. Everything else about the entry is as it was.
+        let entry = try #require(store.history.first)
+        #expect(entry.video.publishedAt == watchedAt.addingTimeInterval(-3 * 86_400))
+        #expect(entry.video.publishedText == nil)
+        #expect(!entry.video.isLive)
+        #expect(entry.video.viewCountText == nil)
+        #expect(entry.video.isMembersOnly)
+        #expect(entry.lastWatchedAt == watchedAt)
+        #expect(entry.progressSeconds == 42)
+        #expect(entry.durationSeconds == 100)
+        #expect(store.progress(for: "h")?.video.publishedAt == entry.video.publishedAt)
+
+        // Watch Later and the playlists have no date of saving: no age rather than a wrong one.
+        let later = store.watchLater
+        #expect(later.map(\.id) == ["w", "u", "g"])
+        #expect(later.allSatisfy { $0.publishedText == nil && $0.publishedAt == nil && !$0.isLive && !$0.isUpcoming })
+        #expect(later[0].viewCountText == nil && later[0].isMembersOnly)
+        #expect(later[1].viewCountText == nil)
+        #expect(later[2].viewCountText == "9,8 Tsd. Aufrufe", "an ordinary video keeps its views")
+        let inPlaylist = try #require(store.playlists.first?.videos.first)
+        #expect(inPlaylist.id == "p" && inPlaylist.publishedText == nil && inPlaylist.publishedAt == nil && !inPlaylist.isLive)
+
+        // Reading does not rewrite the files; the corrected data is written with the next change.
+        await store.flush()
+        #expect(try Data(contentsOf: url("history.json")) == before)
+        #expect(!exists("history.json.corrupt") && !exists("watch-later.json.corrupt") && !exists("playlists.json.corrupt"))
+    }
 }
 
 // MARK: - JSONFileStore

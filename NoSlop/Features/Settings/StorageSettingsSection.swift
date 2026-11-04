@@ -5,11 +5,16 @@ import SwiftUI
 struct StorageSettingsSection: View {
     @Environment(AppEnvironment.self) private var env
     @State private var imageCacheBytes = 0
+    /// What the downloads really take on disk, unfinished ones included; nil until it has been measured.
+    @State private var downloadsBytes: Int64?
 
     var body: some View {
         Section {
             NavigationLink(value: Route.downloads) {
-                LabeledContent("Downloads", value: StorageSizeText.string(env.downloads.bytesOnDisk))
+                LabeledContent("Downloads", value: downloadsBytes.map { StorageSizeText.string($0) } ?? "–")
+            }
+            .task(id: env.downloads.diskUsageKey) {
+                downloadsBytes = await env.downloads.diskUsage()
             }
 
             CleanupButton(
@@ -40,7 +45,7 @@ struct StorageSettingsSection: View {
         } header: {
             Text("Storage")
         } footer: {
-            Text("Images use \(StorageSizeText.string(Int64(imageCacheBytes))) on this device. Downloaded videos are also in the Files app, in the No Slop folder.")
+            Text("Images use \(StorageSizeText.string(Int64(imageCacheBytes))) on this device. Downloads include those that are not finished. Downloaded videos are also in the Files app, in the No Slop folder.")
         }
     }
 

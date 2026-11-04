@@ -97,7 +97,8 @@ public enum YouTubeURL {
             guard let id = videoID(from: queryValue("v", in: components) ?? segments.first) else { return nil }
             return .video(id: id, startSeconds: startSeconds(in: components))
         case "channel":
-            return token(from: segments.first ?? queryValue("id", in: components)).map { .channel(id: $0) }
+            // Only what is a channel id on a web link is one here too: "noslop://channel/notachannel" is no link.
+            return channelID(from: segments.first ?? queryValue("id", in: components)).map { .channel(id: $0) }
         case "playlist":
             return token(from: segments.first ?? queryValue("list", in: components)).map { .playlist(id: $0) }
         case "search":

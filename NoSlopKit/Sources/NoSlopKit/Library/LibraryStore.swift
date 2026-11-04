@@ -12,6 +12,11 @@ import Observation
 /// If only some entries of a list cannot be read, the others are kept and written back to a clean file at once (the
 /// original, damaged entries included, still goes to `.corrupt`).
 ///
+/// ## What is kept of a video
+/// A video is stored as it was when it was saved (Watch Later, a playlist) or watched (the history), minus what was
+/// only true on that day: the relative age becomes a date, a stream that was live or a premiere that was upcoming is
+/// neither any more, and the count of people watching or waiting is dropped (`VideoSummary.forLibrary`).
+///
 /// Changes are written in the background: the first change after a write starts a 0.5 s timer, and everything
 /// that changed until it fires goes to disk together, encoded and written off the main thread. Writes happen in
 /// the order they were started. `flush()` writes immediately and returns once the data is on disk, so call it
@@ -35,6 +40,10 @@ public final class LibraryStore {
     private let now: @Sendable () -> Date
 
     // Bookkeeping that no view observes.
+    /// Counts the changes made to the subscriptions by the viewer (subscribe, unsubscribe) and by a sign-out, but not
+    /// the replacement of the Google ones by a sync. A sync reads it before it asks the account for its list and again
+    /// when the list arrives (`syncGoogleSubscriptions`).
+    @ObservationIgnored public private(set) var subscriptionRevision = 0
     /// The history by video id, so that looking up the progress of a thumbnail does not scan up to 5000 entries.
     /// Always holds exactly the entries of `history`.
     @ObservationIgnored private var historyByID: [String: HistoryEntry] = [:]
@@ -57,10 +66,25 @@ public final class LibraryStore {
         self.now = now
 
         subscriptions = Self.unique(files.loadList(LibraryFile.subscriptions.rawValue), by: \SubscribedChannel.id)
+        // Videos that earlier builds stored with text that was only true on the day (see `VideoSummary.forLibrary`) are
+        // corrected as they are read; the files are not rewritten for it. A history entry knows the day: it was
+        // watched. Watch Later and the playlists keep no date per video, so their relative ages cannot be counted back
+        // and are dropped.
         history = Array(Self.unique(files.loadList(LibraryFile.history.rawValue), by: \HistoryEntry.id).prefix(Self.historyLimit))
+            .map { entry in
+                var entry = entry
+                entry.video = entry.video.forLibrary(savedAt: entry.lastWatchedAt)
+                return entry
+            }
         historyByID = Dictionary(history.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         watchLater = Self.unique(files.loadList(LibraryFile.watchLater.rawValue), by: \VideoSummary.id)
+            .map { $0.forLibrary(savedAt: nil) }
         playlists = Self.unique(files.loadList(LibraryFile.playlists.rawValue), by: \LocalPlaylist.id)
+            .map { playlist in
+                var playlist = playlist
+                playlist.videos = playlist.videos.map { $0.forLibrary(savedAt: nil) }
+                return playlist
+            }
         searchHistory = Self.cleaned(files.loadList(LibraryFile.searchHistory.rawValue))
     }
 
@@ -73,6 +97,7 @@ public final class LibraryStore {
     /// Adds the channel, or replaces the existing entry for the same channel id (keeping its position and, when the
     /// new entry has none, its subscription date).
     public func subscribe(_ channel: SubscribedChannel) {
+        subscriptionRevision += 1
         var channel = channel
         if let index = subscriptions.firstIndex(where: { $0.id == channel.id }) {
             channel.subscribedAt = channel.subscribedAt ?? subscriptions[index].subscribedAt ?? now()
@@ -86,12 +111,41 @@ public final class LibraryStore {
 
     public func unsubscribe(channelID: String) {
         guard isSubscribed(channelID: channelID) else { return }
+        subscriptionRevision += 1
         subscriptions.removeAll { $0.id == channelID }
         markDirty(.subscriptions)
     }
 
+    /// How many times `syncGoogleSubscriptions` asks the account again when the viewer changed something meanwhile.
+    public static let subscriptionSyncAttempts = 3
+
+    /// Brings the `.google` subscriptions in line with the account: asks `fetch` for the account's list and
+    /// `replaceGoogleSubscriptions` with it.
+    ///
+    /// Fetching takes several round trips for a few hundred subscriptions, and the viewer can subscribe or unsubscribe
+    /// meanwhile (or sign out): a list that was read before such a change would undo it, so a channel just subscribed
+    /// to would disappear, and one just left would come back with its old subscription id. A list that the viewer's
+    /// changes overtook is therefore thrown away and `fetch` is asked again, up to `subscriptionSyncAttempts` times in
+    /// all. Returns whether a list was applied; when every attempt was overtaken nothing is, and the next sync (the
+    /// next launch, a pull to refresh) catches up. A change that is only in flight when the list is applied is safe:
+    /// its own update of the library lands afterwards.
+    ///
+    /// - Throws: whatever `fetch` throws; the library is left as it was then.
+    @discardableResult
+    public func syncGoogleSubscriptions(fetching fetch: @MainActor () async throws -> [SubscribedChannel]) async throws -> Bool {
+        for _ in 0..<Self.subscriptionSyncAttempts {
+            let revision = subscriptionRevision
+            let fetched = try await fetch()
+            guard revision == subscriptionRevision else { continue }
+            replaceGoogleSubscriptions(fetched)
+            return true
+        }
+        return false
+    }
+
     /// Keeps the `.local` subscriptions, replaces the `.google` ones with `channels`;
-    /// a channel that is in both ends up as the incoming `.google` one.
+    /// a channel that is in both ends up as the incoming `.google` one. A sync should go through
+    /// `syncGoogleSubscriptions`, which sees to it that `channels` is not out of date.
     public func replaceGoogleSubscriptions(_ channels: [SubscribedChannel]) {
         var incoming = Self.unique(channels, by: \.id)
         let knownDates = Dictionary(
@@ -112,7 +166,11 @@ public final class LibraryStore {
     }
 
     /// After sign-out: every Google-sourced subscription becomes a local one with the same id.
+    ///
+    /// Counts as a change even when there was nothing to convert: a sync that is in flight when the viewer signs out
+    /// must not bring the account's subscriptions back, whether or not it had brought any yet.
     public func convertGoogleSubscriptionsToLocal() {
+        subscriptionRevision += 1
         var changed = false
         for index in subscriptions.indices {
             if case .google = subscriptions[index].source {
@@ -131,9 +189,10 @@ public final class LibraryStore {
         let seconds = seconds.isFinite ? max(0, seconds) : 0
         let duration = duration.flatMap { $0.isFinite && $0 > 0 ? $0 : nil }
         let previous = historyByID[video.id]
+        let watchedAt = now()
         let entry = HistoryEntry(
-            video: video,
-            lastWatchedAt: now(),
+            video: video.forLibrary(savedAt: watchedAt),
+            lastWatchedAt: watchedAt,
             progressSeconds: seconds,
             durationSeconds: duration ?? previous?.durationSeconds
         )
@@ -188,7 +247,7 @@ public final class LibraryStore {
         if let index = watchLater.firstIndex(where: { $0.id == video.id }) {
             watchLater.remove(at: index)
         } else {
-            watchLater.insert(video, at: 0)
+            watchLater.insert(video.forLibrary(savedAt: now()), at: 0)
         }
         markDirty(.watchLater)
     }
@@ -250,8 +309,9 @@ public final class LibraryStore {
     public func add(_ video: VideoSummary, toPlaylist id: UUID) {
         guard let index = playlists.firstIndex(where: { $0.id == id }),
               !playlists[index].videos.contains(where: { $0.id == video.id }) else { return }
-        playlists[index].videos.append(video)
-        playlists[index].updatedAt = now()
+        let savedAt = now()
+        playlists[index].videos.append(video.forLibrary(savedAt: savedAt))
+        playlists[index].updatedAt = savedAt
         markDirty(.playlists)
     }
 

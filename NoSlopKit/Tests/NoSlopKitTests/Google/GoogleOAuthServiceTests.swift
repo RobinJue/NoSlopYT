@@ -95,6 +95,23 @@ private func isOAuthError(_ error: any Error) -> Bool {
     return false
 }
 
+/// `signOut()` returns once the credentials are gone; the revoke request is sent in the background. Waits (at most
+/// ten seconds, so a bug fails instead of hanging) until `count` revoke requests have reached the client.
+private func waitForRevocations(_ count: Int = 1, in http: MockHTTPClient) async {
+    for _ in 0..<2000 {
+        if requests(to: revokeEndpoint, in: http).count >= count { return }
+        try? await Task.sleep(for: .milliseconds(5))
+    }
+}
+
+/// Set by one task, read by another.
+private final class GoogleReturnFlag: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value = false
+    var isSet: Bool { lock.withLock { value } }
+    func set() { lock.withLock { value = true } }
+}
+
 /// Answers the sign-in page with whatever `reply` builds from the authorization URL, and records what it was shown.
 @MainActor
 private final class GoogleFakeAuthenticator: WebAuthenticating {
@@ -398,6 +415,20 @@ private struct Rig {
         #expect(try rig.store.load() == nil, "the credentials are not kept")
         #expect(await rig.service.currentAccount() == nil)
         #expect(rig.http.requests.count == 1, "only the code exchange went out: no account lookup either")
+    }
+
+    @Test @MainActor func theScopeRefusalReadsAsAPlainSentence() async throws {
+        let rig = Rig()
+        rig.http.enqueue(tokenEndpoint, body: try tokenBody(idToken: try makeIDToken(["sub": "1"]), scope: "openid email profile"))
+        let authenticator = GoogleFakeAuthenticator { url in redirect("code=c&state=\(queryValue(url, "state") ?? "")") }
+        do {
+            _ = try await rig.service.signIn(clientID: testClientID, authenticator: authenticator)
+            Issue.record("the sign-in should have been refused")
+        } catch {
+            // What the alert shows: the sentence itself, not "Google sign-in failed (... account.)."
+            let text = (error as? LocalizedError)?.errorDescription
+            #expect(text == "YouTube access wasn't granted. Sign in again and allow access to your YouTube account.")
+        }
     }
 
     @Test(arguments: [
@@ -820,6 +851,7 @@ private struct Rig {
         rig.http.enqueue(revokeEndpoint, body: Data("{}".utf8))
 
         await rig.service.signOut()
+        await waitForRevocations(in: rig.http)
 
         let revocations = requests(to: revokeEndpoint, in: rig.http)
         #expect(revocations.count == 1)
@@ -836,6 +868,7 @@ private struct Rig {
         let rig = Rig(credentials: credentials(refresh: nil, expiresAt: t0.addingTimeInterval(3000)))
         rig.http.enqueue(revokeEndpoint, body: Data("{}".utf8))
         await rig.service.signOut()
+        await waitForRevocations(in: rig.http)
         #expect(requests(to: revokeEndpoint, in: rig.http).first?.url?.absoluteString == "https://oauth2.googleapis.com/revoke?token=old-at")
     }
 
@@ -843,6 +876,7 @@ private struct Rig {
         let rig = Rig(credentials: credentials(refresh: "fake/rt with+plus=eq&amp#hash", expiresAt: t0.addingTimeInterval(3000)))
         rig.http.enqueue(revokeEndpoint, body: Data("{}".utf8))
         await rig.service.signOut()
+        await waitForRevocations(in: rig.http)
         let request = try #require(requests(to: revokeEndpoint, in: rig.http).first)
         #expect(queryValue(request.url, "token") == "fake/rt with+plus=eq&amp#hash")
         #expect(URLComponents(url: try #require(request.url), resolvingAgainstBaseURL: false)?.queryItems?.count == 1)
@@ -852,6 +886,7 @@ private struct Rig {
         let rig = Rig(credentials: freshCredentials())
         rig.http.enqueueError(revokeEndpoint, NoSlopError.network("offline"))
         await rig.service.signOut()
+        await waitForRevocations(in: rig.http)
         #expect(requests(to: revokeEndpoint, in: rig.http).count == 1)
         #expect(try rig.store.load() == nil)
         #expect(await rig.service.currentAccount() == nil)
@@ -862,6 +897,36 @@ private struct Rig {
         rig.http.enqueue(revokeEndpoint, status: 400, body: try oauthErrorBody("invalid_token"))
         await rig.service.signOut()
         #expect(try rig.store.load() == nil)
+    }
+
+    @Test func signOutDoesNotWaitForGoogleToAnswerTheRevocation() async throws {
+        // On a slow connection the revoke request takes up to its ten second timeout. The viewer is signed out as soon as
+        // the credentials are gone, so signing out must return then, with the request still on its way.
+        let mock = MockHTTPClient()
+        mock.enqueue(revokeEndpoint, body: Data("{}".utf8))
+        let gate = GoogleGatedHTTPClient(inner: mock, holding: revokeEndpoint)
+        let store = InMemoryTokenStore(freshCredentials())
+        let service = GoogleOAuthService(http: gate, store: store, now: { t0 })
+
+        let returned = GoogleReturnFlag()
+        let signingOut = Task {
+            await service.signOut()
+            returned.set()
+        }
+        await gate.waitForArrivals(1)  // the revoke request is out, and Google has not answered
+        for _ in 0..<200 where !returned.isSet {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        let returnedWhileTheRequestWasHeld = returned.isSet
+        let credentialsGoneWhileTheRequestWasHeld = try store.load() == nil
+        gate.release()  // ...so that a signOut that does wait finishes too
+        await signingOut.value
+
+        #expect(returnedWhileTheRequestWasHeld, "signOut waited for Google's answer")
+        #expect(credentialsGoneWhileTheRequestWasHeld)
+        #expect(await service.currentAccount() == nil)
+        await waitForRevocations(in: mock)
+        #expect(requests(to: revokeEndpoint, in: mock).count == 1, "the revocation is still sent")
     }
 
     @Test func signOutWithoutCredentialsDoesNothing() async {

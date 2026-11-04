@@ -53,11 +53,17 @@ private actor ScriptedRSS: RSSFeedFetching {
     enum Reply: Sendable {
         case videos([VideoSummary])
         case failure(NoSlopError)
+        /// Never answers: the request is suspended until it is cancelled (a stalled connection).
+        case hang
     }
 
     private var replies: [String: Reply]
     private let delay: Duration
     private(set) var requested: [String] = []
+    /// The requests that were given an answer (videos or a failure), not those that hung or were cancelled.
+    private(set) var answered = 0
+    /// The requests that were cancelled while they waited.
+    private(set) var cancelled: [String] = []
     private var inFlight = 0
     private(set) var maxInFlight = 0
 
@@ -75,11 +81,18 @@ private actor ScriptedRSS: RSSFeedFetching {
         inFlight += 1
         maxInFlight = max(maxInFlight, inFlight)
         defer { inFlight -= 1 }
-        if delay > .zero { try await Task.sleep(for: delay) }
+        do {
+            if delay > .zero { try await Task.sleep(for: delay) }
+            if case .hang? = replies[channelID] { try await Task.sleep(for: .seconds(3_600)) }
+        } catch {
+            cancelled.append(channelID)
+            throw error
+        }
+        answered += 1
         switch replies[channelID] {
         case .videos(let videos): return videos
         case .failure(let error): throw error
-        case nil: return []
+        case .hang, nil: return []
         }
     }
 }
@@ -88,15 +101,23 @@ private actor ScriptedRSS: RSSFeedFetching {
 private actor ScriptedAccount: YouTubeAccountService {
     private let known: [String: Int]
     private let failure: NoSlopError?
+    private var hangs: Bool
     private(set) var batches: [[String]] = []
 
-    init(durations: [String: Int] = [:], failure: NoSlopError? = nil) {
+    init(durations: [String: Int] = [:], failure: NoSlopError? = nil, hangs: Bool = false) {
         self.known = durations
         self.failure = failure
+        self.hangs = hangs
+    }
+
+    /// From now on the lookups answer (or hang) again.
+    func hang(_ hangs: Bool) {
+        self.hangs = hangs
     }
 
     func durations(videoIDs: [String]) async throws -> [String: Int] {
         batches.append(videoIDs)
+        if hangs { try await Task.sleep(for: .seconds(3_600)) }
         if let failure { throw failure }
         return known.filter { videoIDs.contains($0.key) }
     }
@@ -494,5 +515,305 @@ private actor ScriptedAccount: YouTubeAccountService {
 
         #expect(await service.cachedFeed().isEmpty)
         #expect(await SubscriptionFeedService(rss: rss, account: nil, cacheURL: cacheURL).cachedFeed().isEmpty)
+    }
+}
+
+// MARK: - A refresh that does not wait for ever
+//
+// A channel that does not answer must not hold the others back, and a stalled connection (every request waiting for
+// its own time-out, eight at a time) must not keep the screens on their skeletons for minutes. After the deadline no
+// new request is started, the ones still running are cancelled, what had arrived is kept, and the channels that did
+// not answer count as failed for this refresh, so the next one asks for them first.
+//
+// The tests make the moment the time is up their own (`FetchDeadline.when`) instead of racing a clock. The channels
+// that must not answer hang until they are cancelled, and the moment is chosen by counting requests: with one slot
+// per request the n-th request starts only after the (n-1)-th answer has been taken in, so "n requests have been
+// made" says exactly which answers the service has. Nothing here depends on how fast the machine is.
+
+/// Suspends until `condition` holds, for at most 30 seconds, and ends early when the task is cancelled.
+private func waitUntil(_ condition: @Sendable () async -> Bool) async {
+    let limit = ContinuousClock.now + .seconds(30)
+    while !Task.isCancelled, ContinuousClock.now < limit, !(await condition()) {
+        try? await Task.sleep(for: .milliseconds(5))
+    }
+}
+
+/// The outcome of `operation`, or nil when it has not finished within `limit` (it is cancelled then). A feed that
+/// waits for ever fails a test this way instead of hanging it.
+private func finishing<T: Sendable>(
+    within limit: Duration = .seconds(20),
+    _ operation: @escaping @Sendable () async throws -> T
+) async -> Result<T, any Error>? {
+    await withTaskGroup(of: Result<T, any Error>?.self) { group in
+        group.addTask {
+            do { return .success(try await operation()) } catch { return .failure(error) }
+        }
+        group.addTask {
+            try? await Task.sleep(for: limit)
+            return nil
+        }
+        let first = await group.next() ?? nil
+        group.cancelAll()
+        return first
+    }
+}
+
+/// A number the test changes while the service is running.
+private final class Counter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var current: Int
+
+    init(_ start: Int) {
+        current = start
+    }
+
+    var value: Int {
+        get { lock.withLock { current } }
+        set { lock.withLock { current = newValue } }
+    }
+}
+
+/// The time is up as soon as `rss` has been asked `target.value` times (and never, for `Int.max`).
+private func afterRequests(_ rss: ScriptedRSS, _ target: Counter) -> FetchDeadline {
+    .when { await waitUntil { await rss.requested.count >= target.value } }
+}
+
+@Suite final class SubscriptionFeedDeadlineTests {
+    private let directory: URL
+    private let cacheURL: URL
+
+    init() {
+        directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("NoSlopFeedDeadlineTests-\(UUID().uuidString)", isDirectory: true)
+        cacheURL = directory.appendingPathComponent("caches/subscription-feed.json")
+    }
+
+    deinit {
+        try? FileManager.default.removeItem(at: directory)
+    }
+
+    private func channels(_ count: Int) -> [SubscribedChannel] {
+        (0..<count).map { makeChannel("UC_\($0)") }
+    }
+
+    private func video(of channel: SubscribedChannel, daysAgo: Double) -> VideoSummary {
+        makeVideo("v-\(channel.id)", channel: channel.id, daysAgo: daysAgo)
+    }
+
+    /// The first `answering` channels answer at once, every other one hangs.
+    private func scripted(_ channels: [SubscribedChannel], answering: Int) -> ScriptedRSS {
+        var replies: [String: ScriptedRSS.Reply] = [:]
+        for (index, channel) in channels.enumerated() {
+            replies[channel.id] = index < answering ? .videos([video(of: channel, daysAgo: Double(index))]) : .hang
+        }
+        return ScriptedRSS(replies)
+    }
+
+    private func makeService(
+        _ rss: ScriptedRSS, account: ScriptedAccount? = nil, maxConcurrent: Int, cache: URL? = nil, deadline: FetchDeadline
+    ) -> SubscriptionFeedService {
+        SubscriptionFeedService(
+            rss: rss, account: account, cacheURL: cache, maxConcurrent: maxConcurrent,
+            channelCacheTTL: 900, fetchDeadline: deadline, now: { t0 }
+        )
+    }
+
+    // MARK: Channels
+
+    @Test func theChannelsThatAnsweredAreKeptAndTheOthersAreLeftBehind() async throws {
+        // 24 channels, four requests at a time. The first eight answer; then four hang and occupy every slot, so
+        // without a deadline nothing would ever move on. Four requests start at once and one more after each of the
+        // eight answers: when 12 have been made the service has all eight.
+        let channels = channels(24)
+        let rss = scripted(channels, answering: 8)
+        let service = makeService(rss, maxConcurrent: 4, deadline: afterRequests(rss, Counter(12)))
+
+        let outcome = await finishing { try await service.feed(channels: channels, forceRefresh: true) }
+
+        let feed = try #require(try outcome?.get(), "the refresh went on waiting for the channels that do not answer")
+        #expect(feed.map(\.id) == (0..<8).map { "v-UC_\($0)" })
+        #expect(await rss.requested.count == 12, "no request was started after the deadline")
+        #expect(await rss.maxInFlight <= 4)
+
+        // The four requests that were still running were cancelled.
+        await waitUntil { await rss.cancelled.count >= 4 }
+        #expect(Set(await rss.cancelled) == ["UC_8", "UC_9", "UC_10", "UC_11"])
+
+        // What is shown is what the next start shows, too.
+        #expect(await service.cachedFeed() == feed)
+    }
+
+    @Test func theNextRefreshAsksOnlyForTheChannelsThatDidNotAnswer() async throws {
+        let channels = channels(24)
+        let rss = scripted(channels, answering: 8)
+        let target = Counter(12)
+        let service = makeService(rss, maxConcurrent: 4, deadline: afterRequests(rss, target))
+        _ = await finishing { try await service.feed(channels: channels, forceRefresh: true) }
+        await waitUntil { await rss.cancelled.count >= 4 }
+        let before = await rss.requested.count
+        #expect(before == 12)
+
+        // The network is back: everyone answers, and the time is not up this time.
+        for channel in channels.dropFirst(8) {
+            await rss.reply(channel.id, with: .videos([video(of: channel, daysAgo: 30)]))
+        }
+        target.value = .max
+        let outcome = await finishing { try await service.feed(channels: channels, forceRefresh: false) }
+
+        let feed = try #require(try outcome?.get())
+        #expect(feed.count == 24)
+        #expect(Set(await rss.requested.dropFirst(before)) == Set(channels.dropFirst(8).map(\.id)))
+        #expect(await rss.requested.count == before + 16)
+    }
+
+    @Test func aForcedRefreshAsksTheChannelsThatNeverAnsweredBeforeTheOnesThatDid() async throws {
+        // Pull to refresh asks for every channel. With a deadline the order matters: the channels at the end of the
+        // list would otherwise never be reached while the same first ones are asked again and again.
+        let channels = channels(6)
+        let rss = scripted(channels, answering: 2)
+        let target = Counter(3)
+        let service = makeService(rss, maxConcurrent: 1, deadline: afterRequests(rss, target))
+        _ = await finishing { try await service.feed(channels: channels, forceRefresh: true) }
+        await waitUntil { await rss.cancelled.contains("UC_2") }
+        #expect(await rss.requested == ["UC_0", "UC_1", "UC_2"], "one slot: the third channel is the one that hangs")
+
+        for channel in channels.dropFirst(2) {
+            await rss.reply(channel.id, with: .videos([video(of: channel, daysAgo: 30)]))
+        }
+        target.value = .max
+        let outcome = await finishing { try await service.feed(channels: channels, forceRefresh: true) }
+
+        #expect(try #require(try outcome?.get()).count == 6)
+        #expect(Array(await rss.requested.dropFirst(3)) == ["UC_2", "UC_3", "UC_4", "UC_5", "UC_0", "UC_1"])
+    }
+
+    @Test func aChannelThatAnsweredBeforeTheDeadlineKeepsItsVideosWhenItFailsLater() async throws {
+        let channels = channels(3)
+        let rss = scripted(channels, answering: 1)
+        let target = Counter(2)
+        let service = makeService(rss, maxConcurrent: 1, deadline: afterRequests(rss, target))
+
+        let first = try #require(try await finishing { try await service.feed(channels: channels, forceRefresh: true) }?.get())
+        #expect(first.map(\.id) == ["v-UC_0"])
+
+        // A later forced refresh in which that channel fails: its videos stay, as they always did.
+        await waitUntil { await rss.cancelled.contains("UC_1") }
+        await rss.reply("UC_0", with: .failure(.network("blip")))
+        for channel in channels.dropFirst() {
+            await rss.reply(channel.id, with: .videos([video(of: channel, daysAgo: 30)]))
+        }
+        target.value = .max
+        let second = try #require(try await finishing { try await service.feed(channels: channels, forceRefresh: true) }?.get())
+        #expect(second.map(\.id) == ["v-UC_0", "v-UC_1", "v-UC_2"])
+    }
+
+    @Test func whenNothingAnswersBeforeTheDeadlineTheRefreshFailsAndTheCachedFeedStays() async throws {
+        let channels = channels(3)
+        var replies: [String: ScriptedRSS.Reply] = [:]
+        for channel in channels { replies[channel.id] = .videos([video(of: channel, daysAgo: 1)]) }
+        let rss = ScriptedRSS(replies)
+        let target = Counter(.max)
+        let service = makeService(rss, maxConcurrent: 2, cache: cacheURL, deadline: afterRequests(rss, target))
+        let good = try await service.feed(channels: channels, forceRefresh: true)
+        #expect(good.count == 3)
+
+        // The connection stalls: both slots are taken by requests that wait for ever.
+        for channel in channels { await rss.reply(channel.id, with: .hang) }
+        target.value = await rss.requested.count + 2
+        let outcome = await finishing { try await service.feed(channels: channels, forceRefresh: true) }
+
+        let result = try #require(outcome, "the refresh went on waiting for a connection that does not answer")
+        guard case .failure(let error) = result, let known = error as? NoSlopError, case .network = known else {
+            Issue.record("expected a .network error, got \(result)")
+            return
+        }
+        #expect(await service.cachedFeed() == good)
+        #expect(await SubscriptionFeedService(rss: rss, account: nil, cacheURL: cacheURL).cachedFeed() == good)
+    }
+
+    @Test func aRealErrorIsReportedInsteadOfTheTimeOutWhenEverythingFails() async throws {
+        // One channel answers with an error, the other hangs: nothing worked, and the error that arrived is the news.
+        let channels = channels(2)
+        let rss = ScriptedRSS(["UC_0": .failure(.http(status: 500)), "UC_1": .hang])
+        let service = makeService(rss, maxConcurrent: 1, deadline: afterRequests(rss, Counter(2)))
+
+        let outcome = await finishing { try await service.feed(channels: channels, forceRefresh: true) }
+
+        let result = try #require(outcome)
+        guard case .failure(let error) = result else {
+            Issue.record("expected an error, got \(result)")
+            return
+        }
+        #expect(error as? NoSlopError == .http(status: 500))
+    }
+
+    @Test func aRefreshThatTheCallerCancelsKeepsWhatHadArrived() async throws {
+        let channels = channels(4)
+        let rss = scripted(channels, answering: 2)
+        let service = makeService(rss, maxConcurrent: 1, deadline: .after(.seconds(3_600)))
+
+        let task = Task { try await service.feed(channels: channels, forceRefresh: false) }
+        await waitUntil { await rss.requested.count >= 3 }
+        task.cancel()
+        let result = await task.result
+        guard case .failure(let error) = result else {
+            Issue.record("expected the refresh to be cancelled, got \(result)")
+            return
+        }
+        #expect(error as? NoSlopError == .cancelled)
+        // Half a refresh is not published…
+        #expect(await service.cachedFeed().isEmpty)
+
+        // …but the two channels that had answered are not asked again.
+        for channel in channels.dropFirst(2) {
+            await rss.reply(channel.id, with: .videos([video(of: channel, daysAgo: 30)]))
+        }
+        await waitUntil { await rss.cancelled.contains("UC_2") }
+        let before = await rss.requested.count
+        let feed = try #require(try await finishing { try await service.feed(channels: channels, forceRefresh: false) }?.get())
+        #expect(feed.count == 4)
+        #expect(Array(await rss.requested.dropFirst(before)) == ["UC_2", "UC_3"])
+    }
+
+    // MARK: Durations
+
+    @Test func theDurationLookupIsPartOfTheSameDeadline() async throws {
+        // The channel answers, but the Data API does not: the feed is handed over at the deadline without durations
+        // instead of waiting for the lookup.
+        let channel = makeChannel("UC_A")
+        let rss = ScriptedRSS(["UC_A": .videos([makeVideo("a1", channel: "UC_A", daysAgo: 1), makeVideo("a2", channel: "UC_A", daysAgo: 2)])])
+        let account = ScriptedAccount(durations: ["a1": 61, "a2": 62], hangs: true)
+        let target = Counter(1)
+        let service = makeService(
+            rss, account: account, maxConcurrent: 2,
+            deadline: .when { await waitUntil { await account.batches.count >= target.value } }
+        )
+
+        let outcome = await finishing { try await service.feed(channels: [channel], forceRefresh: true) }
+
+        let feed = try #require(try outcome?.get(), "the refresh went on waiting for the durations")
+        #expect(feed.map(\.id) == ["a1", "a2"])
+        #expect(feed.allSatisfy { $0.durationSeconds == nil })
+
+        // The next refresh looks them up again, because nothing was learned.
+        await account.hang(false)
+        target.value = .max
+        let again = try #require(try await finishing { try await service.feed(channels: [channel], forceRefresh: true) }?.get())
+        #expect(again.map(\.durationSeconds) == [61, 62])
+    }
+
+    @Test func noDurationLookupIsStartedOnceTheTimeIsUp() async throws {
+        // The deadline cut the channels short: the time is up, so the Data API is not asked at all.
+        let channels = channels(2)
+        let rss = scripted(channels, answering: 1)
+        let account = ScriptedAccount(durations: ["v-UC_0": 61])
+        let service = makeService(rss, account: account, maxConcurrent: 1, deadline: afterRequests(rss, Counter(2)))
+
+        let outcome = await finishing { try await service.feed(channels: channels, forceRefresh: true) }
+
+        let feed = try #require(try outcome?.get())
+        #expect(feed.map(\.id) == ["v-UC_0"])
+        #expect(feed.first?.durationSeconds == nil)
+        #expect(await account.batches.isEmpty)
     }
 }

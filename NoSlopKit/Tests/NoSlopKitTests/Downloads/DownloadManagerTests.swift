@@ -442,6 +442,46 @@ struct DownloadHarness {
     }
 }
 
+extension DownloadHarness {
+    /// Writes what an interrupted download leaves behind: the plan, the finished parts, and a `downloads.json` that
+    /// says the item was in flight.
+    static func leaveInterruptedDownload(
+        in root: URL,
+        state: DownloadState,
+        server: DownloadStubServer,
+        chunkSize: Int64,
+        videoChunks: Set<Int>,
+        audioChunks: Set<Int>
+    ) throws {
+        let workspace = DownloadWorkspace(root: root)
+        let video = ZooFixture.video(at: server.url("/video.mp4"))
+        let audio = ZooFixture.audio(at: server.url("/audio.m4a"))
+        let plan = DownloadJobPlan(
+            itemID: ZooFixture.itemID, videoID: ZooFixture.videoID, title: "Me at the zoo",
+            video: video, audio: audio, durationSeconds: 18.933, chunkSize: chunkSize, fileExtension: "mp4"
+        )
+        try FileManager.default.createDirectory(at: workspace.directory(for: ZooFixture.itemID), withIntermediateDirectories: true)
+        try workspace.savePlan(plan)
+
+        let videoData = try Fixture.data("zoo_video_144p.mp4")
+        let audioData = try Fixture.data("zoo_audio.m4a")
+        for (stream, data, chunks) in [(DownloadTaskDescriptor.Stream.video, videoData, videoChunks), (.audio, audioData, audioChunks)] {
+            let ranges = ChunkPlanner.ranges(totalBytes: Int64(data.count), chunkSize: chunkSize)
+            for index in chunks {
+                let range = ranges[index]
+                let part = workspace.partURL(for: DownloadTaskDescriptor(itemID: ZooFixture.itemID, stream: stream, chunkIndex: index))
+                try data.subdata(in: Int(range.lowerBound)..<Int(range.upperBound + 1)).write(to: part)
+            }
+        }
+
+        let item = DownloadItem(
+            id: ZooFixture.itemID, video: ZooFixture.summary, quality: .video(maxHeight: 144), state: state,
+            progress: 0.5, bytesDownloaded: 150_000, bytesTotal: ZooFixture.videoBytes + ZooFixture.audioBytes
+        )
+        try JSONEncoder().encode([item]).write(to: root.appendingPathComponent("downloads.json"))
+    }
+}
+
 /// Polls until `condition` holds (true) or the time runs out (false).
 @MainActor
 func awaitDownloadCondition(timeout: Duration = .seconds(90), _ condition: () -> Bool) async -> Bool {
@@ -701,7 +741,7 @@ func mediaDurationAndTracks(of url: URL) async throws -> (seconds: Double, video
 
     // MARK: Failures
 
-    @Test func chunkFailureMarksFailedAndCleansUp() async throws {
+    @Test func chunkFailureMarksFailedAndKeepsTheWork() async throws {
         let directory = try DownloadTestDirectory.make()
         let server = DownloadStubServer()
         defer { directory.remove() }
@@ -728,18 +768,22 @@ func mediaDurationAndTracks(of url: URL) async throws -> (seconds: Double, video
         #expect(item.relativeFilePath == nil)
         #expect(manager.fileURL(for: item) == nil)
         #expect(manager.completedItem(videoID: ZooFixture.videoID) == nil)
-        #expect(!harness.exists(harness.workDirectory(for: ZooFixture.itemID)), "the work directory is removed")
+        let work = harness.workDirectory(for: ZooFixture.itemID)
+        #expect(harness.exists(work.appendingPathComponent("job.json")), "the work directory stays: a retry fetches only what is missing")
         #expect(harness.rootListing().filter { $0.hasSuffix(".mp4") || $0.hasSuffix(".m4a") }.isEmpty, "no final file")
 
-        // The failing chunk was tried three times (the request plus two retries), the others once.
+        // A 403 means the address is dead: YouTube was asked for a new one once (the resolver is asked a second time and
+        // hands out the same address, which is refused again). The failing chunk was tried with the first address, with
+        // the second one, and then twice more: four times.
+        #expect(resolver.callCount == 2)
         let chunkOne = server.requests.filter { $0.path == "/video.mp4" && $0.range?.lowerBound == 10_485_760 }
-        #expect(chunkOne.count == 3)
+        #expect(chunkOne.count == 4)
 
         // Nothing keeps downloading after the failure and nothing comes back to life.
         let settled = server.requests.count
         try await Task.sleep(for: .milliseconds(300))
         #expect(server.requests.count == settled)
-        #expect(!harness.exists(harness.workDirectory(for: ZooFixture.itemID)))
+        #expect(harness.exists(work.appendingPathComponent("job.json")))
         #expect(manager.items.first?.state == .failed)
     }
 
@@ -823,9 +867,10 @@ func mediaDurationAndTracks(of url: URL) async throws -> (seconds: Double, video
         try ZooFixture.serveFixtures(on: server)
         server.serve("/expired.mp4", data: Data(count: 10))
         server.fail("/expired.mp4", with: .status(403))
-        // The first answer has a link that has already expired; the second one is fresh.
+        // The first two answers have a link that has already expired (the second look-up is the one the manager makes by
+        // itself when it finds the first link dead); the third one is fresh.
         let resolver = DownloadStubResolver { _, call in
-            call == 1
+            call <= 2
                 ? ZooFixture.streamInfo(formats: [ZooFixture.video(at: server.url("/expired.mp4")), ZooFixture.audio(at: server.url("/audio.m4a"))])
                 : ZooFixture.streamInfo(server: server)
         }
@@ -835,7 +880,7 @@ func mediaDurationAndTracks(of url: URL) async throws -> (seconds: Double, video
         manager.enqueue(video: ZooFixture.summary, quality: .video(maxHeight: 144))
         #expect(await awaitDownloadCondition { downloadIsSettled(manager, ZooFixture.itemID) })
         #expect(manager.items.first?.state == .failed)
-        #expect(resolver.callCount == 1)
+        #expect(resolver.callCount == 2, "a dead link is replaced once by itself; the new one was dead too")
 
         manager.retry(id: ZooFixture.itemID)
         #expect(manager.items.first?.state == .queued)
@@ -844,7 +889,7 @@ func mediaDurationAndTracks(of url: URL) async throws -> (seconds: Double, video
 
         let item = try #require(manager.items.first)
         #expect(item.state == .completed, "\(item.errorMessage ?? "")")
-        #expect(resolver.callCount == 2, "retry asks YouTube for fresh stream URLs")
+        #expect(resolver.callCount == 3, "retry asks YouTube for fresh stream URLs")
         #expect(harness.exists(try #require(manager.fileURL(for: item))))
         #expect(manager.items.count == 1)
     }
@@ -1250,44 +1295,6 @@ func mediaDurationAndTracks(of url: URL) async throws -> (seconds: Double, video
 
     // MARK: Resuming from disk
 
-    /// Writes what an interrupted download leaves behind: the plan, the finished parts, and a `downloads.json` that
-    /// says the item was in flight.
-    private func leaveInterruptedDownload(
-        in root: URL,
-        state: DownloadState,
-        server: DownloadStubServer,
-        chunkSize: Int64,
-        videoChunks: Set<Int>,
-        audioChunks: Set<Int>
-    ) throws {
-        let workspace = DownloadWorkspace(root: root)
-        let video = ZooFixture.video(at: server.url("/video.mp4"))
-        let audio = ZooFixture.audio(at: server.url("/audio.m4a"))
-        let plan = DownloadJobPlan(
-            itemID: ZooFixture.itemID, videoID: ZooFixture.videoID, title: "Me at the zoo",
-            video: video, audio: audio, durationSeconds: 18.933, chunkSize: chunkSize, fileExtension: "mp4"
-        )
-        try FileManager.default.createDirectory(at: workspace.directory(for: ZooFixture.itemID), withIntermediateDirectories: true)
-        try workspace.savePlan(plan)
-
-        let videoData = try Fixture.data("zoo_video_144p.mp4")
-        let audioData = try Fixture.data("zoo_audio.m4a")
-        for (stream, data, chunks) in [(DownloadTaskDescriptor.Stream.video, videoData, videoChunks), (.audio, audioData, audioChunks)] {
-            let ranges = ChunkPlanner.ranges(totalBytes: Int64(data.count), chunkSize: chunkSize)
-            for index in chunks {
-                let range = ranges[index]
-                let part = workspace.partURL(for: DownloadTaskDescriptor(itemID: ZooFixture.itemID, stream: stream, chunkIndex: index))
-                try data.subdata(in: Int(range.lowerBound)..<Int(range.upperBound + 1)).write(to: part)
-            }
-        }
-
-        let item = DownloadItem(
-            id: ZooFixture.itemID, video: ZooFixture.summary, quality: .video(maxHeight: 144), state: state,
-            progress: 0.5, bytesDownloaded: 150_000, bytesTotal: ZooFixture.videoBytes + ZooFixture.audioBytes
-        )
-        try JSONEncoder().encode([item]).write(to: root.appendingPathComponent("downloads.json"))
-    }
-
     @Test func retryAfterAnInterruptionFetchesOnlyWhatIsMissing() async throws {
         let directory = try DownloadTestDirectory.make()
         let server = DownloadStubServer()
@@ -1295,7 +1302,7 @@ func mediaDurationAndTracks(of url: URL) async throws -> (seconds: Double, video
         try ZooFixture.serveFixtures(on: server)
         let root = directory.url.appendingPathComponent("Downloads", isDirectory: true)
         // 100000-byte chunks: the video has two (0 is on disk), the audio has two (both are on disk).
-        try leaveInterruptedDownload(in: root, state: .downloading, server: server, chunkSize: 100_000, videoChunks: [0], audioChunks: [0, 1])
+        try DownloadHarness.leaveInterruptedDownload(in: root, state: .downloading, server: server, chunkSize: 100_000, videoChunks: [0], audioChunks: [0, 1])
 
         var tuning = DownloadTuning.testing
         tuning.chunkSize = 100_000
@@ -1305,6 +1312,7 @@ func mediaDurationAndTracks(of url: URL) async throws -> (seconds: Double, video
 
         // A paused item shows what is really on disk: 100000 video bytes and all 117495 audio bytes of 312773.
         #expect(await awaitDownloadCondition { manager.items.first?.bytesDownloaded == 217_495 })
+        #expect(await manager.diskUsage() >= 217_495, "what a paused download holds is part of the space used")
         #expect(manager.items.first?.bytesTotal == 312_773)
         #expect(abs((manager.items.first?.progress ?? 0) - 217_495.0 / 312_773.0) < 0.0001)
 
@@ -1325,7 +1333,7 @@ func mediaDurationAndTracks(of url: URL) async throws -> (seconds: Double, video
         defer { directory.remove() }
         try ZooFixture.serveFixtures(on: server)
         let root = directory.url.appendingPathComponent("Downloads", isDirectory: true)
-        try leaveInterruptedDownload(in: root, state: .downloading, server: server, chunkSize: 100_000, videoChunks: [0], audioChunks: [0, 1])
+        try DownloadHarness.leaveInterruptedDownload(in: root, state: .downloading, server: server, chunkSize: 100_000, videoChunks: [0], audioChunks: [0, 1])
 
         var tuning = DownloadTuning.testing
         tuning.chunkSize = 100_000
@@ -1350,7 +1358,7 @@ func mediaDurationAndTracks(of url: URL) async throws -> (seconds: Double, video
         defer { directory.remove() }
         try ZooFixture.serveFixtures(on: server)
         let root = directory.url.appendingPathComponent("Downloads", isDirectory: true)
-        try leaveInterruptedDownload(in: root, state: .merging, server: server, chunkSize: 100_000, videoChunks: [0, 1], audioChunks: [0, 1])
+        try DownloadHarness.leaveInterruptedDownload(in: root, state: .merging, server: server, chunkSize: 100_000, videoChunks: [0, 1], audioChunks: [0, 1])
 
         let resolver = DownloadStubResolver { _, _ in throw NoSlopError.network("offline") }
         let manager = DownloadHarness.newManager(root: root, resolver: resolver, tuning: .testing)
@@ -1371,7 +1379,7 @@ func mediaDurationAndTracks(of url: URL) async throws -> (seconds: Double, video
         defer { directory.remove() }
         try ZooFixture.serveFixtures(on: server)
         let root = directory.url.appendingPathComponent("Downloads", isDirectory: true)
-        try leaveInterruptedDownload(in: root, state: .merging, server: server, chunkSize: 100_000, videoChunks: [0], audioChunks: [0, 1])
+        try DownloadHarness.leaveInterruptedDownload(in: root, state: .merging, server: server, chunkSize: 100_000, videoChunks: [0], audioChunks: [0, 1])
 
         let manager = DownloadHarness.newManager(root: root, resolver: DownloadStubResolver { _, _ in throw NoSlopError.network("x") }, tuning: .testing)
         #expect(await awaitDownloadCondition { manager.items.first?.state == .paused })
@@ -1385,7 +1393,7 @@ func mediaDurationAndTracks(of url: URL) async throws -> (seconds: Double, video
         defer { directory.remove() }
         try ZooFixture.serveFixtures(on: server)
         let root = directory.url.appendingPathComponent("Downloads", isDirectory: true)
-        try leaveInterruptedDownload(in: root, state: .downloading, server: server, chunkSize: 100_000, videoChunks: [0], audioChunks: [0, 1])
+        try DownloadHarness.leaveInterruptedDownload(in: root, state: .downloading, server: server, chunkSize: 100_000, videoChunks: [0], audioChunks: [0, 1])
         let work = DownloadWorkspace(root: root).directory(for: ZooFixture.itemID)
 
         var tuning = DownloadTuning.testing
@@ -1429,7 +1437,7 @@ func mediaDurationAndTracks(of url: URL) async throws -> (seconds: Double, video
         try ZooFixture.serveFixtures(on: server)
         let root = directory.url.appendingPathComponent("Downloads", isDirectory: true)
         // Everything is on disk except the video's second chunk.
-        try leaveInterruptedDownload(in: root, state: .downloading, server: server, chunkSize: 100_000, videoChunks: [0], audioChunks: [0, 1])
+        try DownloadHarness.leaveInterruptedDownload(in: root, state: .downloading, server: server, chunkSize: 100_000, videoChunks: [0], audioChunks: [0, 1])
         let manager = DownloadHarness.newManager(root: root, resolver: DownloadStubResolver { _, _ in throw NoSlopError.network("x") }, tuning: .testing)
         #expect(await awaitDownloadCondition { manager.items.first?.state == .paused })
 
@@ -1506,6 +1514,10 @@ func mediaDurationAndTracks(of url: URL) async throws -> (seconds: Double, video
         #expect(item.errorMessage == "There isn't enough free space on this device.")
         #expect(FileManager.default.fileExists(atPath: work.appendingPathComponent("job.json").path), "the plan stays")
         #expect(FileManager.default.fileExists(atPath: work.appendingPathComponent("audio.1.part").path), "so do the parts")
+        // And the space they take is reported: the failed row used to add up to nothing, so nothing said what filled the phone.
+        let planSize = Int64(try work.appendingPathComponent("job.json").resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0)
+        #expect(await harness.manager.diskUsage() == ZooFixture.audioBytes + planSize)
+        #expect(harness.manager.bytesOnDisk == 0, "bytesOnDisk is the finished downloads only")
 
         // Space is back (and the video server too): the retry fetches only what is missing.
         harness.server.clearFaults()
@@ -1515,16 +1527,6 @@ func mediaDurationAndTracks(of url: URL) async throws -> (seconds: Double, video
         #expect(harness.manager.items.first?.state == .completed, "\(harness.manager.items.first?.errorMessage ?? "")")
         let fetched = harness.server.requests.dropFirst(before).filter { $0.path == "/audio.m4a" }
         #expect(fetched.isEmpty, "the audio was not downloaded again")
-    }
-
-    @Test func partsOfAFailedChunkDownloadAreNotKept() async throws {
-        let harness = try DownloadHarness.zoo()
-        defer { harness.cleanUp() }
-        harness.server.fail("/video.mp4", with: .status(403))
-        harness.manager.enqueue(video: ZooFixture.summary, quality: .video(maxHeight: 144))
-        #expect(await awaitDownloadCondition { downloadIsSettled(harness.manager, ZooFixture.itemID) })
-        #expect(harness.manager.items.first?.state == .failed)
-        #expect(!harness.exists(harness.workDirectory(for: ZooFixture.itemID)), "a chunk failure starts over from scratch")
     }
 
     // MARK: Background session plumbing

@@ -29,8 +29,14 @@ enum DownloadFailure: Error, Equatable, Sendable, LocalizedError {
     case tooLarge
     case liveStream
     case outOfSpace
+    /// The device cannot hold this download: checked before anything is fetched. `needed` counts what is still to be
+    /// fetched and the room the merge takes at the end; both are bytes.
+    case notEnoughSpace(needed: Int64, free: Int64)
     case fileSystem(String)
     case mergeFailed(String)
+    /// The system cut the merge short (the app was suspended in the middle of it, media services were reset). Nothing
+    /// is wrong with the downloaded files, so they are kept for the retry.
+    case mergeInterrupted
     case missingParts
 
     var errorDescription: String? {
@@ -55,12 +61,39 @@ enum DownloadFailure: Error, Equatable, Sendable, LocalizedError {
             return "Live streams can't be downloaded."
         case .outOfSpace:
             return "There isn't enough free space on this device."
+        case .notEnoughSpace(let needed, let free):
+            // Short, with both figures near the front: the failed row shows this in a narrow column beside the thumbnail
+            // and the Retry button, where it wraps to four or five lines. "To finish" hints at why the figure is about
+            // twice the size the download is offered at: the merge writes a second copy before the streams are removed.
+            let formatter: (Int64) -> String = { ByteCountFormatter.string(fromByteCount: $0, countStyle: .file) }
+            return "There isn't enough free space: this needs about \(formatter(needed)) to finish, \(formatter(free)) is free."
         case .fileSystem:
             return "Couldn't save the download to disk."
         case .mergeFailed:
             return "Couldn't combine the video and audio."
+        case .mergeInterrupted:
+            return "Interrupted while combining the video and audio. Retry to finish."
         case .missingParts:
             return "Some downloaded pieces are missing."
+        }
+    }
+
+    /// True when the stream address itself has stopped working, as opposed to the server being busy: 403 is what an
+    /// expired link, or one made for an IP address the phone has since left, is answered with, and 410 says it is gone.
+    /// Asking YouTube for a new address can help; asking the same address again cannot.
+    var isDeadLink: Bool {
+        if case .http(let status) = self { return status == 403 || status == 410 }
+        return false
+    }
+
+    /// Whether what is already on disk is still worth keeping after the download failed like this: a full disk (or a
+    /// download that would not fit), a merge that was interrupted, a disk that could not be written, parts that went
+    /// missing. None of these says anything
+    /// against the downloaded data, and a retry carries on from it.
+    var keepsDownloadedData: Bool {
+        switch self {
+        case .outOfSpace, .notEnoughSpace, .mergeInterrupted, .fileSystem, .missingParts: return true
+        default: return false
         }
     }
 
@@ -68,6 +101,7 @@ enum DownloadFailure: Error, Equatable, Sendable, LocalizedError {
     static func from(_ error: any Error) -> DownloadFailure {
         if let failure = error as? DownloadFailure { return failure }
         if isOutOfSpace(error) { return .outOfSpace }
+        if isInterrupted(error) { return .mergeInterrupted }
         let ns = error as NSError
         if ns.domain == NSURLErrorDomain {
             // URLSession reports a file it cannot write in its own domain; that is the disk's problem, not the network's.
@@ -98,6 +132,25 @@ enum DownloadFailure: Error, Equatable, Sendable, LocalizedError {
         }
         return false
     }
+
+    /// AVFoundation's codes for "the system cut this short": operation interrupted (-11847), session was interrupted
+    /// (-11818), media services were reset (-11819), and decoder / encoder temporarily unavailable (-11839, -11840).
+    /// They are compared as numbers because the first three exist on iOS only: the macOS build the tests run on has no
+    /// names for them.
+    private static let interruptionCodes: Set<Int> = [-11847, -11818, -11819, -11839, -11840]
+
+    /// True when `error`, or an error it wraps, is one of `interruptionCodes`: the system stopped the merge (an app that
+    /// is suspended in the middle of an export is the usual cause), the files are not at fault. The walk is bounded.
+    static func isInterrupted(_ error: any Error) -> Bool {
+        var current: NSError? = error as NSError
+        var depth = 0
+        while let ns = current, depth < 8 {
+            if ns.domain == "AVFoundationErrorDomain" && interruptionCodes.contains(ns.code) { return true }
+            current = ns.userInfo[NSUnderlyingErrorKey] as? NSError
+            depth += 1
+        }
+        return false
+    }
 }
 
 // MARK: - Tuning
@@ -112,9 +165,20 @@ struct DownloadTuning: Sendable {
     var retryDelay: Duration = .milliseconds(400)
     /// At most one progress update per item per this many seconds.
     var progressInterval: TimeInterval = 0.25
+    /// Combines the downloaded streams into one file. Tests replace it to make merges fail (or wait) the way they can on
+    /// a device.
+    var mux: DownloadMuxer = { videoFile, audioFile, durationSeconds, output in
+        try await MediaMuxer.mux(videoFile: videoFile, audioFile: audioFile, durationSeconds: durationSeconds, output: output)
+    }
+    /// How many bytes are free on the volume of the given folder; nil when that cannot be told, and the download then
+    /// goes ahead. Tests replace it to run out of room without filling a disk.
+    var availableCapacity: @Sendable (URL) -> Int64? = { DownloadAssembler.availableCapacity(at: $0) }
 
     static let standard = DownloadTuning()
 }
+
+/// What combines a video file and an audio file into the finished file: `MediaMuxer.mux`, unless a test says otherwise.
+typealias DownloadMuxer = @Sendable (_ videoFile: URL?, _ audioFile: URL, _ durationSeconds: Double, _ output: URL) async throws -> Void
 
 // MARK: - Events
 
@@ -321,6 +385,23 @@ struct DownloadWorkspace: Sendable {
     }
 }
 
+// MARK: - Room on the device
+
+/// How much free space a download needs.
+enum DownloadSpace {
+    /// Kept free on top of what the download itself takes, so that it never fills the device to the last byte.
+    static let margin: Int64 = 64 * 1_048_576
+
+    /// What must be free before `totalBytes` of streams are fetched when `presentBytes` of them are on disk already.
+    ///
+    /// The streams are fetched in full (`totalBytes`), and then the merge writes the combined file next to them before
+    /// they are removed: at its peak the download holds twice its size. Whatever is on disk already has been paid for.
+    /// A merge-only retry (everything is on disk) needs about one more copy.
+    static func needed(totalBytes: Int64, presentBytes: Int64) -> Int64 {
+        max(0, 2 * totalBytes - presentBytes) + margin
+    }
+}
+
 // MARK: - Assembly
 
 /// Turns the fetched parts into the final file. Every step is restartable from what is on disk: a stream file exists
@@ -334,6 +415,50 @@ enum DownloadAssembler {
     static func fileSize(_ url: URL) -> Int64? {
         guard let size = try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize else { return nil }
         return Int64(size)
+    }
+
+    /// The bytes available for the volume `url` is on, counting what the system would free up if it had to (cached
+    /// files, say): the number the system itself shows as available for something the person asked for. nil when the
+    /// volume does not say.
+    static func availableCapacity(at url: URL) -> Int64? {
+        let values = try? url.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey, .volumeAvailableCapacityKey])
+        if let important = values?.volumeAvailableCapacityForImportantUsage { return important }
+        return values?.volumeAvailableCapacity.map(Int64.init)
+    }
+
+    /// `provider`'s answer for `url`, asked off the main actor: the system can take a moment to work out what it could
+    /// free up.
+    @concurrent
+    static func freeSpace(at url: URL, using provider: @Sendable (URL) -> Int64?) async -> Int64? {
+        provider(url)
+    }
+
+    /// The bytes of every file under the downloads folder, measured on disk off the main actor: the finished downloads
+    /// and the work directories of the ones that are not finished (parts, concatenated streams, plans). Not counted are
+    /// the trash (directories that are being deleted) and the list of downloads with its saved copy of a damaged one,
+    /// which are not downloads. A file that is deleted while the walk is on it is simply not counted.
+    @concurrent
+    static func diskUsage(under root: URL) async -> Int64 {
+        sizeOfFiles(under: root)
+    }
+
+    static func sizeOfFiles(under root: URL) -> Int64 {
+        let keys: [URLResourceKey] = [.isRegularFileKey, .fileSizeKey]
+        guard let walker = FileManager.default.enumerator(at: root, includingPropertiesForKeys: keys, options: [], errorHandler: { _, _ in true }) else {
+            return 0
+        }
+        var total: Int64 = 0
+        while let url = walker.nextObject() as? URL {
+            let name = url.lastPathComponent
+            if walker.level == 2, name == ".trash", url.deletingLastPathComponent().lastPathComponent == ".work" {
+                walker.skipDescendants()
+                continue
+            }
+            if walker.level == 1, name.hasPrefix("downloads.json") { continue }
+            guard let values = try? url.resourceValues(forKeys: Set(keys)), values.isRegularFile == true, let size = values.fileSize else { continue }
+            total += Int64(size)
+        }
+        return total
     }
 
     /// The chunks that need no download: parts of exactly the right size, and every chunk of a stream whose
@@ -467,7 +592,12 @@ enum DownloadAssembler {
     /// Concatenates, muxes with the true duration and moves the result to `destination`. Returns its size.
     /// Cancellable; leaves the work directory for the caller to remove.
     @concurrent
-    static func assemble(plan: DownloadJobPlan, workspace: DownloadWorkspace, destination: URL) async throws -> Int64 {
+    static func assemble(
+        plan: DownloadJobPlan,
+        workspace: DownloadWorkspace,
+        destination: URL,
+        mux: DownloadMuxer = DownloadTuning.standard.mux
+    ) async throws -> Int64 {
         let fileManager = FileManager.default
         var videoFile: URL?
         var audioFile: URL?
@@ -479,7 +609,7 @@ enum DownloadAssembler {
         try Task.checkCancellation()
 
         let merged = workspace.directory(for: plan.itemID).appendingPathComponent("merged.\(plan.fileExtension)")
-        try await MediaMuxer.mux(videoFile: videoFile, audioFile: audioFile, durationSeconds: plan.durationSeconds, output: merged)
+        try await mux(videoFile, audioFile, plan.durationSeconds, merged)
         try Task.checkCancellation()
 
         guard let size = fileSize(merged), size > 0 else { throw DownloadFailure.mergeFailed("The merged file is empty.") }

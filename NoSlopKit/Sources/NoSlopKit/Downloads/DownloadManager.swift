@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import Synchronization
 #if canImport(UIKit) && !os(watchOS)
 import UIKit
 #endif
@@ -7,15 +8,24 @@ import UIKit
 /// Chunked background downloads with duration-clamped muxing, and the list of downloaded videos.
 ///
 /// A download is a list of 10 MiB HTTP Range requests, one URLSession task each, on a background session: they keep
-/// going while the app is suspended or killed, and the system relaunches the app to say they are done. Finished
-/// chunks land in `<root>/.work/<item id>/`; when all are there the manager concatenates them per stream, muxes video
-/// and audio into one file whose tracks are cut to the true duration (see `MediaMuxer`), and moves it into
-/// `<root>`. A half-written file is never marked completed: every file appears under its final name only when it is
-/// whole.
+/// going while the app is suspended or the system has ended it, and the system relaunches the app to say they are
+/// done. A person who swipes the app away in the app switcher is different: iOS cancels the transfers of a force-quit
+/// app and does not relaunch it, so nothing downloads until the app is opened again, and those items come back
+/// `.paused`. Finished chunks land in `<root>/.work/<item id>/`; when all are there the manager concatenates them per
+/// stream, muxes video and audio into one file whose tracks are cut to the true duration (see `MediaMuxer`), and
+/// moves it into `<root>`. A half-written file is never marked completed: every file appears under its final name
+/// only when it is whole.
 ///
 /// Persistence: the list lives in `<root>/downloads.json`. Items that were in flight when the app last ran come
 /// back `.paused` (their tasks are gone or unknown); the session is then asked what it kept, and those items pick up
-/// where they were. `retry` asks YouTube for fresh stream URLs and reuses parts that are still valid.
+/// where they were. `retry` asks YouTube for fresh stream URLs and reuses parts that are still valid. A list that
+/// exists but cannot be read (the app was started in the background before the first unlock after a restart, say) is
+/// not an empty list: nothing is deleted, cancelled or saved over it, and it is read again once the files can be read.
+///
+/// A failed download keeps what it fetched, so a retry only fetches what is missing: the chunks that finished, and
+/// the concatenated streams of a merge that was interrupted. Only a download that is proven bad (an unreadable stream,
+/// a video YouTube no longer offers) is thrown away. A stream address that stops working (it expired, or it was made
+/// for an IP address the phone has left) is replaced once, automatically.
 @MainActor
 @Observable
 public final class DownloadManager {
@@ -38,6 +48,16 @@ public final class DownloadManager {
     /// fetched), kept until it fails, is cancelled or deleted, or is started again. Finished items of an earlier launch
     /// are not in it; `streamsToday(of:info:)` works those out again.
     @ObservationIgnored private var chosenStreams: [String: DownloadStreams] = [:]
+    /// Items whose stream addresses were already replaced once, automatically, since the person last started them: a
+    /// second dead address is a failure to show, not a loop. Cleared when the item is started by hand, fails, is
+    /// cancelled or deleted, or finishes.
+    @ObservationIgnored private var refreshedLinks: Set<String> = []
+    /// True while `downloads.json` exists but could not be read. The list in memory is then only what was started
+    /// since; nothing is saved over the file, and no work directory is deleted as an orphan of a list nobody has seen.
+    @ObservationIgnored private var listIsUnreadable = false
+#if canImport(UIKit) && !os(watchOS)
+    @ObservationIgnored private let notificationObservers = NotificationObservers()
+#endif
 
     /// - Parameter sessionConfiguration: nil means the background configuration with the global session id.
     public convenience init(rootDirectory: URL, streams: any StreamResolving, sessionConfiguration: URLSessionConfiguration? = nil) {
@@ -63,38 +83,13 @@ public final class DownloadManager {
         DownloadAssembler.excludeFromBackup(rootDirectory)
 
         // What the last run left behind. Nothing is trusted to still be running until the session confirms it.
-        var loaded = store.load()
-        var restoredIDs: [String] = []
-        var unfinishedIDs: Set<String> = []
-        var changed = false
-        for index in loaded.indices {
-            switch loaded[index].state {
-            case .queued, .downloading, .merging:
-                loaded[index].state = .paused
-                loaded[index].errorMessage = nil
-                restoredIDs.append(loaded[index].id)
-                unfinishedIDs.insert(loaded[index].id)
-                changed = true
-            case .paused:
-                restoredIDs.append(loaded[index].id)
-                unfinishedIDs.insert(loaded[index].id)
-            case .failed:
-                // A failed item has a work directory only when its parts were kept on purpose for the next retry.
-                unfinishedIDs.insert(loaded[index].id)
-            case .completed:
-                if Self.finishedFile(of: loaded[index], in: rootDirectory) == nil {
-                    loaded[index].state = .failed
-                    loaded[index].relativeFilePath = nil
-                    loaded[index].progress = 0
-                    loaded[index].bytesDownloaded = 0
-                    loaded[index].errorMessage = "The downloaded file is missing. Retry to download it again."
-                    changed = true
-                }
-            }
-        }
-        items = loaded
-        if changed { saveItems() }
-        workspace.prune(keeping: unfinishedIDs)
+        let restored = Self.restore(store.load(), root: rootDirectory)
+        listIsUnreadable = restored.isUnreadable
+        items = restored.items
+        if restored.changed { saveItems() }
+        // With a list that could not be read every work directory would look like an orphan: leave them all alone, and
+        // leave the session's tasks alone too, until the list can be read (see `reloadIfUnreadable`).
+        if !restored.isUnreadable { workspace.prune(keeping: restored.unfinishedIDs) }
 
         // Events are handled one at a time, in order, on the main actor.
         Task { @MainActor [weak self] in
@@ -102,13 +97,102 @@ public final class DownloadManager {
                 self?.handle(event)
             }
         }
+        if !restored.isUnreadable {
+            Task { @MainActor [weak self] in
+                await self?.reconcile(restoredIDs: restored.restoredIDs)
+            }
+        }
+        observeProtectedData()
+    }
+
+    deinit {
+        engine.shutdown()
+    }
+
+    // MARK: - Restoring the list
+
+    /// The list as the last run left it, made ready for this one.
+    private struct RestoredList {
+        var items: [DownloadItem] = []
+        /// Items that were in flight and must be matched up with the session's tasks.
+        var restoredIDs: [String] = []
+        /// Items that may have a work directory.
+        var unfinishedIDs: Set<String> = []
+        /// Whether `items` differs from the file.
+        var changed = false
+        var isUnreadable = false
+    }
+
+    nonisolated private static func restore(_ contents: DownloadItemStore.Contents, root: URL) -> RestoredList {
+        guard case .items(var loaded) = contents else { return RestoredList(isUnreadable: true) }
+        var restored = RestoredList()
+        for index in loaded.indices {
+            switch loaded[index].state {
+            case .queued, .downloading, .merging:
+                loaded[index].state = .paused
+                loaded[index].errorMessage = nil
+                restored.restoredIDs.append(loaded[index].id)
+                restored.unfinishedIDs.insert(loaded[index].id)
+                restored.changed = true
+            case .paused:
+                restored.restoredIDs.append(loaded[index].id)
+                restored.unfinishedIDs.insert(loaded[index].id)
+            case .failed:
+                // A failed item has a work directory only when its parts were kept on purpose for the next retry.
+                restored.unfinishedIDs.insert(loaded[index].id)
+            case .completed:
+                if finishedFile(of: loaded[index], in: root) == nil {
+                    loaded[index].state = .failed
+                    loaded[index].relativeFilePath = nil
+                    loaded[index].progress = 0
+                    loaded[index].bytesDownloaded = 0
+                    loaded[index].errorMessage = "The downloaded file is missing. Retry to download it again."
+                    restored.changed = true
+                }
+            }
+        }
+        restored.items = loaded
+        return restored
+    }
+
+    /// Reads `downloads.json` again when it could not be read at launch, and carries on as the launch would have: items
+    /// that were in flight come back `.paused`, work directories nobody needs are deleted, and the session's tasks are
+    /// matched up. Downloads started in the meantime stay and come first. Does nothing once the list has been read, so
+    /// it is cheap to call: when the protected data becomes available, when the app becomes active, and before a new
+    /// download is added.
+    func reloadIfUnreadable() {
+        guard listIsUnreadable else { return }
+        let restored = Self.restore(store.load(), root: rootDirectory)
+        guard !restored.isUnreadable else { return }
+        listIsUnreadable = false
+
+        // What was started meanwhile is newer than the file, and wins where both have an item.
+        let known = Set(items.map(\.id))
+        items += restored.items.filter { !known.contains($0.id) }
+        saveItems()
+
+        var unfinishedIDs = restored.unfinishedIDs
+        for item in items where item.state != .completed { unfinishedIDs.insert(item.id) }
+        workspace.prune(keeping: unfinishedIDs)
+
+        let restoredIDs = restored.restoredIDs.filter { !known.contains($0) }
         Task { @MainActor [weak self] in
             await self?.reconcile(restoredIDs: restoredIDs)
         }
     }
 
-    deinit {
-        engine.shutdown()
+    /// Files that data protection keeps closed until the first unlock after a restart can be opened again when the
+    /// device is unlocked, and an app that was started in the background before that finds its list closed. The list
+    /// is read again then, and when the app comes to the foreground.
+    private func observeProtectedData() {
+#if canImport(UIKit) && !os(watchOS)
+        for name in [UIApplication.protectedDataDidBecomeAvailableNotification, UIApplication.didBecomeActiveNotification] {
+            let token = NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.reloadIfUnreadable() }
+            }
+            notificationObservers.add(token)
+        }
+#endif
     }
 
     // MARK: - Options
@@ -131,6 +215,8 @@ public final class DownloadManager {
     /// audio streams as another item of that video that has not failed is removed from the list again instead of
     /// downloading them twice. An original that is paused starts again, since a download of it was asked for.
     public func enqueue(video: VideoSummary, quality: DownloadQuality) {
+        // A list that was closed at launch may be readable by now; a video that is already downloaded should be found.
+        reloadIfUnreadable()
         let id = Self.itemID(video: video, quality: quality)
         if let item = items.first(where: { $0.id == id }) {
             switch item.state {
@@ -179,15 +265,42 @@ public final class DownloadManager {
         items.first { $0.video.id == videoID && $0.state == .completed }
     }
 
+    /// The download that a row of the quality sheet stands for: the item of this video whose rendition is the one the row
+    /// names, whatever it was asked for as (a download asked for as "up to 720p" of a video that stops at 144p is the
+    /// 144p row's download). When several qualify, the one that works wins: finished, then running, then paused, then
+    /// failed.
+    public func item(for option: DownloadOption, videoID: String) -> DownloadItem? {
+        func rank(_ state: DownloadState) -> Int {
+            switch state {
+            case .completed: return 0
+            case .queued, .downloading, .merging: return 1
+            case .paused: return 2
+            case .failed: return 3
+            }
+        }
+        return items
+            .filter { $0.video.id == videoID && $0.effectiveQuality == option.quality }
+            .min { rank($0.state) < rank($1.state) }
+    }
+
     /// The file of a finished item, resolved against the downloads root; nil while it has no file (or its file was
     /// deleted from outside the app).
     public func fileURL(for item: DownloadItem) -> URL? {
         Self.finishedFile(of: item, in: rootDirectory)
     }
 
-    /// Total size of the finished downloads.
+    /// Total size of the finished downloads. It does not count what downloads that are not finished have fetched; that is
+    /// `diskUsage()`.
     public var bytesOnDisk: Int64 {
         items.filter { $0.state == .completed }.reduce(0) { $0 + ($1.bytesTotal ?? $1.bytesDownloaded) }
+    }
+
+    /// Everything the downloads take on disk, in bytes: the finished files, and what downloads that are not finished
+    /// have fetched so far, whether they are running, paused, or failed with their parts kept for a retry. This is the
+    /// number to show as "space used". Measured on disk, off the main actor, so ask for it from a task, not from a
+    /// view's body.
+    public func diskUsage() async -> Int64 {
+        await DownloadAssembler.diskUsage(under: rootDirectory)
     }
 
     /// Called from the app delegate when iOS relaunches the app for finished background transfers. `completionHandler`
@@ -202,28 +315,51 @@ public final class DownloadManager {
         "\(video.id)-\(quality.key)"
     }
 
+    /// The height of the video rendition `plan` fetches, as the quality sheet names it; nil for audio only.
+    private static func renditionHeight(of plan: DownloadJobPlan) -> Int? {
+        plan.video.flatMap(FormatSelector.resolution(of:))
+    }
+
     /// Begins (or begins again) the item: resolve fresh stream URLs, plan, prepare the directory, start the tasks.
-    private func start(_ id: String) {
+    /// `refreshingLinks` is the item's own restart after its stream addresses stopped working (see `refreshLinks`).
+    private func start(_ id: String, refreshingLinks: Bool = false) {
         if let previous = starts.removeValue(forKey: id) { previous.task.cancel() }
         if let stale = jobs.removeValue(forKey: id) { stale.assembly?.cancel() }
         reservedNames.removeValue(forKey: id)
         // It picks its streams again, from fresh stream info.
         chosenStreams.removeValue(forKey: id)
+        // A start the person asked for gets an automatic refresh of its own.
+        if !refreshingLinks { refreshedLinks.remove(id) }
 
         update(id) { item in
             item.state = .queued
-            item.progress = 0
-            item.bytesDownloaded = 0
-            item.bytesTotal = nil
+            if !refreshingLinks {
+                // A refresh picks up where the item was, so its bar does not drop to zero for a moment.
+                item.progress = 0
+                item.bytesDownloaded = 0
+                item.bytesTotal = nil
+            }
             item.relativeFilePath = nil
             item.errorMessage = nil
         }
         let generation = UUID()
         let task = Task { [weak self] in
             guard let self else { return }
+            // New addresses may be needed while the app is in the background (the phone left its Wi-Fi): the lookup has to
+            // finish before iOS suspends the app again.
+            let extraTime = refreshingLinks ? BackgroundTime(name: "No Slop refresh links") : nil
+            defer { extraTime?.end() }
             await run(id, generation: generation)
         }
         starts[id] = DownloadStart(generation: generation, task: task)
+    }
+
+    /// The stream addresses of a running item stopped working: starts it over with fresh ones, once. The chunks that
+    /// are on disk stay, so only the missing ones are fetched again.
+    private func refreshLinks(of id: String) {
+        teardown(id, keepingWork: true)
+        refreshedLinks.insert(id)
+        start(id, refreshingLinks: true)
     }
 
     private func run(_ id: String, generation: UUID) async {
@@ -259,11 +395,21 @@ public final class DownloadManager {
             let present = try await DownloadAssembler.prepare(plan: plan, workspace: workspace)
             try ensureStarting(id, generation)
 
+            // Fetching what is missing takes room, and so does the merge at the end: it writes a second copy before the
+            // streams are removed. Better to say so now than after gigabytes have arrived (maybe over mobile data) and the
+            // device is full. What is on disk already is not asked for again, and the parts stay for the next try.
+            let needed = DownloadSpace.needed(totalBytes: plan.totalBytes, presentBytes: present.bytes)
+            if let free = await DownloadAssembler.freeSpace(at: rootDirectory, using: tuning.availableCapacity), free < needed {
+                throw DownloadFailure.notEnoughSpace(needed: needed, free: free)
+            }
+            try ensureStarting(id, generation)
+
             starts[id] = nil
             let job = DownloadJob(plan: plan, generation: generation, present: present)
             jobs[id] = job
             update(id) { item in
                 item.state = .downloading
+                item.renditionHeight = Self.renditionHeight(of: plan)
                 item.bytesTotal = plan.totalBytes
                 item.bytesDownloaded = present.bytes
                 item.progress = plan.totalBytes > 0 ? Double(present.bytes) / Double(plan.totalBytes) : 0
@@ -422,10 +568,20 @@ public final class DownloadManager {
                   let chunk = job.plan.chunk(for: descriptor), !job.done.contains(descriptor)
             else { return }
             job.inFlightBytes = inFlight
+            jobs[itemID] = job
+
+            // An address that no longer works answers every chunk the same way (a phone that moves from its Wi-Fi to
+            // the mobile network makes all of them 403), and asking it again changes nothing: ask YouTube for new ones,
+            // once, and carry on with the chunks that are missing.
+            if failure.isDeadLink, !refreshedLinks.contains(itemID) {
+                refreshLinks(of: itemID)
+                return
+            }
+
             let used = job.retries[descriptor, default: 0]
             guard failure != .outOfSpace, used < tuning.maxChunkRetries else {
-                jobs[itemID] = job
-                fail(itemID, error: failure)
+                // What was fetched stays: the retry gets fresh addresses and fetches only what is missing.
+                fail(itemID, error: failure, keepingWork: true)
                 return
             }
             job.retries[descriptor] = used + 1
@@ -481,6 +637,7 @@ public final class DownloadManager {
         update(itemID) { item in
             item.state = .downloading
             item.errorMessage = nil
+            item.renditionHeight = Self.renditionHeight(of: plan)
             item.bytesTotal = plan.totalBytes
             item.bytesDownloaded = max(item.bytesDownloaded, present.bytes)
             item.progress = plan.totalBytes > 0 ? min(1, Double(item.bytesDownloaded) / Double(plan.totalBytes)) : 0
@@ -519,6 +676,7 @@ public final class DownloadManager {
                 } else if plan.totalBytes > 0 {
                     // A paused item shows how much of it is on disk, not what the last save happened to say.
                     update(id) { item in
+                        item.renditionHeight = Self.renditionHeight(of: plan)
                         item.bytesTotal = plan.totalBytes
                         item.bytesDownloaded = present.bytes
                         item.progress = min(1, Double(present.bytes) / Double(plan.totalBytes))
@@ -545,19 +703,22 @@ public final class DownloadManager {
         guard let item = items.first(where: { $0.id == id }), var job = jobs[id], job.assembly == nil else { return }
         let plan = job.plan
         let workspace = workspace
+        let mux = tuning.mux
         let destination = reserveDestination(for: item, plan: plan)
         let generation = job.generation
 
         job.destination = destination
         job.assembly = Task { [weak self] in
             // A download that finishes while the app is suspended is merged right then, on borrowed time.
-            let extraTime = MergeBackgroundTime(name: "No Slop merge")
+            let extraTime = BackgroundTime(name: "No Slop merge")
             defer { extraTime.end() }
             do {
-                let size = try await DownloadAssembler.assemble(plan: plan, workspace: workspace, destination: destination)
+                let size = try await DownloadAssembler.assemble(plan: plan, workspace: workspace, destination: destination, mux: mux)
                 self?.assemblyFinished(id, generation: generation, destination: destination, size: size)
             } catch {
-                self?.assemblyFailed(id, generation: generation, destination: destination, error: error)
+                self?.assemblyFailed(
+                    id, generation: generation, destination: destination, error: error, backgroundTimeRanOut: extraTime.expired
+                )
             }
         }
         jobs[id] = job
@@ -577,6 +738,7 @@ public final class DownloadManager {
         }
         jobs.removeValue(forKey: id)
         reservedNames.removeValue(forKey: id)
+        refreshedLinks.remove(id)
         workspace.discard(itemID: id)
         update(id) { item in
             item.state = .completed
@@ -588,11 +750,20 @@ public final class DownloadManager {
         }
     }
 
-    private func assemblyFailed(_ id: String, generation: UUID, destination: URL, error: any Error) {
+    private func assemblyFailed(_ id: String, generation: UUID, destination: URL, error: any Error, backgroundTimeRanOut: Bool) {
         guard jobs[id]?.generation == generation else { return }
         if error is CancellationError { return }
         try? FileManager.default.removeItem(at: destination)
-        fail(id, error: error)
+        fail(id, error: error, keepingWork: Self.keepsStreams(afterMergeFailure: error, backgroundTimeRanOut: backgroundTimeRanOut))
+    }
+
+    /// Whether the downloaded streams are worth keeping after the merge failed with `error`. They are, unless the merge
+    /// showed the files themselves to be bad (a stream that cannot be read, has no track, or is empty): then a retry
+    /// has to download them again. A failure that says nothing about the files (the export was interrupted, the disk was
+    /// full or could not be written, a part went missing) keeps them, so the retry only merges again. So does any
+    /// failure after iOS ended the extra background time: the app was about to be suspended in the middle of the merge.
+    nonisolated static func keepsStreams(afterMergeFailure error: any Error, backgroundTimeRanOut: Bool) -> Bool {
+        backgroundTimeRanOut || DownloadFailure.from(error).keepsDownloadedData
     }
 
     /// A file name for the finished download: "<title> [<id>].mp4", then with the quality, then numbered, so that two
@@ -605,7 +776,7 @@ public final class DownloadManager {
             in: root,
             baseName: DownloadFileNaming.baseName(title: plan.title, videoID: plan.videoID),
             fileExtension: plan.fileExtension,
-            qualityLabel: item.quality.label
+            qualityLabel: item.qualityLabel
         ) { name in
             claimed.contains(name.lowercased()) || FileManager.default.fileExists(atPath: root.appendingPathComponent(name).path)
         }
@@ -616,9 +787,10 @@ public final class DownloadManager {
     // MARK: - Failing and stopping
 
     /// Stops everything for the item, removes its work directory (unless `keepingWork`) and shows why it failed.
-    /// A full disk is not the download's fault: what was fetched stays, and a retry after making room carries on.
+    /// A full disk, or a merge the system interrupted, is not the download's fault: what was fetched stays, and a
+    /// retry after making room carries on.
     private func fail(_ id: String, error: any Error, keepingWork: Bool = false) {
-        teardown(id, keepingWork: keepingWork || (error as? DownloadFailure) == .outOfSpace)
+        teardown(id, keepingWork: keepingWork || (error as? DownloadFailure)?.keepsDownloadedData == true)
         let message = Self.message(for: error)
         update(id) { item in
             item.state = .failed
@@ -638,6 +810,7 @@ public final class DownloadManager {
         }
         reservedNames.removeValue(forKey: id)
         chosenStreams.removeValue(forKey: id)
+        refreshedLinks.remove(id)
         engine.cancelTasks(itemID: id)
         let engine = engine
         Task { await engine.cancelInheritedTasks(itemID: id) }
@@ -673,17 +846,39 @@ public final class DownloadManager {
     }
 }
 
+// MARK: - Notifications
+
+#if canImport(UIKit) && !os(watchOS)
+/// Holds the manager's notification observers and removes them when the manager goes away.
+private final class NotificationObservers: @unchecked Sendable {
+    // Only touched on the main thread while the manager is created, and when it is released.
+    private var tokens: [any NSObjectProtocol] = []
+
+    func add(_ token: any NSObjectProtocol) {
+        tokens.append(token)
+    }
+
+    deinit {
+        for token in tokens { NotificationCenter.default.removeObserver(token) }
+    }
+}
+#endif
+
 // MARK: - Background time
 
 #if canImport(UIKit) && !os(watchOS)
-/// Asks iOS for a little more running time while a merge is in progress, so a download that completes while the
-/// app is in the background is finished before the app is suspended again.
+/// Asks iOS for a little more running time while a merge (or a refresh of stream addresses) is in progress, so a
+/// download that completes while the app is in the background is finished before the app is suspended again.
 @MainActor
-private final class MergeBackgroundTime {
+private final class BackgroundTime {
     private var identifier = UIBackgroundTaskIdentifier.invalid
+    /// True once iOS said the time is up: the app is about to be suspended, so whatever fails after that did not fail
+    /// because of the files.
+    private(set) var expired = false
 
     init(name: String) {
         identifier = UIApplication.shared.beginBackgroundTask(withName: name) { [weak self] in
+            self?.expired = true
             self?.end()
         }
     }
@@ -696,7 +891,9 @@ private final class MergeBackgroundTime {
 }
 #else
 @MainActor
-private final class MergeBackgroundTime {
+private final class BackgroundTime {
+    let expired = false
+
     init(name: String) {}
     func end() {}
 }
@@ -816,8 +1013,48 @@ enum DownloadFileNaming {
 /// `downloads.json`: the list of items as a JSON array. Missing keys decode to defaults, an element that cannot be
 /// read is skipped (and the file kept as `downloads.json.corrupt`), and a file that is not a list at all is moved
 /// aside instead of deleted.
+///
+/// A file that exists but cannot be read (no permission, data protection before the first unlock, an I/O error) says
+/// nothing about its content, which may be perfectly good: `load` reports it as `.unreadable`, the file stays where it
+/// is, and `save` refuses to write over it for the rest of the process, until a load of it succeeds. Otherwise a launch
+/// while the device is locked would replace the list of downloads with a new, nearly empty one. (`JSONFileStore` does
+/// the same for the library.) Only a file that is not there at all is a first launch.
 struct DownloadItemStore: Sendable {
     let fileURL: URL
+    private let read: @Sendable (URL) throws -> Data
+
+    init(fileURL: URL) {
+        self.init(fileURL: fileURL, read: { try Data(contentsOf: $0) })
+    }
+
+    /// Tests inject the reader to make reading fail the way a device can.
+    init(fileURL: URL, read: @escaping @Sendable (URL) throws -> Data) {
+        self.fileURL = fileURL
+        self.read = read
+    }
+
+    enum Contents: Equatable {
+        /// The items; none when there is no file yet (first launch) or the file was not a list.
+        case items([DownloadItem])
+        /// The file is there but the system would not give its content.
+        case unreadable
+    }
+
+    /// The files (by path) that exist but could not be read. Process-wide on purpose: whoever created the store that saw
+    /// the failure, no store in this process may write over such a file until one of them has read it.
+    private static let unreadableFiles = Mutex<Set<String>>([])
+
+    private static func key(for url: URL) -> String {
+        url.standardizedFileURL.path
+    }
+
+    private static func isUnreadable(_ url: URL) -> Bool {
+        unreadableFiles.withLock { $0.contains(key(for: url)) }
+    }
+
+    private func markReadable() {
+        Self.unreadableFiles.withLock { _ = $0.remove(Self.key(for: fileURL)) }
+    }
 
     private struct Lossy<Element: Decodable>: Decodable {
         let value: Element?
@@ -831,8 +1068,19 @@ struct DownloadItemStore: Sendable {
         let items: [Lossy<DownloadItem>]
     }
 
-    func load() -> [DownloadItem] {
-        guard let data = try? Data(contentsOf: fileURL) else { return [] }
+    func load() -> Contents {
+        let data: Data
+        do {
+            data = try read(fileURL)
+            markReadable()
+        } catch {
+            if JSONFileStore.isMissing(error) {
+                markReadable()
+                return .items([])
+            }
+            Self.unreadableFiles.withLock { _ = $0.insert(Self.key(for: fileURL)) }
+            return .unreadable
+        }
         let decoder = Self.makeDecoder()
 
         let elements: [Lossy<DownloadItem>]
@@ -842,15 +1090,17 @@ struct DownloadItemStore: Sendable {
             elements = envelope.items
         } else {
             moveAside()
-            return []
+            return .items([])
         }
 
         let items = elements.compactMap(\.value)
         if items.count < elements.count { keepCopyOfUnreadableFile() }
-        return items
+        return .items(items)
     }
 
+    /// Writes the list, unless the file exists and could not be read (see the type's documentation).
     func save(_ items: [DownloadItem]) {
+        guard !Self.isUnreadable(fileURL) else { return }
         do {
             try FileManager.default.createDirectory(at: fileURL.deletingLastPathComponent(), withIntermediateDirectories: true)
             try JSONEncoder().encode(items).write(to: fileURL, options: .atomic)

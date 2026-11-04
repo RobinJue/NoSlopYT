@@ -5,6 +5,7 @@ import SwiftUI
 /// "Sign in with Google" is only available for a client ID that passes that check.
 struct AccountSettingsSection: View {
     @Environment(AppEnvironment.self) private var env
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @State private var flow = GoogleSignInFlow()
 
     var body: some View {
@@ -17,9 +18,13 @@ struct AccountSettingsSection: View {
             }
 
             VStack(alignment: .leading, spacing: 8) {
+                // The field below is named for VoiceOver (it would otherwise be announced by its example text), so this
+                // visible name is not read a second time.
                 Text("OAuth client ID")
                     .font(.subheadline)
+                    .accessibilityHidden(true)
                 TextField("1234-abcd.apps.googleusercontent.com", text: $store.settings.googleClientID)
+                    .accessibilityLabel("OAuth client ID")
                     .font(.callout.monospaced())
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
@@ -103,21 +108,34 @@ struct AccountSettingsSection: View {
     // MARK: Signed in
 
     private func signedInRow(_ account: GoogleAccount) -> some View {
-        HStack(spacing: 12) {
-            ChannelAvatarView(url: account.pictureURL, size: 40)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(account.name ?? account.email ?? "Google account")
-                    .font(.body)
-                    .lineLimit(1)
-                if account.name != nil, let email = account.email {
-                    Text(email)
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
+        // Side by side, "Sign out" leaves the name a few letters at accessibility text sizes. There the name and email
+        // wrap over the whole width and the button goes under them.
+        let stacked = dynamicTypeSize.isAccessibilitySize
+        let layout = stacked
+            ? AnyLayout(VStackLayout(alignment: .leading, spacing: 10))
+            : AnyLayout(HStackLayout(spacing: 12))
+
+        return layout {
+            HStack(spacing: 12) {
+                ChannelAvatarView(url: account.pictureURL, size: 40)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(account.name ?? account.email ?? "Google account")
+                        .font(.body)
+                        .lineLimit(stacked ? nil : 1)
+                    if account.name != nil, let email = account.email {
+                        Text(email)
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(stacked ? nil : 1)
+                    }
                 }
             }
-            Spacer(minLength: 8)
+            if !stacked {
+                Spacer(minLength: 8)
+            }
+            // The button keeps its width; a long name is what gets cut.
             GoogleSignOutButton(flow: flow)
+                .fixedSize(horizontal: true, vertical: false)
         }
     }
 }

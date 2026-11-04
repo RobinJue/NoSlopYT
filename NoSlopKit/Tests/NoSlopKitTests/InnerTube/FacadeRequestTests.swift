@@ -622,3 +622,172 @@ private func makeMarkedHTTP() throws -> MockHTTPClient {
         #expect(try await service.channelTab(channelID: "UC1", tab: .playlists).items.isEmpty)
     }
 }
+
+// MARK: - Content that is gone
+//
+// A removed or private video, a deleted playlist and a terminated channel are answered with HTTP 200 and no usable
+// page. YouTube says why in its own words: an ERROR alert (`alerts[].alertRenderer`, with `runs` for a playlist and
+// `simpleText` for a channel) on `browse`, a `backgroundPromoRenderer` on `next`. The three fixtures are real
+// answers (2026-11-04, hl=en, gl=US) for a playlist id, a channel id and a video id that do not exist, trimmed to the
+// keys that matter.
+
+@Suite struct FacadeUnavailableContentTests {
+    private func serve(_ endpoint: String, _ body: Data) throws -> MockHTTPClient {
+        let http = MockHTTPClient()
+        http.enqueue("sw.js_data", body: try swJsDataBody(visitorData: token(1)))
+        http.enqueue("youtubei/v1/\(endpoint)", body: body)
+        return http
+    }
+
+    private func serve(_ endpoint: String, json text: String) throws -> MockHTTPClient {
+        try serve(endpoint, Data(text.utf8))
+    }
+
+    private func alert(_ type: String, text: String) -> String {
+        #"{"alertRenderer":{"type":"\#(type)","text":{"simpleText":"\#(text)"}}}"#
+    }
+
+    // MARK: The real answers
+
+    @Test func aMissingPlaylistSaysSoInYouTubesWords() async throws {
+        let service = makeService(try serve("browse", try Fixture.data("browse_playlist_missing.json")))
+        await #expect(throws: NoSlopError.unavailable(reason: "The playlist does not exist.")) {
+            _ = try await service.playlist(id: "PLzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz")
+        }
+    }
+
+    @Test func aTerminatedChannelSaysSoInYouTubesWords() async throws {
+        let service = makeService(try serve("browse", try Fixture.data("browse_channel_missing.json")))
+        await #expect(throws: NoSlopError.unavailable(reason: "This channel does not exist.")) {
+            _ = try await service.channel(id: "UCzzzzzzzzzzzzzzzzzzzzzz")
+        }
+    }
+
+    @Test func aRemovedVideoSaysSoInYouTubesWordsAndIsNotCached() async throws {
+        let http = try serve("next", try Fixture.data("next_video_missing.json"))
+        let service = makeService(http)
+        for _ in 0..<2 {
+            await #expect(throws: NoSlopError.unavailable(reason: "This video isn't available anymore")) {
+                _ = try await service.videoDetails(id: "aaaaaaaaaaa")
+            }
+        }
+        // Each try asked YouTube again: a video that comes back (made public again) must not stay "gone" for ten minutes.
+        #expect(calls(http, to: "next").count == 2)
+    }
+
+    @Test func theReasonIsShownAsItIs() async throws {
+        let service = makeService(try serve("browse", try Fixture.data("browse_playlist_missing.json")))
+        do {
+            _ = try await service.playlist(id: "PLzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz")
+            Issue.record("expected an error")
+        } catch {
+            #expect((error as? LocalizedError)?.errorDescription == "The playlist does not exist.")
+            #expect((error as? NoSlopError)?.isWorthRetrying == false)
+        }
+    }
+
+    // MARK: What is not a reason
+
+    @Test(arguments: ["browse", "next"])
+    func anAnswerWithNothingToSayIsStillADecodingError(endpoint: String) async throws {
+        let service = makeService(try serve(endpoint, json: "{}"))
+        await expectDecodingError {
+            switch endpoint {
+            case "browse": _ = try await service.playlist(id: "PL1")
+            default: _ = try await service.videoDetails(id: "aaaaaaaaaaa")
+            }
+        }
+        let channelService = makeService(try serve("browse", json: "{}"))
+        await expectDecodingError { _ = try await channelService.channel(id: "UC1") }
+    }
+
+    @Test func onlyAnErrorAlertWithTextIsAReason() async throws {
+        // A warning or an info alert, an error alert without text, and a wrong shape are no reason to say "gone".
+        let oddAlerts = [
+            #"{"alerts":[\#(alert("WARNING", text: "Be careful."))]}"#,
+            #"{"alerts":[\#(alert("INFO", text: "Fyi."))]}"#,
+            #"{"alerts":[{"alertRenderer":{"type":"ERROR"}}]}"#,
+            #"{"alerts":[{"alertRenderer":{"type":"ERROR","text":{"simpleText":"   "}}}]}"#,
+            #"{"alerts":[{"somethingElse":{}}, 5, null]}"#,
+            #"{"alerts":{}}"#,
+        ]
+        for body in oddAlerts {
+            let service = makeService(try serve("browse", json: body))
+            await expectDecodingError { _ = try await service.playlist(id: "PL1") }
+        }
+    }
+
+    @Test func theFirstErrorAlertWithTextWins() async throws {
+        let body = #"{"alerts":[\#(alert("WARNING", text: "Careful.")),{"alertRenderer":{"type":"ERROR"}},\#(alert("ERROR", text: "This playlist is private.")),\#(alert("ERROR", text: "Second."))]}"#
+        let service = makeService(try serve("browse", json: body))
+        await #expect(throws: NoSlopError.unavailable(reason: "This playlist is private.")) {
+            _ = try await service.playlist(id: "PL1")
+        }
+    }
+
+    @Test func aBackgroundPromoIsOnlyAReasonOnTheWatchPage() async throws {
+        // Browse pages have promos of their own ("sign in", empty states): they are not a reason there.
+        let promo = #"{"contents":{"x":{"backgroundPromoRenderer":{"title":{"runs":[{"text":"Sign in to see more"}]}}}}}"#
+        let playlistService = makeService(try serve("browse", json: promo))
+        await expectDecodingError { _ = try await playlistService.playlist(id: "PL1") }
+        let channelService = makeService(try serve("browse", json: promo))
+        await expectDecodingError { _ = try await channelService.channel(id: "UC1") }
+
+        // On the watch page the same renderer is how YouTube says that the video is gone.
+        let watchService = makeService(try serve("next", json: promo))
+        await #expect(throws: NoSlopError.unavailable(reason: "Sign in to see more")) {
+            _ = try await watchService.videoDetails(id: "aaaaaaaaaaa")
+        }
+    }
+
+    @Test func theWatchPageCanSayItWithAnErrorAlertToo() async throws {
+        let service = makeService(try serve("next", json: #"{"alerts":[\#(alert("ERROR", text: "This video is private."))]}"#))
+        await #expect(throws: NoSlopError.unavailable(reason: "This video is private.")) {
+            _ = try await service.videoDetails(id: "aaaaaaaaaaa")
+        }
+    }
+
+    // MARK: Healthy pages are left alone
+
+    @Test func aPageThatCanBeReadIsNotSecondGuessed() async throws {
+        // The alert is only looked at when the parser has nothing: a playlist with videos and a stray alert is a playlist.
+        guard case .object(var object) = try Fixture.json("playlist_sample.json") else {
+            Issue.record("playlist_sample.json is not an object")
+            return
+        }
+        object["alerts"] = try JSON(data: Data("[\(alert("ERROR", text: "Something else."))]".utf8))
+        let http = try serve("browse", try JSON.object(object).data())
+        let page = try await makeService(http).playlist(id: "PLsGl9GczcgBumq6fLmmR1ZYYn4EDkIg5B")
+        #expect(!page.videos.items.isEmpty)
+    }
+
+    // MARK: The error itself
+
+    @Test func onlyUnavailableContentIsNotWorthRetrying() {
+        #expect(!NoSlopError.unavailable(reason: "Gone.").isWorthRetrying)
+        let retryable: [NoSlopError] = [
+            .network("x"), .http(status: 500), .http(status: 404), .decoding("x"), .botCheck, .unplayable(reason: "Private."),
+            .notSignedIn, .googleNotConfigured, .oauth("x"), .quotaExceeded, .dataAPINotEnabled, .cancelled, .notImplemented("x"),
+        ]
+        for error in retryable {
+            #expect(error.isWorthRetrying, "\(error)")
+        }
+        #expect(NoSlopError.unavailable(reason: "Gone.").errorDescription == "Gone.")
+        #expect(NoSlopError.unavailable(reason: "Gone.") == .unavailable(reason: "Gone."))
+        #expect(NoSlopError.unavailable(reason: "Gone.") != .unplayable(reason: "Gone."))
+    }
+
+    private func expectDecodingError(_ body: () async throws -> Void) async {
+        do {
+            try await body()
+            Issue.record("expected a decoding error")
+        } catch let error as NoSlopError {
+            guard case .decoding = error else {
+                Issue.record("expected .decoding, got \(error)")
+                return
+            }
+        } catch {
+            Issue.record("expected .decoding, got \(error)")
+        }
+    }
+}
