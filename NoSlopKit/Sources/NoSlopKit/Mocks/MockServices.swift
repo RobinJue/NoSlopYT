@@ -560,14 +560,45 @@ public actor MockAccountService: YouTubeAccountService {
 /// for every video.
 public struct MockSponsorBlock: SponsorBlockProviding {
     private let delay: Duration
+    private let failures: FailureBudget?
 
     public init(delay: Duration = .milliseconds(300)) {
         self.delay = delay
+        self.failures = nil
+    }
+
+    /// A service with a bad moment, for checking that the player retries: the first `failingFirst` lookups (counted
+    /// across copies of the mock) throw a network error, the following ones answer. Zero or less never fails.
+    public init(delay: Duration = .milliseconds(300), failingFirst: Int) {
+        self.delay = delay
+        self.failures = failingFirst > 0 ? FailureBudget(failingFirst) : nil
     }
 
     public func segments(videoID: String) async throws -> [SponsorSegment] {
         try await MockDelay.wait(delay)
+        if failures?.takeOne() == true {
+            throw NoSlopError.network("SponsorBlock is having a bad moment.")
+        }
         return SampleData.segments
+    }
+
+    /// How many lookups are still to fail; shared by the copies of the mock.
+    private final class FailureBudget: @unchecked Sendable {
+        private let lock = NSLock()
+        private var remaining: Int
+
+        init(_ count: Int) {
+            remaining = count
+        }
+
+        /// Whether a failure is still owed; uses it up.
+        func takeOne() -> Bool {
+            lock.withLock {
+                guard remaining > 0 else { return false }
+                remaining -= 1
+                return true
+            }
+        }
     }
 }
 

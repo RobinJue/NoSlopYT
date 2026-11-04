@@ -53,12 +53,24 @@ public struct SponsorSegment: Codable, Hashable, Sendable, Identifiable {
     public var actionType: SegmentActionType
     public var start: Double
     public var end: Double
+    /// The length of the video, in seconds, when the segment was submitted. It tells which cut of the video the
+    /// segment belongs to: a creator who trims or re-edits a video keeps its id, and the old segments point at the
+    /// wrong places in the new cut. Nil when unknown (the service sends 0 for older submissions).
+    public var videoDuration: Double?
 
-    public init(id: String, category: SponsorCategory, actionType: SegmentActionType = .skip, start: Double, end: Double) {
+    public init(
+        id: String,
+        category: SponsorCategory,
+        actionType: SegmentActionType = .skip,
+        start: Double,
+        end: Double,
+        videoDuration: Double? = nil
+    ) {
         self.id = id
         self.category = category
         self.actionType = actionType
         self.start = start
         self.end = end
+        self.videoDuration = videoDuration
     }
 }
