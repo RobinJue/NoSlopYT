@@ -16,11 +16,13 @@ import UIKit
 /// - `tab=<home|subscriptions|library|search>`: a tap on a tab of the tab bar
 /// - `offline=on|off`: the mock connection (`-mockOffline`) goes away or comes back
 /// - `play=<sample video id>`: a tap on a row of that video (`AppEnvironment.open`, as the Up next rows do)
+/// - `minimize`, `expand`: the chevron of the player and a tap on the mini player
 /// - `accountSubscribe=<sample channel id>`: the signed-in mock account subscribes to a channel behind the app's back,
 ///   as the viewer would on youtube.com
 /// - `subscribe=<sample channel id>`, `unsubscribe=<sample channel id>`: the Subscribe button, or the swipe in the
 ///   subscriptions manager
-/// - `log=<tag>`: one line with the state of the app: tab, the pushed screens of every tab, the player, the library
+/// - `log=<tag>`: one line with the state of the app: tab, the pushed screens of every tab, the player, the library, and
+///   the player's own line (`[script]`, see `PlayerDebugScript`)
 ///
 /// Every step writes lines that start with "[ui]" to the log (category `ui`). Compiled out of Release builds.
 @MainActor
@@ -63,6 +65,10 @@ enum DebugUIScript {
                 DebugLaunchHooks.mockConnection.isOnline = value != "on"
             case "play":
                 if let video = SampleData.video(id: value) { env.open(video) }
+            case "minimize":
+                env.player.minimize()
+            case "expand":
+                env.player.expand()
             case "accountSubscribe":
                 _ = try? await env.account.subscribe(channelID: value)
             case "subscribe":
@@ -93,12 +99,16 @@ enum DebugUIScript {
             library=\(path(router.libraryPath), privacy: .public) search=\(path(router.searchPath), privacy: .public) \
             player=\(String(describing: player.presentation), privacy: .public) state=\(String(describing: player.state), privacy: .public) \
             video=\(player.currentVideo?.id ?? "-", privacy: .public) title="\(player.currentVideo?.title ?? "-", privacy: .public)" \
-            channel="\(player.currentVideo?.channel?.name ?? "-", privacy: .public)" playingOffline=\(player.isPlayingOffline) \
+            channel="\(player.currentVideo?.channel?.name ?? "-", privacy: .public)" \
+            avatar=\(player.currentVideo?.channel?.avatarURL != nil) views="\(player.currentVideo?.viewCountText ?? "-", privacy: .public)" \
+            age="\(player.currentVideo?.publishedText ?? "-", privacy: .public)" playingOffline=\(player.isPlayingOffline) \
             subscribed=\(env.library.subscriptions.map(\.id).joined(separator: ","), privacy: .public) \
             account=\(env.googleAccount?.id ?? "-", privacy: .public) online=\(DebugLaunchHooks.mockConnection.isOnline) \
             history=\(env.library.history.map(\.id).joined(separator: ","), privacy: .public) \
             linkError=\(env.linkError ?? "-", privacy: .public)
             """)
+        // The player's own line (Now Playing, the title the lock screen gets, the history) next to it.
+        player.debugLogSnapshot("ui \(tag)")
     }
 }
 #endif
