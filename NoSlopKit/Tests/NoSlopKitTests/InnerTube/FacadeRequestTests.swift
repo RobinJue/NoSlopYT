@@ -763,10 +763,11 @@ private func makeMarkedHTTP() throws -> MockHTTPClient {
 
     // MARK: The error itself
 
-    @Test func onlyUnavailableContentIsNotWorthRetrying() {
+    @Test func onlyVerdictsOfYouTubeAreNotWorthRetrying() {
         #expect(!NoSlopError.unavailable(reason: "Gone.").isWorthRetrying)
+        #expect(!NoSlopError.unplayable(reason: "This video is private.").isWorthRetrying)
         let retryable: [NoSlopError] = [
-            .network("x"), .http(status: 500), .http(status: 404), .decoding("x"), .botCheck, .unplayable(reason: "Private."),
+            .network("x"), .http(status: 500), .http(status: 404), .decoding("x"), .botCheck,
             .notPlayableYet(reason: "This live event will begin in 2 hours."), .notSignedIn, .googleNotConfigured, .oauth("x"), .quotaExceeded, .dataAPINotEnabled, .cancelled, .notImplemented("x"),
         ]
         for error in retryable {

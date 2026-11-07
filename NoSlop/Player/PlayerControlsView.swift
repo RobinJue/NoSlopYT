@@ -393,13 +393,21 @@ struct PlayerControlsView: View {
     /// off when there is none. The lock screen's Next asks the same question (`PlayerController.canPlayNext`).
     private func nextButton(_ player: PlayerController) -> some View {
         let available = player.canPlayNext
+        let waiting = player.isWaitingForNextPage
         return Button {
             player.playNext()
             show()
         } label: {
-            iconLabel("forward.end.fill", size: 24)
+            if waiting {
+                // The next page of the list is on its way; further presses change nothing.
+                ProgressView()
+                    .tint(.white)
+                    .frame(width: ControlsFootprint.barButton, height: ControlsFootprint.barButton)
+            } else {
+                iconLabel("forward.end.fill", size: 24)
+            }
         }
-        .disabled(!available)
+        .disabled(!available || waiting)
         .opacity(available ? 1 : 0.3)
         .accessibilityLabel("Next video")
     }

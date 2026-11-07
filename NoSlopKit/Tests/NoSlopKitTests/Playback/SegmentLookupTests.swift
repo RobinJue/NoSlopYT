@@ -47,6 +47,16 @@ private final class SleepRecorder: @unchecked Sendable {
     }
 }
 
+private final class Switch: @unchecked Sendable {
+    private let lock = NSLock()
+    private var on: Bool
+
+    init(_ on: Bool) { self.on = on }
+
+    var value: Bool { lock.withLock { on } }
+    func set(_ newValue: Bool) { lock.withLock { on = newValue } }
+}
+
 private let sponsor = SponsorSegment(id: "a", category: .sponsor, actionType: .skip, start: 30, end: 45)
 private let busy = ScriptedSponsorBlock.Reply.failure(.http(status: 503))
 
@@ -181,5 +191,30 @@ private let busy = ScriptedSponsorBlock.Reply.failure(.http(status: 503))
         #expect(outcome == .failed)
         #expect(provider.callCount == 1)
         #expect(recorder.durations.isEmpty)
+    }
+
+    @Test func aRetryIsNotSentOnceTheLookupIsNoLongerWanted() async {
+        let provider = ScriptedSponsorBlock([busy, .segments([sponsor])])
+        let wanted = Switch(true)
+
+        // The viewer switches SponsorBlock off during the first pause.
+        let outcome = await SegmentLookup.fetch(
+            videoID: "v", from: provider, shouldRetry: { wanted.value }, sleep: { _ in wanted.set(false) }
+        )
+
+        #expect(outcome == .failed)
+        #expect(provider.callCount == 1)
+    }
+
+    @Test func aLookupThatIsStillWantedRetriesAsBefore() async {
+        let provider = ScriptedSponsorBlock([busy, .segments([sponsor])])
+        let wanted = Switch(true)
+
+        let outcome = await SegmentLookup.fetch(
+            videoID: "v", from: provider, shouldRetry: { wanted.value }, sleep: { _ in }
+        )
+
+        #expect(outcome == .loaded([sponsor]))
+        #expect(provider.callCount == 2)
     }
 }

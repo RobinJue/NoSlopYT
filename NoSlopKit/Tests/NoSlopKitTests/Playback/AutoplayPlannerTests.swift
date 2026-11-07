@@ -225,4 +225,41 @@ private func ids(_ videos: [VideoSummary]) -> [String] {
         #expect(step?.next.id == "c")
         #expect(step?.remaining.isEmpty == true)
     }
+
+    // MARK: Videos started in this run
+
+    @Test func aVideoStartedInThisRunIsNotSuggestedAgainWhateverItsProgress() {
+        // a was skipped after 4 s, b after 3 s; b's own list starts with a.
+        let progress: (String) -> Double? = { ["a": 4, "b": 3][$0] }
+        let upNext = [video("a"), video("c")]
+        let step = AutoplayPlanner.step(after: "b", upNext: upNext, progress: progress, startedThisRun: ["a", "b"])
+        #expect(step?.next.id == "c")
+        #expect(step?.remaining.isEmpty == true)
+    }
+
+    @Test func withoutTheRunTheTenSecondRuleAloneApplies() {
+        let progress: (String) -> Double? = { ["a": 4][$0] }
+        let step = AutoplayPlanner.step(after: "b", upNext: [video("a"), video("c")], progress: progress)
+        #expect(step?.next.id == "a")
+    }
+
+    @Test func nextNeverRevisitsAVideoOfTheRun() {
+        let lists: [String: [VideoSummary]] = [
+            "a": [video("b"), video("c")],
+            "b": [video("a"), video("c")],
+            "c": [video("b"), video("d")],
+        ]
+        var run: Set<String> = ["a"]
+        var current = "a"
+        var sequence: [String] = []
+        for _ in 0..<3 {
+            guard let step = AutoplayPlanner.step(
+                after: current, upNext: lists[current] ?? [], progress: { _ in 4 }, startedThisRun: run
+            ) else { break }
+            current = step.next.id
+            run.insert(current)
+            sequence.append(current)
+        }
+        #expect(sequence == ["b", "c", "d"])
+    }
 }

@@ -19,6 +19,9 @@ public enum QueueAdvance {
         case startNext
         /// The queue is over: it is autoplay's turn, as at the end of any queue.
         case autoplay
+        /// The list is over and the viewer asked for the next video: it is the suggestion's turn, whatever the autoplay
+        /// setting says (Next works with autoplay off).
+        case suggestion
         /// Leave the player as it is.
         case nothing
     }
@@ -27,7 +30,8 @@ public enum QueueAdvance {
     ///   - request: why the player waited; nil when nobody did.
     ///   - queued: how many videos are queued now, after the page.
     ///   - isEnded: the current video has ended and nothing has started it again since.
-    public static func action(for request: Request?, queued: Int, isEnded: Bool) -> Action {
+    ///   - listIsOver: the source has no more pages. A failed page leaves this false, so a blip never abandons the list.
+    public static func action(for request: Request?, queued: Int, isEnded: Bool, listIsOver: Bool = false) -> Action {
         guard let request else { return .nothing }
         if queued > 0 {
             switch request {
@@ -38,6 +42,7 @@ public enum QueueAdvance {
                 return isEnded ? .startNext : .nothing
             }
         }
+        if request == .now && listIsOver { return .suggestion }
         // Nothing came: the list is over, or could not be reached. A video that still plays plays on.
         return isEnded ? .autoplay : .nothing
     }
