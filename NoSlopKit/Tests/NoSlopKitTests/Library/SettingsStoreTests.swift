@@ -221,4 +221,68 @@ private final class ChangeFlag: @unchecked Sendable {
         stored(#"{"defaultPlaybackRate":\#(rate)}"#)
         #expect(store().settings.defaultPlaybackRate == Double(rate))
     }
+    // MARK: A launch before the first unlock (concurrency-1)
+
+    @Test func settingsReadWhileProtectedDataWasUnavailableAreReadAgainAndNotSavedOver() {
+        // The defaults could not be read at launch (empty here), and become readable afterwards.
+        let locked = SettingsStore(defaults: defaults, key: Self.key, protectedDataAvailable: false)
+        #expect(locked.settings == AppSettings())
+        let original = #"{"autoplayNext":true,"contentRegion":"DE"}"#
+        stored(original)
+
+        locked.reloadIfNeeded(protectedDataAvailable: false)
+        #expect(locked.settings == AppSettings(), "still locked: nothing to read yet")
+
+        locked.reloadIfNeeded(protectedDataAvailable: true)
+        #expect(locked.settings.autoplayNext)
+        #expect(locked.settings.contentRegion == "DE")
+        #expect(defaults.data(forKey: Self.key) == Data(original.utf8), "taking the stored settings over writes nothing")
+    }
+
+    @Test func aChangeMadeBeforeTheSettingsWereReadAgainIsKeptAndSavedAfterwards() throws {
+        let locked = SettingsStore(defaults: defaults, key: Self.key, protectedDataAvailable: false)
+        let original = #"{"autoplayNext":true}"#
+        stored(original)
+
+        locked.settings.hideShorts = false
+        #expect(defaults.data(forKey: Self.key) == Data(original.utf8), "nothing is saved before the stored settings were read")
+
+        locked.reloadIfNeeded()
+        #expect(!locked.settings.hideShorts, "the viewer's change is newer than the stored settings")
+        let saved = try JSONDecoder().decode(AppSettings.self, from: try #require(defaults.data(forKey: Self.key)))
+        #expect(!saved.hideShorts)
+
+        #expect(locked.settings.autoplayNext, "the other stored settings are not replaced by defaults")
+        #expect(saved.autoplayNext, "and they stay in what is saved")
+
+        locked.settings.backgroundPlayback = false
+        let later = try JSONDecoder().decode(AppSettings.self, from: try #require(defaults.data(forKey: Self.key)))
+        #expect(!later.backgroundPlayback, "saving works again")
+        #expect(later.autoplayNext)
+    }
+
+    @Test func aChangeToAnOptionalSettingBeforeTheReadAgainWinsOverTheStoredValueAndLeavesTheRest() throws {
+        let locked = SettingsStore(defaults: defaults, key: Self.key, protectedDataAvailable: false)
+        stored(#"{"autoplayNext":true,"contentRegion":"FR","blockedKeywords":["a"]}"#)
+
+        locked.settings.contentRegion = "DE"
+        locked.settings.contentLanguage = "de"
+        locked.reloadIfNeeded()
+
+        #expect(locked.settings.contentRegion == "DE", "the viewer's value wins over the stored one")
+        #expect(locked.settings.contentLanguage == "de")
+        #expect(locked.settings.autoplayNext)
+        #expect(locked.settings.blockedKeywords == ["a"])
+    }
+
+    @Test func aStoreThatWasNotLockedSavesAndNeverReadsAgain() throws {
+        let normal = store()
+        normal.settings.autoplayNext = true
+        stored(#"{"contentRegion":"FR"}"#)
+
+        normal.reloadIfNeeded()
+
+        #expect(normal.settings.autoplayNext, "nothing is read again")
+        #expect(normal.settings.contentRegion == nil)
+    }
 }

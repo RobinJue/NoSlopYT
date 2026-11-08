@@ -50,11 +50,13 @@ final class SubscriptionsViewModel {
     /// Loads the feed the first time, again when the subscriptions changed, and quietly when it is old. Otherwise it
     /// only re-applies the filters (the history or the settings may have changed). Returns immediately.
     func loadIfNeeded(using env: AppEnvironment) {
+        // First, whatever happens next: a finished video leaves the feed as soon as the player is dismissed, also when the
+        // reload that follows is slow, fails, or is already running.
+        applyFilter(using: env)
         guard loadTask == nil else { return }
         let channelIDs = env.library.subscriptions.map(\.id)
         if case .loaded = phase, loadedChannelIDs == channelIDs {
             if let loadedAt, Date().timeIntervalSince(loadedAt) < Self.maxAge {
-                applyFilter(using: env)
                 return
             }
         }
@@ -172,6 +174,13 @@ final class SubscriptionsViewModel {
             }
             // Try again at the next visit rather than waiting 10 minutes on a feed that failed.
             loadedAt = nil
+            // What stays on screen follows the subscriptions and the filters as they are now, although nothing new came in.
+            let kept = Self.limited(unfiltered, to: Set(env.library.subscriptions.map(\.id)))
+            if kept.count != unfiltered.count {
+                show(kept, using: env)
+            } else {
+                applyFilter(using: env)
+            }
             if unfiltered.isEmpty {
                 phase = .failed(error)
             } else {

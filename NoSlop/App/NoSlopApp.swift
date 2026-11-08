@@ -13,6 +13,13 @@ struct NoSlopApp: App {
         env = AppEnvironment.shared
         let environment = env
         Task { await environment.refreshAccount() }
+        // A launch before the first unlock (iOS starts the app in the background for a finished download) read nothing
+        // that is protected. This is observed here, not in a view: a background launch has no scene.
+        NotificationCenter.default.addObserver(
+            forName: UIApplication.protectedDataDidBecomeAvailableNotification, object: nil, queue: .main
+        ) { _ in
+            Task { @MainActor in await environment.reloadAfterUnlock() }
+        }
     }
 
     var body: some Scene {
@@ -25,6 +32,9 @@ struct NoSlopApp: App {
             // The app is leaving the foreground (inactive on the way out, background once it is gone): whatever the
             // library still holds in memory goes to disk now, not 0.5 s from now, when iOS may have suspended the app.
             // Coming back (background, inactive, active) has nothing new to save.
+            if newPhase == .active {
+                Task { await env.reloadAfterUnlock() }
+            }
             if oldPhase == .active || newPhase == .background {
                 BackgroundPersistence.persist(env.library)
             }

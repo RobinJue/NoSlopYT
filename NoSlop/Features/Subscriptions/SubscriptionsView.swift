@@ -13,7 +13,11 @@ struct SubscriptionsView: View {
             content
                 .padding(.bottom, Theme.padding)
         }
-        .refreshable { await model.refresh(using: env) }
+        .refreshable {
+            // Titles whose De-clickbait lookup failed are asked again, also the ones that stay on screen.
+            DeArrowTitleCache.shared.retryFailedLookups()
+            await model.refresh(using: env)
+        }
         .miniPlayerClearance()
         .navigationTitle("Subscriptions")
         .navigationBarTitleDisplayMode(.inline)

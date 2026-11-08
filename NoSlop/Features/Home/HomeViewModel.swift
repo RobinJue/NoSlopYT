@@ -42,7 +42,8 @@ final class HomeViewModel {
     private struct Signature: Equatable {
         var subscriptionIDs: [String]
         var historyCount: Int
-        /// Changes whenever progress is recorded, so finishing or starting a video refreshes "Continue watching".
+        /// Changes whenever progress is recorded, so finishing or starting a video rebuilds the feed; the "Continue watching"
+        /// row then takes the new entries (`applyFilter` compares entries, not ids).
         var lastWatchedAt: Date?
 
         init(_ env: AppEnvironment) {
@@ -113,7 +114,9 @@ final class HomeViewModel {
         let resumable = built.continueWatching.filter { filter.allows($0.video) }.uniqued()
         let feed = filter.filter(built.forYou).uniqued()
         // Not new values when nothing changed, so the screen is not redrawn for a setting that is not about the feed.
-        if resumable.map(\.id) != continueWatching.map(\.id) { continueWatching = resumable }
+        // "Nothing changed" means the same entries, not only the same ids: the first card says how much is left of its
+        // video, and that changes while the viewer watches. The Up next row only has ids to compare (its bars are live).
+        if resumable != continueWatching { continueWatching = resumable }
         if feed.map(\.id) != forYou.map(\.id) { forYou = feed }
     }
 

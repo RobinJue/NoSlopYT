@@ -11,7 +11,9 @@ import Synchronization
 ///   unlock, an I/O error) says nothing about the content, which may be perfectly good: the file stays where it is,
 ///   the default is returned, and `save` refuses to write over that file for the rest of the process, until a load
 ///   of it succeeds. Otherwise a launch while the device is locked would replace the user's library with a new,
-///   nearly empty file.
+///   nearly empty file. Nothing here reads such a file again by itself: whoever owns the data asks `isUnreadable` which
+///   of its files failed and loads them again later (`LibraryStore.reloadIfUnreadable`, once the protected data is
+///   available; the download list does the same).
 struct JSONFileStore: Sendable {
     let directory: URL
     private let read: @Sendable (URL) throws -> Data
@@ -70,19 +72,30 @@ struct JSONFileStore: Sendable {
         return readable
     }
 
+    /// Whether `file` exists but could not be read the last time it was loaded in this process (see the type's
+    /// documentation). `save` refuses such a file until a load of it succeeds.
+    func isUnreadable(_ file: String) -> Bool {
+        Self.isUnreadable(fileURL(file))
+    }
+
     /// Writes `value` to `file` atomically (the old content stays intact until the new file is complete),
-    /// creating the directory when needed. Failures (disk full, an unencodable value) leave the old file alone;
-    /// the next save simply tries again. A file that exists but could not be read is not written to at all (see the
-    /// type's documentation).
-    func save<T: Encodable>(_ value: T, to file: String) {
+    /// creating the directory when needed. Failures (disk full, an unencodable value) leave the old file alone.
+    /// A file that exists but could not be read is not written to at all (see the type's documentation).
+    ///
+    /// - Returns: whether the content is on disk now. False for an unencodable value, a write that failed and a file
+    ///   refused as unreadable (`isUnreadable` tells that case apart: it is not worth trying again before a load of the
+    ///   file has succeeded). The caller decides what to do about it; this type does not retry anything.
+    @discardableResult
+    func save<T: Encodable>(_ value: T, to file: String) -> Bool {
         let url = fileURL(file)
-        guard !Self.isUnreadable(url) else { return }
-        guard let data = try? Self.makeEncoder().encode(value) else { return }
+        guard !Self.isUnreadable(url) else { return false }
+        guard let data = try? Self.makeEncoder().encode(value) else { return false }
         do {
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
             try data.write(to: url, options: .atomic)
+            return true
         } catch {
-            return
+            return false
         }
     }
 

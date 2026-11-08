@@ -55,8 +55,10 @@ private struct VideoContextMenuModifier: ViewModifier {
         // A channel without an id cannot be recognised later, so there is nothing to block.
         if let channel = video.channel, !channel.id.isEmpty {
             if ChannelBlocking.isBlocked(channel, using: env) {
-                // Library lists, the channel's own page and the player's Up next show a blocked channel's videos on
-                // purpose, so the menu is where the block is seen to have worked, and where it is undone.
+                // Library lists (also as the "Playing from ..." queue under the player, the list as it was when it was
+                // opened) and the channel's own page show a blocked channel's videos on purpose, so the menu is where the
+                // block is seen to have worked, and where it is undone. The player's Up next is not one of them: it
+                // follows the settings and drops the channel at once.
                 Button {
                     ChannelBlocking.unblock(channelID: channel.id, using: env)
                 } label: {
@@ -78,11 +80,12 @@ private struct VideoContextMenuModifier: ViewModifier {
 }
 
 /// "Don't show this channel" and its undo, "Show this channel again": the blocked channels in the settings. Every
-/// filtered list that is on screen (feeds, search, channels, playlists, the account's liked videos and playlists)
-/// listens to the settings and drops the channel's videos at once. Not so History, Watch Later and your own playlists
-/// (they show everything you put there), the channel's own page (it would be empty) and the player's Up next (filtered
-/// when it was loaded): there the video stays. That is why the menu of a blocked channel's video offers the undo, and
-/// why it is also where the block is seen to have worked.
+/// filtered list that is on screen (feeds, search, channels, playlists, the player's Up next, the account's liked
+/// videos and playlists) listens to the settings and drops the channel's videos at once. Not so History, Watch Later
+/// and your own playlists (they show everything you put there), the channel's own page (it would be empty) and the
+/// queue that plays under the player, "Playing from ..." (the list as it was when it was opened): there the video
+/// stays. That is why the menu of a blocked channel's video offers the undo, and why it is also where the block is
+/// seen to have worked.
 enum ChannelBlocking {
     static func isBlocked(_ channel: ChannelRef, using env: AppEnvironment) -> Bool {
         env.settings.isBlocked(channelID: channel.id)
