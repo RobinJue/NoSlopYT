@@ -100,7 +100,11 @@ public actor TVAuthService: RecommendationsAuthProviding {
     }
 
     public func completeSignIn(_ prompt: TVSignInPrompt) async throws -> TVAccount {
-        guard let sign = pending, sign.userCode == prompt.userCode else { throw Self.expired }
+        guard let sign = pending, sign.userCode == prompt.userCode else {
+            TVTrace.log("completeSignIn: no pending sign-in for this prompt (pending=\(pending != nil))")
+            throw Self.expired
+        }
+        TVTrace.log("completeSignIn: start, \(Int(sign.expiresAt.timeIntervalSince(now()))) s left, interval \(sign.interval)")
         let request: Data = try ([
             "client_id": .string(sign.client.id),
             "client_secret": .string(sign.client.secret),
@@ -112,15 +116,20 @@ public actor TVAuthService: RecommendationsAuthProviding {
         while true {
             try Self.checkCancelled()
             if now() >= sign.expiresAt {
+                TVTrace.log("completeSignIn: the code ran out")
                 pending = nil
                 throw Self.expired
             }
             let answer: Data?
             do {
-                answer = try await send("POST", TVAuth.tokenURL, headers: Self.jsonHeaders, body: request).0
+                let (data, status) = try await send("POST", TVAuth.tokenURL, headers: Self.jsonHeaders, body: request)
+                answer = data
+                let shown = Self.object(data)
+                TVTrace.log("poll: status \(status), error \(TVTrace.oauthName(shown["error"]?.string)), access_token \(shown["access_token"]?.string != nil), refresh_token \(shown["refresh_token"]?.string != nil)")
             } catch let error as NoSlopError {
                 // A dropped connection while waiting is not the end of the sign-in; the expiry time bounds the wait.
                 // A cancel keeps the device code too: the sign-in is restarted on the same prompt when the app comes back.
+                TVTrace.log("poll: request failed, \(TVTrace.describe(error))")
                 if case .cancelled = error { throw error }
                 guard case .network = error else { pending = nil; throw error }
                 answer = nil
@@ -130,7 +139,14 @@ public actor TVAuthService: RecommendationsAuthProviding {
                 let error = reply["error"]?.string
                 if error == nil, reply["access_token"]?.string != nil {
                     pending = nil
-                    return try await finishSignIn(reply, client: sign.client)
+                    do {
+                        let account = try await finishSignIn(reply, client: sign.client)
+                        TVTrace.log("finishSignIn: done, name \(account.name != nil)")
+                        return account
+                    } catch {
+                        TVTrace.log("finishSignIn: failed, \(TVTrace.describe(error))")
+                        throw error
+                    }
                 }
                 switch error {
                 case "authorization_pending": break
@@ -149,6 +165,7 @@ public actor TVAuthService: RecommendationsAuthProviding {
             do {
                 try await sleep(.seconds(max(TVAuth.minimumWait, sign.interval) + TVAuth.slowDownExtra * slowDowns))
             } catch is CancellationError {
+                TVTrace.log("poll: cancelled while waiting")
                 throw NoSlopError.cancelled
             }
         }
@@ -160,7 +177,9 @@ public actor TVAuthService: RecommendationsAuthProviding {
         saved.connectedAt = now()
         do {
             try store.save(saved)
+            TVTrace.log("finishSignIn: saved to the Keychain")
         } catch {
+            TVTrace.log("finishSignIn: the Keychain save failed, \(TVTrace.describe(error))")
             throw NoSlopError.oauth("The sign-in couldn't be saved on this device.")
         }
         // Best effort: the name is a nicety, so any failure leaves the connection as it is.

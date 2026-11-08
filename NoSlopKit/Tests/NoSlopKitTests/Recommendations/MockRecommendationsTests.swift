@@ -22,6 +22,13 @@ import Testing
         #expect(await auth.secondsLeft() != nil)
     }
 
+    @Test func aFailingMockConnectEndsWithItsSentenceAndStaysDisconnected() async throws {
+        let auth = MockRecommendationsAuth(connected: false, delay: .milliseconds(10), failure: "The code expired. Start again.")
+        let prompt = try await auth.beginSignIn()
+        await #expect(throws: NoSlopError.oauth("The code expired. Start again.")) { _ = try await auth.completeSignIn(prompt) }
+        #expect(await auth.currentAccount() == nil)
+    }
+
     @Test func theMockCanStartConnectedAndDisconnects() async {
         let auth = MockRecommendationsAuth(connected: true)
         #expect(await auth.currentAccount()?.name == "Mock Account")

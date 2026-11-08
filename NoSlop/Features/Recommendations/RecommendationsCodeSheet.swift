@@ -6,6 +6,7 @@ struct RecommendationsCodeSheet: View {
     let prompt: TVSignInPrompt
     let flow: RecommendationsConnectFlow
 
+    @Environment(AppEnvironment.self) private var env
     @Environment(\.openURL) private var openURL
     @Environment(\.scenePhase) private var scenePhase
     @State private var copied = false
@@ -14,31 +15,11 @@ struct RecommendationsCodeSheet: View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: 20) {
-                    Text("Enter this code on Google's page")
-                        .font(.headline)
-                        .multilineTextAlignment(.center)
-
-                    Text(prompt.userCode)
-                        .font(.system(size: 40, weight: .bold, design: .monospaced))
-                        .minimumScaleFactor(0.5)
-                        .lineLimit(2)
-                        .multilineTextAlignment(.center)
-                        .textSelection(.enabled)
-                        .accessibilityLabel("Code \(prompt.userCode)")
-
-                    ViewThatFits(in: .horizontal) {
-                        HStack(spacing: 12) { copyButton; openButton }
-                        VStack(spacing: 12) { copyButton; openButton }
+                    if let failure = flow.failure {
+                        failureContent(failure)
+                    } else {
+                        codeContent
                     }
-
-                    TimelineView(.periodic(from: .now, by: 1)) { context in
-                        countdown(at: context.date)
-                    }
-
-                    Text("Google's page will say YouTube on TV. That's expected.")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                        .multilineTextAlignment(.center)
                 }
                 .padding(24)
                 .frame(maxWidth: .infinity)
@@ -47,15 +28,73 @@ struct RecommendationsCodeSheet: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { flow.cancel() }
+                    Button(flow.failure == nil ? "Cancel" : "Close") { flow.cancel("Cancel button") }
                 }
             }
         }
         .presentationDetents([.medium, .large])
         .onChange(of: scenePhase) { _, phase in
+            TVTrace.log("sheet: scene phase \(String(describing: phase))")
             if phase == .active { flow.pollNow() }
         }
-        .onDisappear { flow.cancel() }
+        // Going to Safari to approve the code takes the app to the background, and iOS reports the sheet as gone
+        // then. That is not the person closing it: nothing here may end the sign-in.
+        .onAppear { TVTrace.log("sheet: appeared") }
+        .onDisappear { TVTrace.log("sheet: disappeared") }
+    }
+
+    @ViewBuilder
+    private var codeContent: some View {
+        Text("Enter this code on Google's page")
+            .font(.headline)
+            .multilineTextAlignment(.center)
+
+        Text(prompt.userCode)
+            .font(.system(size: 40, weight: .bold, design: .monospaced))
+            .minimumScaleFactor(0.5)
+            .lineLimit(2)
+            .multilineTextAlignment(.center)
+            .textSelection(.enabled)
+            .accessibilityLabel("Code \(prompt.userCode)")
+
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 12) { copyButton; openButton }
+            VStack(spacing: 12) { copyButton; openButton }
+        }
+
+        TimelineView(.periodic(from: .now, by: 1)) { context in
+            countdown(at: context.date)
+        }
+
+        Text("Google's page will say YouTube on TV. That's expected.")
+            .font(.footnote)
+            .foregroundStyle(.secondary)
+            .multilineTextAlignment(.center)
+    }
+
+    /// What went wrong, in the sheet that was open when it happened, with a way to start again.
+    @ViewBuilder
+    private func failureContent(_ message: String) -> some View {
+        Image(systemName: "exclamationmark.triangle")
+            .font(.largeTitle)
+            .foregroundStyle(.secondary)
+            .accessibilityHidden(true)
+
+        Text(message)
+            .font(.headline)
+            .multilineTextAlignment(.center)
+
+        Button {
+            Task { await flow.connect(using: env) }
+        } label: {
+            if flow.isWorking {
+                ProgressView()
+            } else {
+                Text("Try again")
+            }
+        }
+        .buttonStyle(.borderedProminent)
+        .disabled(flow.isWorking)
     }
 
     private var copyButton: some View {
@@ -91,16 +130,18 @@ struct RecommendationsCodeSheet: View {
 }
 
 extension View {
-    /// Presents the code sheet while the flow has a code, and its error as an alert.
+    /// Presents the code sheet while the flow has a code (it also says why the sign-in failed), and the error of a
+    /// sign-in that could not even start as an alert.
     func recommendationsConnectPresentation(_ flow: RecommendationsConnectFlow) -> some View {
         sheet(
             isPresented: Binding(
                 get: { flow.prompt != nil },
-                set: { if !$0 { flow.cancel() } }
+                set: { if !$0 { flow.cancel("sheet binding") } }
             )
         ) {
             if let prompt = flow.prompt {
                 RecommendationsCodeSheet(prompt: prompt, flow: flow)
+                    .id(prompt.userCode)
             }
         }
         .alert(

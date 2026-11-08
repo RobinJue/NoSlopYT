@@ -4,13 +4,15 @@ import OSLog
 // Mocks of the YouTube recommendations connection, for previews and `-mockServices YES` launches.
 
 /// `RecommendationsAuthProviding` without a network: the code is always `MOCK-CODE` and the approval "arrives" after
-/// `delay`.
+/// `delay`, or, with a `failure`, the sign-in fails with that sentence instead.
 public actor MockRecommendationsAuth: RecommendationsAuthProviding {
     private var account: TVAccount?
     private let delay: Duration
+    private let failure: String?
 
-    public init(connected: Bool = false, delay: Duration = .seconds(2)) {
+    public init(connected: Bool = false, delay: Duration = .seconds(2), failure: String? = nil) {
         self.delay = delay
+        self.failure = failure
         self.account = connected ? TVAccount(name: "Mock Account", connectedAt: Date()) : nil
     }
 
@@ -27,6 +29,7 @@ public actor MockRecommendationsAuth: RecommendationsAuthProviding {
         } catch {
             throw CancellationError()
         }
+        if let failure { throw NoSlopError.oauth(failure) }
         let connected = TVAccount(name: "Mock Account", connectedAt: Date())
         account = connected
         return connected

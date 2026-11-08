@@ -1,3 +1,4 @@
+import NoSlopKit
 import SwiftUI
 
 @main
@@ -11,6 +12,8 @@ struct NoSlopApp: App {
         // Before anything creates `URLSession.shared`: thumbnails and avatars are cached on disk.
         URLCache.shared = URLCache(memoryCapacity: 64 * 1024 * 1024, diskCapacity: 512 * 1024 * 1024, directory: nil)
         env = AppEnvironment.shared
+        TVTrace.keep(in: URL.applicationSupportDirectory.appending(path: "tv-connect-trace.txt"))
+        TVTrace.log("app: launched")
         let environment = env
         Task { await environment.refreshAccount() }
         Task { await environment.refreshRecommendationsAccount() }
@@ -31,6 +34,7 @@ struct NoSlopApp: App {
                 .tint(Theme.accent)
         }
         .onChange(of: scenePhase) { oldPhase, newPhase in
+            TVTrace.log("app: scene phase \(String(describing: oldPhase)) -> \(String(describing: newPhase))")
             // The app is leaving the foreground (inactive on the way out, background once it is gone): whatever the
             // library still holds in memory goes to disk now, not 0.5 s from now, when iOS may have suspended the app.
             // Coming back (background, inactive, active) has nothing new to save.

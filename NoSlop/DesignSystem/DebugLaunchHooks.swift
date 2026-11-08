@@ -69,6 +69,8 @@ import SwiftUI
 ///   start, as "Mock Account".
 /// - `-recommendationsDelay <seconds>`: the mock TV sign-in takes that long to be approved (2 s by default), so the code
 ///   sheet stays long enough to look at.
+/// - `-recommendationsFail YES`: the mock TV sign-in fails when its time is up ("The sign-in didn't work. Try again."),
+///   so the failure the code sheet shows, and its "Try again", can be looked at.
 ///   The rest of the mock connection needs no flag: with `-mockServices YES`, Home shows a mock YouTube Home (8 sample
 ///   videos, a Short, a members-only video, a live stream and a video of the channel "Blocked Example", then a second page)
 ///   once connected; Not interested and Don't recommend channel are accepted; the mock reporter writes a line "[watchReport]"
@@ -177,6 +179,11 @@ enum DebugLaunchHooks {
     /// `-recommendationsConnected YES`: the mock YouTube recommendations connection starts connected.
     static var recommendationsConnected: Bool {
         UserDefaults.standard.bool(forKey: "recommendationsConnected")
+    }
+
+    /// `-recommendationsFail YES`: the mock TV sign-in ends with a failure instead of an approval.
+    static var recommendationsFailure: String? {
+        UserDefaults.standard.bool(forKey: "recommendationsFail") ? "The sign-in didn't work. Try again." : nil
     }
 
     /// How long the mock TV sign-in takes to be approved: `-recommendationsDelay`, else 2 s.

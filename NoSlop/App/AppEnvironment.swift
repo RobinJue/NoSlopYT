@@ -240,7 +240,8 @@ final class AppEnvironment {
         )
         let account: any YouTubeAccountService = MockAccountService(delay: DebugLaunchHooks.mockAccountDelay)
         let recommendationsAuth: any RecommendationsAuthProviding = MockRecommendationsAuth(
-            connected: DebugLaunchHooks.recommendationsConnected, delay: DebugLaunchHooks.recommendationsDelay
+            connected: DebugLaunchHooks.recommendationsConnected, delay: DebugLaunchHooks.recommendationsDelay,
+            failure: DebugLaunchHooks.recommendationsFailure
         )
         DebugLaunchHooks.seedDownload(in: scratch.appendingPathComponent("Downloads", isDirectory: true))
         #else
@@ -474,6 +475,7 @@ final class AppEnvironment {
     func refreshRecommendationsAccount() async {
         recommendationsReadWhileLocked = !UIApplication.shared.isProtectedDataAvailable
         recommendationsAccount = await recommendationsAuth.currentAccount()
+        TVTrace.log("env: account read, connected \(recommendationsAccount != nil), read while locked \(recommendationsReadWhileLocked)")
     }
 
     /// Makes `recommendationsAccount` say what the auth service says, after a TV call failed with
@@ -483,6 +485,7 @@ final class AppEnvironment {
     /// revoke: the data of the old account goes (including its waiting watch reports), and Home loads again.
     func reconcileRecommendationsAccount() async {
         guard recommendationsAccount != nil, await recommendationsAuth.currentAccount() == nil else { return }
+        TVTrace.log("env: reconcile found the sign-in gone")
         recommendationsAccount = nil
         recommendationCardIDs = []
         homeDecision = nil
@@ -495,6 +498,7 @@ final class AppEnvironment {
     /// Called by the connect flow after the sign-in finished. Whatever an earlier account left (card handles, waiting
     /// watch reports) is dropped first, so it is never replayed to the new one.
     func recommendationsConnected(_ account: TVAccount) async {
+        TVTrace.log("env: recommendationsConnected")
         await recommendations.clearAccountData()
         await watchReporter.clearAccountData()
         recommendationCardIDs = []
