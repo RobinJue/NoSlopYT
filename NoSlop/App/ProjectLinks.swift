@@ -4,6 +4,8 @@ import Foundation
 enum ProjectLinks {
     /// The source code. The repository is made public once the app is finished.
     static let repository = URL(string: "https://github.com/RobinJue/NoSlopYT")!
+    /// Where a gift can be sent, if someone wants to. Optional: nothing in the app depends on it.
+    static let buyMeACoffee = URL(string: "https://buymeacoffee.com/robinjue")!
     /// Where a problem is reported.
     static let issues = URL(string: "https://github.com/RobinJue/NoSlopYT/issues")!
     static let sponsorBlock = URL(string: "https://sponsor.ajay.app/")!

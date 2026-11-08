@@ -149,7 +149,7 @@ struct LibraryView: View {
 
     // MARK: Project
 
-    /// The way out to the source code, and the legal notice.
+    /// The way out to the source code, the legal notice and the optional gift.
     private var projectSection: some View {
         Section {
             Link(destination: ProjectLinks.repository) {
@@ -165,6 +165,14 @@ struct LibraryView: View {
             } label: {
                 LibraryRowLabel(title: "Legal notice", systemImage: "doc.text", detail: nil)
             }
+
+            Link(destination: ProjectLinks.buyMeACoffee) {
+                HStack(spacing: 8) {
+                    LibraryRowLabel(title: "Buy me a coffee", systemImage: "cup.and.saucer", detail: nil)
+                    ExternalLinkArrow()
+                }
+            }
+            .foregroundStyle(.primary)
         }
     }
 

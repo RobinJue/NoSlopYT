@@ -459,3 +459,9 @@ is also against YouTube's terms, and may get the account restricted.
 The app says the same in **Library > Legal notice** (with the data it keeps and where it sends requests), and
 **Library > Source code** opens the repository, <https://github.com/RobinJue/NoSlopYT>. That address is one constant,
 `ProjectLinks.repository` in `NoSlop/App/ProjectLinks.swift`.
+
+## Support
+
+No Slop is free to use, and nothing in it is behind a payment. If you like it, you can
+[buy me a coffee](https://buymeacoffee.com/robinjue). That is a gift, not a purchase: it unlocks nothing, and the
+app has the same link under **Library > Buy me a coffee**.
