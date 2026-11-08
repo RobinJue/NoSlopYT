@@ -51,7 +51,10 @@ public struct AppSettings: Codable, Hashable, Sendable {
     public var preferredCaptionLanguage: String? = nil
 
     // Account
+    /// The client ID of the user's own Google project; used only while `useOwnGoogleProject` is on.
     public var googleClientID: String = ""
+    /// Whether Google sign-in uses the user's own project (`googleClientID`) instead of the app's shared one.
+    public var useOwnGoogleProject = false
 
     // YouTube recommendations (the optional TV connection)
     public var showYouTubeHome = true
@@ -88,6 +91,9 @@ public struct AppSettings: Codable, Hashable, Sendable {
         autoPictureInPicture = read(.autoPictureInPicture, defaults.autoPictureInPicture)
         preferredCaptionLanguage = read(.preferredCaptionLanguage, defaults.preferredCaptionLanguage)
         googleClientID = read(.googleClientID, defaults.googleClientID)
+        // Settings written before this one existed: a client ID that was typed in is the project to go on using.
+        useOwnGoogleProject = (try? c.decodeIfPresent(Bool.self, forKey: .useOwnGoogleProject))
+            ?? !googleClientID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         showYouTubeHome = read(.showYouTubeHome, defaults.showYouTubeHome)
         tellYouTubeAboutHiding = read(.tellYouTubeAboutHiding, defaults.tellYouTubeAboutHiding)
         sendWatchesToYouTube = read(.sendWatchesToYouTube, defaults.sendWatchesToYouTube)

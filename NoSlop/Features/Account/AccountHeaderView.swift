@@ -38,8 +38,9 @@ final class GoogleSignInFlow {
     }
 }
 
-/// What the OAuth client ID typed into Settings is good for. It is judged by `GoogleOAuthConfig`, the check the
-/// sign-in itself makes, so no button starts a sign-in that is certain to fail.
+/// What the OAuth client ID a sign-in would use is good for (the app's shared project, or the one typed into
+/// Settings). It is judged by `GoogleOAuthConfig`, the check the sign-in itself makes, so no button starts a sign-in
+/// that is certain to fail.
 enum GoogleClientIDStatus {
     case empty, valid, invalid
 
@@ -79,9 +80,9 @@ struct GoogleSignOutButton: View {
 
 /// The top of the Library tab: a "Sign in with Google" call to action, or the signed-in account with "Sign out".
 ///
-/// Signing in needs the OAuth client ID from Settings; while it is empty or not a client ID at all (see
-/// `GoogleClientIDStatus`), tapping the call to action opens the setup guide instead of the sign-in page. Meant to sit
-/// in a `List` section.
+/// Signing in needs an OAuth client ID: the app's shared Google project's, or the user's own from Settings. While the
+/// one in use is empty or not a client ID at all (see `GoogleClientIDStatus`), tapping the call to action opens the
+/// setup guide instead of the sign-in page. Meant to sit in a `List` section.
 struct AccountHeaderView: View {
     @Environment(AppEnvironment.self) private var env
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
@@ -116,7 +117,7 @@ struct AccountHeaderView: View {
 
     /// A client ID that can start a sign-in; an empty or malformed one needs the guide instead.
     private var isConfigured: Bool {
-        GoogleClientIDStatus(clientID: env.settings.googleClientID) == .valid
+        GoogleClientIDStatus(clientID: env.effectiveGoogleClientID) == .valid
     }
 
     private var signedOut: some View {

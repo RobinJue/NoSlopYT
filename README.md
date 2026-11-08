@@ -133,9 +133,19 @@ DESTINATION='platform=iOS Simulator,id=<udid>' ./scripts/build.sh      # for one
 
 Everything except your own YouTube account works without this. Signing in uses the official YouTube Data API with
 Google's OAuth sign-in (authorization code with PKCE, in the system's web sign-in session; there is no client
-secret and the app never sees your password). Because you create the Google project yourself, nothing goes through
-anyone else's servers. It takes about five minutes, once. The same steps are in the app, under Settings > Account >
-"How to set up Google sign-in".
+secret and the app never sees your password).
+
+**By default** the sign-in goes through the Google project of the app's author: press **Sign in with Google** in the
+Library, there is nothing to set up. Its OAuth client ID is one constant, `GoogleOAuthConfig.sharedClientID` (a client
+ID is public by design, so it lives in the source). While that project is unverified, Google says "Google hasn't
+verified this app" and lets at most 100 accounts through; that is expected. The project's YouTube Data API quota
+(10,000 units a day) is shared by everyone who uses it, and the app says so when it runs out. The author's project sees
+how many requests are made and how many accounts signed in, not what you watch, and no token ever reaches the author.
+
+**Your own project** (**Settings > Account > Use my own Google project**): nothing goes through anyone else's project
+and the quota is yours alone. Use it if you build the app under another bundle ID, or if the shared project's limit is
+used up. It takes about five minutes, once. The same steps are in the app, under Settings > Account > "How to set up
+Google sign-in". An account set up before this setting existed, with its own client ID typed in, keeps using it.
 
 1. In the [Google Cloud console](https://console.cloud.google.com/projectcreate), create a project (any name).
 2. Under **APIs & Services > Library**, find **YouTube Data API v3** and press **Enable**. (Signing in works without
@@ -154,7 +164,8 @@ anyone else's servers. It takes about five minutes, once. The same steps are in 
 What you get once signed in: your subscriptions (kept in sync at launch and when you pull to refresh on Home,
 Subscriptions or in the Library), your YouTube playlists and liked videos, and Subscribe, Like and Add to playlist
 acting on your real account. The app asks for the scope `https://www.googleapis.com/auth/youtube`, plus
-`openid email profile` to show who is signed in. The default quota of 10,000 units a day is plenty for one person.
+`openid email profile` to show who is signed in. The default quota of 10,000 units a day is plenty for one person
+(in your own project; the shared project's is shared).
 
 - The tokens live in the iPhone's Keychain. Signing out in the app forgets them and asks Google to revoke the
   grant; your subscriptions stay on the device as local ones, so the feed never empties.
@@ -409,8 +420,11 @@ which opens that link in the browser or the YouTube app.
   YouTube answered as for a signed-out viewer.
 - **Google sign-in is blocked, or you are signed out every week.** See "Sign in with Google": add yourself as a test
   user, or publish the consent screen to stop the 7-day sign-out.
-- **"The YouTube Data API isn't turned on for your Google project."** Signing in works without it; everything that
-  uses your account does not. Open the Google Cloud project that owns your OAuth client, go to **APIs & Services >
+- **"Google's daily limit for this sign-in's project is used up."** The shared project's quota is shared by everyone
+  who signs in with it. Try again tomorrow, or switch to your own project (Settings > Account > Use my own Google
+  project).
+- **"The YouTube Data API isn't turned on for the Google project behind this sign-in."** Signing in works without it;
+  everything that uses your account does not. With your own project: open the Google Cloud project that owns your OAuth client, go to **APIs & Services >
   Library**, enable **YouTube Data API v3**, wait a minute (a change takes that long to spread), then pull down in
   the Library to bring your subscriptions. The app shows this message right after you sign in when the subscriptions
   could not be imported, and wherever a screen needs your account.
@@ -438,7 +452,7 @@ No Slop is a personal project, made for the author's own use, and is not affilia
 YouTube or Google. It reaches YouTube through the same web interfaces the website uses, not through an official API,
 and it plays videos without ads. That may go against YouTube's Terms of Service, and YouTube can change or block it
 at any time. If you use it, you do so at your own risk and you are responsible for following the terms that apply to
-you. Only the optional Google sign-in uses an official API (the YouTube Data API, with your own Google project). The
+you. Only the optional Google sign-in uses an official API (the YouTube Data API, with the author's Google project or your own). The
 optional YouTube recommendations connection is not official: it presents itself to YouTube as YouTube's TV app, which
 is also against YouTube's terms, and may get the account restricted.
 

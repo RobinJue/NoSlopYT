@@ -397,7 +397,13 @@ final class AppEnvironment {
         }
     }
 
-    /// Runs the Google sign-in with the Client ID from Settings, then imports the account's subscriptions.
+    /// The client ID a Google sign-in uses now: the app's shared Google project, unless Settings says to use the
+    /// user's own (or there is no shared project, then the one typed into Settings).
+    var effectiveGoogleClientID: String {
+        GoogleOAuthConfig.effectiveClientID(useOwnProject: settings.useOwnGoogleProject, ownClientID: settings.googleClientID)
+    }
+
+    /// Runs the Google sign-in with `effectiveGoogleClientID`, then imports the account's subscriptions.
     /// Throws `.googleNotConfigured` while no Client ID is set, and `.cancelled` when the user backs out.
     ///
     /// The account is signed in once the sign-in page is done. If the import of its subscriptions then fails for a
@@ -405,7 +411,7 @@ final class AppEnvironment {
     /// Google project's YouTube Data API is not turned on), that error is thrown as well, so it reaches the sign-in
     /// alert instead of leaving a signed-in Library with no subscriptions and no word why. The account stays signed in.
     func signIn(authenticator: any WebAuthenticating) async throws {
-        let clientID = settings.googleClientID.trimmingCharacters(in: .whitespacesAndNewlines)
+        let clientID = effectiveGoogleClientID
         guard !clientID.isEmpty else { throw NoSlopError.googleNotConfigured }
         googleAccount = try await auth.signIn(clientID: clientID, authenticator: authenticator)
         if let failure = await syncGoogleSubscriptions(), NoSlopError.isWorthShowingAfterSignIn(failure) {

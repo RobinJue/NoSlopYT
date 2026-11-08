@@ -1,7 +1,8 @@
 import NoSlopKit
 import SwiftUI
 
-/// Account: the Google OAuth client ID (checked with `GoogleOAuthConfig`), sign in / sign out, and the setup guide.
+/// Account: which Google project signs you in (the app's shared one by default, or your own with its OAuth client ID,
+/// checked with `GoogleOAuthConfig`), sign in / sign out, and the setup guide for your own project.
 /// "Sign in with Google" is only available for a client ID that passes that check.
 struct AccountSettingsSection: View {
     @Environment(AppEnvironment.self) private var env
@@ -17,25 +18,16 @@ struct AccountSettingsSection: View {
                 signedInRow(account)
             }
 
-            VStack(alignment: .leading, spacing: 8) {
-                // The field below is named for VoiceOver (it would otherwise be announced by its example text), so this
-                // visible name is not read a second time.
-                Text("OAuth client ID")
-                    .font(.subheadline)
-                    .accessibilityHidden(true)
-                TextField("1234-abcd.apps.googleusercontent.com", text: $store.settings.googleClientID)
-                    .accessibilityLabel("OAuth client ID")
-                    .font(.callout.monospaced())
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-                    .keyboardType(.asciiCapable)
-                    .submitLabel(.done)
-                    .disabled(signedInAccount != nil)
-                    .foregroundStyle(signedInAccount != nil ? Color.secondary : Color.primary)
-                validationLabel
+            // The first row that is always there; the sign-in alert is presented from it, because the section itself is
+            // not a view that can host a presentation and the client ID row below is not always shown.
+            Group {
+                if GoogleOAuthConfig.hasSharedProject {
+                    Toggle("Use my own Google project", isOn: $store.settings.useOwnGoogleProject)
+                        .disabled(signedInAccount != nil)
+                } else {
+                    clientIDField(signedIn: signedInAccount != nil, binding: $store.settings.googleClientID)
+                }
             }
-            .padding(.vertical, 2)
-            // Presented from this row: the section itself is not a view that can host a presentation.
             .alert(
                 "Google sign-in",
                 isPresented: Binding(
@@ -46,6 +38,16 @@ struct AccountSettingsSection: View {
                 Button("OK", role: .cancel) {}
             } message: {
                 Text(flow.errorMessage ?? "")
+            }
+
+            if GoogleOAuthConfig.hasSharedProject {
+                if usesOwnProject {
+                    clientIDField(signedIn: signedInAccount != nil, binding: $store.settings.googleClientID)
+                } else {
+                    Text("Signing in goes through the Google project of No Slop's author. Google will say that it hasn't verified the app: that is expected, and you can continue. The project's daily limit is shared by everyone who uses it.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
             }
 
             if signedInAccount == nil {
@@ -63,10 +65,12 @@ struct AccountSettingsSection: View {
                 .disabled(status != .valid || flow.isWorking)
             }
 
-            NavigationLink {
-                GoogleSetupGuideView()
-            } label: {
-                Label("How to set up Google sign-in", systemImage: "questionmark.circle")
+            if usesOwnProject {
+                NavigationLink {
+                    GoogleSetupGuideView()
+                } label: {
+                    Label("How to set up Google sign-in", systemImage: "questionmark.circle")
+                }
             }
         } header: {
             Text("Account")
@@ -74,15 +78,41 @@ struct AccountSettingsSection: View {
             Text(
                 signedInAccount == nil
                     ? "Optional. Signing in shows your own subscriptions, playlists and liked videos, and lets you subscribe and like on your account. Without it everything else works."
-                    : "Sign out to change the client ID."
+                    : "Sign out to change the Google project."
             )
         }
     }
 
     // MARK: Client ID
 
+    /// Whether sign-in uses a project of the user's own: chosen, or the only choice when there is no shared project.
+    private var usesOwnProject: Bool {
+        env.settings.useOwnGoogleProject || !GoogleOAuthConfig.hasSharedProject
+    }
+
     private var status: GoogleClientIDStatus {
-        GoogleClientIDStatus(clientID: env.settings.googleClientID)
+        GoogleClientIDStatus(clientID: env.effectiveGoogleClientID)
+    }
+
+    private func clientIDField(signedIn: Bool, binding: Binding<String>) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            // The field below is named for VoiceOver (it would otherwise be announced by its example text), so this
+            // visible name is not read a second time.
+            Text("OAuth client ID")
+                .font(.subheadline)
+                .accessibilityHidden(true)
+            TextField("1234-abcd.apps.googleusercontent.com", text: binding)
+                .accessibilityLabel("OAuth client ID")
+                .font(.callout.monospaced())
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                .keyboardType(.asciiCapable)
+                .submitLabel(.done)
+                .disabled(signedIn)
+                .foregroundStyle(signedIn ? Color.secondary : Color.primary)
+            validationLabel
+        }
+        .padding(.vertical, 2)
     }
 
     @ViewBuilder

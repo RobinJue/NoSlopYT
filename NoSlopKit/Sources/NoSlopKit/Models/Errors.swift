@@ -55,9 +55,9 @@ public enum NoSlopError: Error, Equatable, Sendable, LocalizedError {
         case .oauth(let message):
             return Self.oauthDescription(message)
         case .quotaExceeded:
-            return "YouTube's daily API quota for your Google project is used up. Try again tomorrow."
+            return "Google's daily limit for this sign-in's project is used up. Try again tomorrow, or use your own Google project in Settings \u{2192} Account."
         case .dataAPINotEnabled:
-            return "The YouTube Data API isn't turned on for your Google project. In Google Cloud, open APIs & Services \u{2192} Library, enable \u{201C}YouTube Data API v3\u{201D}, wait a minute, then try again."
+            return "The YouTube Data API isn't turned on for the Google project behind this sign-in. If it is your own, open APIs & Services \u{2192} Library in Google Cloud, enable \u{201C}YouTube Data API v3\u{201D}, wait a minute, then try again."
         case .cancelled:
             return "Cancelled."
         case .recommendationsNotConnected:

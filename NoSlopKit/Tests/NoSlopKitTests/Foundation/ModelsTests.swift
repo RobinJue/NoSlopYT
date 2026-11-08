@@ -329,6 +329,7 @@ import Testing
         #expect(s.wifiQuality == .auto && s.cellularQuality == .p720)
         #expect(s.defaultPlaybackRate == 1.0 && !s.autoplayNext && s.backgroundPlayback && s.autoPictureInPicture)
         #expect(s.preferredCaptionLanguage == nil && s.googleClientID == "" && s.contentLanguage == nil && s.contentRegion == nil)
+        #expect(!s.useOwnGoogleProject, "the app's own Google project is the default")
         #expect(s.showYouTubeHome && s.tellYouTubeAboutHiding && s.sendWatchesToYouTube)
         for category in SponsorCategory.allCases {
             let expected: SegmentBehavior = [.sponsor, .selfpromo, .interaction].contains(category) ? .autoSkip : .showInBar
@@ -414,6 +415,21 @@ import Testing
         #expect(old.showYouTubeHome && old.tellYouTubeAboutHiding && old.sendWatchesToYouTube)
     }
 
+    @Test func aClientIDFromBeforeTheProjectChoiceKeepsBeingUsed() throws {
+        func decode(_ json: String) throws -> AppSettings {
+            try JSONDecoder().decode(AppSettings.self, from: Data(json.utf8))
+        }
+        // Written before the choice existed: a client ID that was typed in stays in use, none means the shared project.
+        #expect(try decode(#"{"googleClientID":"123-abc.apps.googleusercontent.com"}"#).useOwnGoogleProject)
+        #expect(try !decode(#"{"googleClientID":"  "}"#).useOwnGoogleProject)
+        #expect(try !decode(#"{"hideShorts":true}"#).useOwnGoogleProject)
+        // Once the choice is written it decides, whatever the client ID says.
+        #expect(try !decode(#"{"googleClientID":"123-abc.apps.googleusercontent.com","useOwnGoogleProject":false}"#).useOwnGoogleProject)
+        #expect(try decode(#"{"useOwnGoogleProject":true}"#).useOwnGoogleProject)
+        // A value of the wrong type is unreadable, so the client ID decides again.
+        #expect(try decode(#"{"googleClientID":"123-abc.apps.googleusercontent.com","useOwnGoogleProject":"yes"}"#).useOwnGoogleProject)
+    }
+
     @Test func settingsRoundTripAndWriteBehavioursAsAKeyedObject() throws {
         var s = AppSettings()
         s.hideShorts = false
@@ -425,6 +441,7 @@ import Testing
         s.defaultPlaybackRate = 1.5
         s.preferredCaptionLanguage = "en"
         s.googleClientID = "123-abc.apps.googleusercontent.com"
+        s.useOwnGoogleProject = true
         s.contentLanguage = "de"
 
         let data = try JSONEncoder().encode(s)
@@ -486,7 +503,7 @@ import Testing
         #expect(NoSlopError.notPlayableYet(reason: "This live event will begin in 2 hours.").errorDescription == "This live event will begin in 2 hours.")
         #expect(NoSlopError.notSignedIn.errorDescription == "Sign in with Google to use this.")
         #expect(NoSlopError.googleNotConfigured.errorDescription == "Add your Google OAuth client ID in Settings \u{2192} Account first.")
-        #expect(NoSlopError.quotaExceeded.errorDescription == "YouTube's daily API quota for your Google project is used up. Try again tomorrow.")
+        #expect(NoSlopError.quotaExceeded.errorDescription == "Google's daily limit for this sign-in's project is used up. Try again tomorrow, or use your own Google project in Settings \u{2192} Account.")
         #expect(NoSlopError.network("The Internet connection appears to be offline.").errorDescription == "Can't reach YouTube. Check your connection.")
 
         let others: [NoSlopError] = [.notImplemented("Foo.bar"), .http(status: 500), .decoding("x"), .oauth("access_denied"), .oauth(""), .cancelled]

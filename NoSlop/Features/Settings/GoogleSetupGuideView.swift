@@ -23,6 +23,15 @@ struct GoogleSetupGuideView: View {
         self.leavesRoomForMiniPlayer = leavesRoomForMiniPlayer
     }
 
+    /// With a shared project signing in needs no setup, so these steps are for the user who wants a project of their own.
+    private var introduction: String {
+        let what = "Signing in is optional. It lets No Slop show your YouTube subscriptions, playlists and liked videos, and subscribe or like on your real account."
+        if GoogleOAuthConfig.hasSharedProject {
+            return what + " By default it uses the Google project of No Slop's author and needs no setup. Follow these steps only to use a project of your own instead: then nothing goes through anyone else's project, and its daily limit is yours alone. It takes about five minutes, once."
+        }
+        return what + " You create your own Google project, so nothing goes through anyone else's servers. It takes about five minutes, once."
+    }
+
     private var bundleID: String {
         Bundle.main.bundleIdentifier ?? "com.robinjungerich.noslopyt"
     }
@@ -30,7 +39,7 @@ struct GoogleSetupGuideView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
-                Text("Signing in is optional. It lets No Slop show your YouTube subscriptions, playlists and liked videos, and subscribe or like on your real account. You create your own Google project, so nothing goes through anyone else's servers. It takes about five minutes, once.")
+                Text(introduction)
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
 

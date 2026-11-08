@@ -29,6 +29,7 @@ struct LegalNoticeView: View {
             notice("Your data", [
                 "No Slop has no account of its own and contains no analytics, crash reporter, tracker or third-party package. Your subscriptions, history, playlists, downloads and settings stay on this device.",
                 "The app talks to YouTube and Google, and to SponsorBlock and DeArrow, which are asked about a short hash of a video ID, never the ID itself. If you connect YouTube recommendations, YouTube sees what you hide and, unless you switch it off in Settings, what you watch.",
+                "If you sign in with Google, the sign-in goes through the Google project of the app's author, unless you choose your own project in Settings. Google handles the sign-in and your login stays on this device. The author's project can see how many requests are made and how many accounts have signed in, not what you watch, and no token reaches the author.",
             ])
 
             Section {

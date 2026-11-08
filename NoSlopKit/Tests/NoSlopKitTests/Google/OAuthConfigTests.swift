@@ -21,6 +21,23 @@ import Testing
         #expect(items.first { $0.name == "redirect_uri" }?.value == c.redirectURI)
     }
 
+    @Test func theSharedClientIDIsEitherNotSetUpOrAValidOne() {
+        #expect(GoogleOAuthConfig.sharedClientID.isEmpty || GoogleOAuthConfig(clientID: GoogleOAuthConfig.sharedClientID) != nil)
+        #expect(GoogleOAuthConfig.hasSharedProject == !GoogleOAuthConfig.sharedClientID.isEmpty)
+    }
+
+    @Test func theOwnProjectIsUsedOnlyWhenChosenOrWhenThereIsNoSharedOne() {
+        let own = " 123-abc.apps.googleusercontent.com "
+        #expect(GoogleOAuthConfig.effectiveClientID(useOwnProject: true, ownClientID: own) == "123-abc.apps.googleusercontent.com")
+        let notChosen = GoogleOAuthConfig.effectiveClientID(useOwnProject: false, ownClientID: own)
+        if GoogleOAuthConfig.hasSharedProject {
+            #expect(notChosen == GoogleOAuthConfig.sharedClientID, "the shared project is the default")
+        } else {
+            #expect(notChosen == "123-abc.apps.googleusercontent.com", "with no shared project the user's own is the only one")
+        }
+        #expect(GoogleOAuthConfig.effectiveClientID(useOwnProject: true, ownClientID: "  ") == "")
+    }
+
     @Test func aRealisticClientIDWorks() throws {
         let id = "407408718192-abcdefghijklmnopqrstuvwxyz012345.apps.googleusercontent.com"
         let c = try #require(GoogleOAuthConfig(clientID: id))
