@@ -191,7 +191,7 @@ final class AppEnvironment {
             auth: auth,
             account: account,
             recommendationsAuth: recommendationsAuth,
-            recommendations: UnavailableRecommendations(),
+            recommendations: RecommendationsService(client: TVClient(http: URLSessionHTTPClient.isolated(), tokens: recommendationsAuth), language: config.hl, region: config.gl),
             // Part B replaces the line above, Part C the line below.
             watchReporter: NoWatchReporter(),
             library: library,
