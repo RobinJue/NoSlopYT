@@ -18,6 +18,7 @@ struct LibraryView: View {
             Section {
                 AccountHeaderView()
                     .padding(.vertical, 4)
+                RecommendationsRow()
             }
 
             Section {

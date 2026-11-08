@@ -81,4 +81,35 @@ import Testing
         #expect(decoded.blockedChannels == [BlockedChannel(id: "UC2", name: "Two")])
         #expect(decoded.isBlocked(channelID: "UC2") && !decoded.isBlocked(channelID: "UC1"))
     }
+
+    // A Home tile has no id and is hidden by the name it shows; the block resolved through the watch page must still match it.
+    @Test func resolvingATileKeepsTheTileNameSoTheBlockMatchesTheTile() {
+        let tile = ChannelRef(id: "", name: "Fireship Official")
+        let details = ChannelRef(id: "UC1", name: "Fireship", handle: "@fireship")
+        let resolved = ChannelRef.resolvedForBlocking(details: details, tile: tile)
+        #expect(resolved.id == "UC1")
+        #expect(resolved.name == "Fireship Official")
+        #expect(resolved.handle == "@fireship")
+
+        var settings = AppSettings()
+        let added = settings.blockChannel(id: resolved.id, name: resolved.name, handle: resolved.handle)
+        #expect(added)
+        #expect(settings.blockedChannel(matching: tile)?.id == "UC1")
+        #expect(!ContentFilter(settings: settings).allows(VideoSummary(id: "v", title: "t", channel: tile)))
+    }
+
+    @Test func resolvingKeepsTheDetailsNameWhenThereIsNoHandleAndTheNamesDiffer() {
+        let tile = ChannelRef(id: "", name: "Some  Channel")
+        let details = ChannelRef(id: "UC2", name: "Some Channel VEVO")
+        let resolved = ChannelRef.resolvedForBlocking(details: details, tile: tile)
+        #expect(resolved.name == "Some  Channel")
+        #expect(resolved.handle == "Some Channel VEVO")
+
+        let same = ChannelRef.resolvedForBlocking(details: ChannelRef(id: "UC3", name: "Same"), tile: ChannelRef(id: "", name: "same"))
+        #expect(same.handle == nil)
+
+        let blankTile = ChannelRef.resolvedForBlocking(details: details, tile: ChannelRef(id: "", name: ""))
+        #expect(blankTile.name == "Some Channel VEVO")
+        #expect(blankTile.handle == nil)
+    }
 }

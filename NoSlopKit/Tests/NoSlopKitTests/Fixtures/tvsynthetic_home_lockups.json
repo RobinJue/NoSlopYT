@@ -1,0 +1,92 @@
+{
+ "responseContext": {
+  "serviceTrackingParams": [
+   {
+    "service": "GFEEDBACK",
+    "params": [
+     {
+      "key": "logged_in",
+      "value": "1"
+     }
+    ]
+   }
+  ]
+ },
+ "contents": {
+  "tvBrowseRenderer": {
+   "content": {
+    "tvSurfaceContentRenderer": {
+     "content": {
+      "sectionListRenderer": {
+       "contents": [
+        {
+         "shelfRenderer": {
+          "tvhtml5ShelfRendererType": "TVHTML5_SHELF_RENDERER_TYPE_GRID_XL",
+          "content": {
+           "horizontalListRenderer": {
+            "items": [
+             {
+              "lockupViewModel": {
+               "contentId": "vidLOCK0001",
+               "contentType": "LOCKUP_CONTENT_TYPE_VIDEO",
+               "contentImage": {
+                "thumbnailViewModel": {
+                 "image": {
+                  "sources": [
+                   {
+                    "url": "https://i.ytimg.com/vi/vidLOCK0001/mq.jpg",
+                    "width": 320,
+                    "height": 180
+                   }
+                  ]
+                 }
+                }
+               },
+               "metadata": {
+                "lockupMetadataViewModel": {
+                 "title": {
+                  "content": "A lockup video"
+                 }
+                }
+               }
+              }
+             },
+             {
+              "lockupViewModel": {
+               "contentId": "vidLOCKSH01",
+               "contentType": "LOCKUP_CONTENT_TYPE_SHORT",
+               "metadata": {
+                "lockupMetadataViewModel": {
+                 "title": {
+                  "content": "A lockup short"
+                 }
+                }
+               }
+              }
+             },
+             {
+              "lockupViewModel": {
+               "contentId": "PLlockup001",
+               "contentType": "LOCKUP_CONTENT_TYPE_PLAYLIST",
+               "metadata": {
+                "lockupMetadataViewModel": {
+                 "title": {
+                  "content": "A playlist"
+                 }
+                }
+               }
+              }
+             }
+            ]
+           }
+          }
+         }
+        }
+       ]
+      }
+     }
+    }
+   }
+  }
+ }
+}

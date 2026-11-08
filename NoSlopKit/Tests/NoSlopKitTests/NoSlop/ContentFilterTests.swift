@@ -259,4 +259,42 @@ private func relaxed(_ change: (inout AppSettings) -> Void = { _ in }) -> AppSet
         #expect(filter.filter(videos) == videos)
         #expect(filter.filter(videos.map(SearchItem.video)).count == 3)
     }
+    // MARK: Blocked channels by name (YouTube's Home tiles often carry no channel id)
+
+    private func tile(_ id: String, channelID: String, name: String, handle: String? = nil) -> VideoSummary {
+        VideoSummary(id: id, title: "T \(id)", channel: ChannelRef(id: channelID, name: name, handle: handle))
+    }
+
+    @Test func aBlockedChannelHidesItsVideosByNameWhenTheIDIsMissing() {
+        let filter = ContentFilter(settings: relaxed { $0.blockedChannels = [BlockedChannel(id: "UCbad", name: "Bad Channel")] })
+        // Empty id (the TV parser's convention), the same name in other case and with accents folded.
+        #expect(!filter.allows(tile("a", channelID: "", name: "Bad Channel")))
+        #expect(!filter.allows(tile("b", channelID: "", name: "  bad CHANNEL ")))
+        #expect(!filter.allows(tile("c", channelID: "", name: "Bád Channél")))
+        #expect(filter.allows(tile("d", channelID: "", name: "Another Channel")))
+        // No channel ref at all: nothing to match.
+        #expect(filter.allows(VideoSummary(id: "e", title: "No channel")))
+    }
+
+    @Test func aBlockedChannelHidesItsVideosByHandleWhenTheIDIsMissing() {
+        let filter = ContentFilter(settings: relaxed {
+            $0.blockedChannels = [BlockedChannel(id: "UCbad", name: "Bad Channel", handle: "@BadOnes")]
+        })
+        #expect(!filter.allows(tile("a", channelID: "", name: "badones")))
+        #expect(!filter.allows(tile("b", channelID: "", name: "x", handle: "@badones")))
+        #expect(filter.allows(tile("c", channelID: "", name: "x", handle: "@other")))
+    }
+
+    @Test func aBlockByIDDoesNotHideAnotherChannelWithTheSameNameThatHasAnID() {
+        let filter = ContentFilter(settings: relaxed { $0.blockedChannels = [BlockedChannel(id: "UCbad", name: "Same Name")] })
+        #expect(filter.allows(tile("a", channelID: "UCother", name: "Same Name")))
+        #expect(!filter.allows(tile("b", channelID: "UCbad", name: "Renamed")))
+        #expect(!filter.allows(tile("c", channelID: "", name: "Same Name")))
+    }
+
+    @Test func aBlockedChannelWithoutANameNeverMatchesByName() {
+        let filter = ContentFilter(settings: relaxed { $0.blockedChannels = [BlockedChannel(id: "UCbad", name: "  ")] })
+        #expect(filter.allows(tile("a", channelID: "", name: "")))
+        #expect(filter.allows(tile("b", channelID: "", name: "  ")))
+    }
 }

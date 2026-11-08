@@ -53,6 +53,11 @@ public struct AppSettings: Codable, Hashable, Sendable {
     // Account
     public var googleClientID: String = ""
 
+    // YouTube recommendations (the optional TV connection)
+    public var showYouTubeHome = true
+    public var tellYouTubeAboutHiding = true
+    public var sendWatchesToYouTube = true
+
     // Content language and region; nil means "use the device locale".
     public var contentLanguage: String? = nil
     public var contentRegion: String? = nil
@@ -83,6 +88,9 @@ public struct AppSettings: Codable, Hashable, Sendable {
         autoPictureInPicture = read(.autoPictureInPicture, defaults.autoPictureInPicture)
         preferredCaptionLanguage = read(.preferredCaptionLanguage, defaults.preferredCaptionLanguage)
         googleClientID = read(.googleClientID, defaults.googleClientID)
+        showYouTubeHome = read(.showYouTubeHome, defaults.showYouTubeHome)
+        tellYouTubeAboutHiding = read(.tellYouTubeAboutHiding, defaults.tellYouTubeAboutHiding)
+        sendWatchesToYouTube = read(.sendWatchesToYouTube, defaults.sendWatchesToYouTube)
         contentLanguage = read(.contentLanguage, defaults.contentLanguage)
         contentRegion = read(.contentRegion, defaults.contentRegion)
 

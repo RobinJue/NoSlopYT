@@ -20,10 +20,16 @@ final class AppEnvironment {
     let deArrow: any DeArrowProviding
     let auth: any GoogleAuthProviding
     let account: any YouTubeAccountService
+    /// The optional YouTube recommendations connection (YouTube's TV sign-in), separate from `auth`.
+    let recommendationsAuth: any RecommendationsAuthProviding
+    let recommendations: any RecommendationsProviding
+    let watchReporter: any WatchReporting
     let library: LibraryStore
     let settingsStore: SettingsStore
     /// The last `refreshAccount` ran while protected data was unavailable, so what it read is not to be trusted.
     private var accountReadWhileLocked = false
+    /// The same for the YouTube recommendations account (its Keychain item is also readable only after the first unlock).
+    private var recommendationsReadWhileLocked = false
     let downloads: DownloadManager
     let player: PlayerController
     let router: Router
@@ -31,6 +37,20 @@ final class AppEnvironment {
     /// The signed-in Google account, nil when signed out. Set by `refreshAccount`, `signIn` and `signOut`, and by
     /// `reconcileGoogleAccount` when a call to Google failed because the session had ended.
     private(set) var googleAccount: GoogleAccount?
+
+    /// The connected YouTube recommendations account, nil when not connected. Set by `refreshRecommendationsAccount`,
+    /// the connect flow and `disconnectRecommendations`. A TV failure never touches `googleAccount`, and the other
+    /// way round.
+    private(set) var recommendationsAccount: TVAccount?
+
+    /// The ids of the Home videos that came from YouTube's own Home (they get the card actions). Emptied on disconnect.
+    var recommendationCardIDs: Set<String> = []
+
+    /// What the Diagnostics screen lists; `refreshRecommendationsDiagnostics` fills it.
+    var recommendationsDiagnostics = RecommendationsDiagnostics()
+
+    /// Counts the changes of the recommendations connection (connected, disconnected), so Home can load again.
+    private(set) var recommendationsRevision = 0
 
     /// Why the last link could not be opened, in plain words, for the alert in `RootView`. Nil when there is nothing to
     /// say; `dismissLinkError` clears it.
@@ -61,6 +81,9 @@ final class AppEnvironment {
         deArrow: any DeArrowProviding,
         auth: any GoogleAuthProviding,
         account: any YouTubeAccountService,
+        recommendationsAuth: any RecommendationsAuthProviding,
+        recommendations: any RecommendationsProviding,
+        watchReporter: any WatchReporting,
         library: LibraryStore,
         settingsStore: SettingsStore,
         downloads: DownloadManager,
@@ -75,6 +98,9 @@ final class AppEnvironment {
         self.deArrow = deArrow
         self.auth = auth
         self.account = account
+        self.recommendationsAuth = recommendationsAuth
+        self.recommendations = recommendations
+        self.watchReporter = watchReporter
         self.library = library
         self.settingsStore = settingsStore
         self.downloads = downloads
@@ -126,6 +152,8 @@ final class AppEnvironment {
 
         let auth = GoogleOAuthService(http: http, store: KeychainTokenStore())
         let account = YouTubeDataAPIClient(http: http, auth: auth)
+        // The TV connection has its own cookie-free session and its own Keychain item.
+        let recommendationsAuth = TVAuthService(http: URLSessionHTTPClient.isolated(), store: KeychainTVTokenStore())
 
         let subscriptionFeed = SubscriptionFeedService(
             rss: rss,
@@ -162,6 +190,10 @@ final class AppEnvironment {
             deArrow: deArrow,
             auth: auth,
             account: account,
+            recommendationsAuth: recommendationsAuth,
+            recommendations: RecommendationsService(client: TVClient(http: URLSessionHTTPClient.isolated(), tokens: recommendationsAuth), language: config.hl, region: config.gl),
+            // Part B replaces the line above, Part C the line below.
+            watchReporter: NoWatchReporter(),
             library: library,
             settingsStore: settingsStore,
             downloads: downloads
@@ -194,6 +226,9 @@ final class AppEnvironment {
             MockDeArrow(delay: DebugLaunchHooks.mockDeArrowDelay, connection: DebugLaunchHooks.deArrowConnection)
         )
         let account: any YouTubeAccountService = MockAccountService(delay: DebugLaunchHooks.mockAccountDelay)
+        let recommendationsAuth: any RecommendationsAuthProviding = MockRecommendationsAuth(
+            connected: DebugLaunchHooks.recommendationsConnected, delay: DebugLaunchHooks.recommendationsDelay
+        )
         DebugLaunchHooks.seedDownload(in: scratch.appendingPathComponent("Downloads", isDirectory: true))
         #else
         let youTube = MockYouTubeService()
@@ -205,7 +240,10 @@ final class AppEnvironment {
         let auth: any GoogleAuthProviding = MockAuth()
         let deArrow: any DeArrowProviding = MockDeArrow()
         let account: any YouTubeAccountService = MockAccountService()
+        let recommendationsAuth: any RecommendationsAuthProviding = MockRecommendationsAuth()
         #endif
+        let recommendations: any RecommendationsProviding = MockRecommendations()
+        let watchReporter: any WatchReporting = MockWatchReporter()
         let settingsStore = SettingsStore(defaults: defaults)
         let library = LibraryStore(directory: scratch.appendingPathComponent("Library", isDirectory: true))
         let downloads = DownloadManager(
@@ -227,6 +265,9 @@ final class AppEnvironment {
             deArrow: deArrow,
             auth: auth,
             account: account,
+            recommendationsAuth: recommendationsAuth,
+            recommendations: recommendations,
+            watchReporter: watchReporter,
             library: library,
             settingsStore: settingsStore,
             downloads: downloads
@@ -335,6 +376,9 @@ final class AppEnvironment {
         if accountReadWhileLocked, UIApplication.shared.isProtectedDataAvailable {
             await refreshAccount()
         }
+        if recommendationsReadWhileLocked, UIApplication.shared.isProtectedDataAvailable {
+            await refreshRecommendationsAccount()
+        }
     }
 
     /// Runs the Google sign-in with the Client ID from Settings, then imports the account's subscriptions.
@@ -407,6 +451,44 @@ final class AppEnvironment {
         if current == nil {
             library.convertGoogleSubscriptionsToLocal()
         }
+    }
+
+    // MARK: YouTube recommendations
+
+    /// Reads the connected account from the Keychain; no network traffic. Called at launch.
+    func refreshRecommendationsAccount() async {
+        recommendationsReadWhileLocked = !UIApplication.shared.isProtectedDataAvailable
+        recommendationsAccount = await recommendationsAuth.currentAccount()
+    }
+
+    /// Called by the connect flow after the sign-in finished.
+    func recommendationsConnected(_ account: TVAccount) {
+        recommendationsAccount = account
+        recommendationsRevision += 1
+    }
+
+    /// Disconnects: revokes the grant (best effort), clears the stored tokens, the card handles, the cached Home and
+    /// the pending reports, and lets Home load again. Never touches the Google account.
+    /// - Returns: whether Google confirmed the revoke (the connection is gone on this device either way).
+    @discardableResult
+    func disconnectRecommendations() async -> Bool {
+        let revoked = await recommendationsAuth.disconnect()
+        await recommendations.clearAccountData()
+        await watchReporter.clearAccountData()
+        recommendationCardIDs = []
+        recommendationsAccount = nil
+        recommendationsDiagnostics = RecommendationsDiagnostics()
+        recommendationsRevision += 1
+        return revoked
+    }
+
+    /// Reads the Diagnostics numbers again.
+    func refreshRecommendationsDiagnostics() async {
+        var diagnostics = await recommendations.diagnostics()
+        diagnostics.lastReport = await watchReporter.outcome()
+        diagnostics.pausedReporting = await watchReporter.isPaused()
+        diagnostics.tokenSecondsLeft = await recommendationsAuth.secondsLeft()
+        recommendationsDiagnostics = diagnostics
     }
 
     // MARK: Links

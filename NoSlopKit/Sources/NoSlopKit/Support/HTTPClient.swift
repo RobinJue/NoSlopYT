@@ -42,6 +42,22 @@ public struct URLSessionHTTPClient: HTTPClient {
         self.session = Self.defaultSession
     }
 
+    /// A client with a session of its own, made from the same cookie-free, cache-free configuration as the default one.
+    /// The TV connection uses it, so nothing it does shares connections, cookies or cache with anonymous traffic.
+    ///
+    /// It never follows a redirect: the 3xx comes back as the answer. A followed redirect could re-send the
+    /// Authorization header, the visitor id and the body to a host nobody checked.
+    public static func isolated() -> URLSessionHTTPClient {
+        isolated(protocolClasses: nil)
+    }
+
+    /// `isolated()` with stub protocols in front, for tests.
+    static func isolated(protocolClasses: [AnyClass]?) -> URLSessionHTTPClient {
+        let configuration = makeDefaultConfiguration()
+        if let protocolClasses { configuration.protocolClasses = protocolClasses }
+        return URLSessionHTTPClient(session: URLSession(configuration: configuration, delegate: NoRedirectDelegate(), delegateQueue: nil))
+    }
+
     /// For tests, which pass a session with a stub protocol.
     public init(session: URLSession) {
         self.session = session
@@ -64,5 +80,18 @@ public struct URLSessionHTTPClient: HTTPClient {
         } catch {
             throw NoSlopError.network(error.localizedDescription)
         }
+    }
+}
+
+/// Answers every redirect with "do not follow", so the redirect response itself is returned to the caller.
+private final class NoRedirectDelegate: NSObject, URLSessionTaskDelegate, Sendable {
+    func urlSession(
+        _ session: URLSession,
+        task: URLSessionTask,
+        willPerformHTTPRedirection response: HTTPURLResponse,
+        newRequest request: URLRequest,
+        completionHandler: @escaping @Sendable (URLRequest?) -> Void
+    ) {
+        completionHandler(nil)
     }
 }

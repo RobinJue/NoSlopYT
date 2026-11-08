@@ -329,6 +329,7 @@ import Testing
         #expect(s.wifiQuality == .auto && s.cellularQuality == .p720)
         #expect(s.defaultPlaybackRate == 1.0 && !s.autoplayNext && s.backgroundPlayback && s.autoPictureInPicture)
         #expect(s.preferredCaptionLanguage == nil && s.googleClientID == "" && s.contentLanguage == nil && s.contentRegion == nil)
+        #expect(s.showYouTubeHome && s.tellYouTubeAboutHiding && s.sendWatchesToYouTube)
         for category in SponsorCategory.allCases {
             let expected: SegmentBehavior = [.sponsor, .selfpromo, .interaction].contains(category) ? .autoSkip : .showInBar
             #expect(s.segmentBehaviors[category] == expected, "\(category)")
@@ -351,6 +352,18 @@ import Testing
         expected.wifiQuality = .p1080
         #expect(s.hideShorts, "the wrong value falls back to this key's default (on)")
         #expect(s == expected)
+    }
+
+    @Test func blockedChannelsWithoutAHandleStillDecode() throws {
+        let old = #"{"blockedChannels":[{"id":"UC1","name":"One"},{"id":"UC2","name":"Two","handle":"@two"},{"id":"UC3","name":"Three","handle":5}]}"#
+        let s = try JSONDecoder().decode(AppSettings.self, from: Data(old.utf8))
+        // A handle of the wrong type costs the handle, not the block.
+        #expect(s.blockedChannels.map(\.id) == ["UC1", "UC2", "UC3"])
+        #expect(s.blockedChannels[0].handle == nil && s.blockedChannels[2].handle == nil)
+        #expect(s.blockedChannels[1].handle == "@two")
+        // Written without a handle when there is none, so older builds read it as before.
+        let written = String(decoding: try JSONEncoder().encode(BlockedChannel(id: "UC1", name: "One")), as: UTF8.self)
+        #expect(!written.contains("handle"))
     }
 
     @Test func everySettingFallsBackOnItsOwnWhenItsValueIsUnreadable() throws {
@@ -386,6 +399,19 @@ import Testing
         #expect(throws: (any Error).self) {
             _ = try JSONDecoder().decode(AppSettings.self, from: Data(text.utf8))
         }
+    }
+
+    @Test func theYouTubeRecommendationsSwitchesReadLeniently() throws {
+        let s = try JSONDecoder().decode(
+            AppSettings.self,
+            from: Data(#"{"showYouTubeHome":false,"tellYouTubeAboutHiding":"maybe","sendWatchesToYouTube":null,"hideShorts":false}"#.utf8)
+        )
+        #expect(!s.showYouTubeHome)
+        #expect(s.tellYouTubeAboutHiding, "a wrong type takes the default (on)")
+        #expect(s.sendWatchesToYouTube, "null takes the default (on)")
+        #expect(!s.hideShorts)
+        let old = try JSONDecoder().decode(AppSettings.self, from: Data(#"{"hideShorts":false}"#.utf8))
+        #expect(old.showYouTubeHome && old.tellYouTubeAboutHiding && old.sendWatchesToYouTube)
     }
 
     @Test func settingsRoundTripAndWriteBehavioursAsAKeyedObject() throws {
@@ -514,6 +540,13 @@ import Testing
         #expect(text.hasSuffix("."))
         #expect(NoSlopError.dataAPINotEnabled == .dataAPINotEnabled)
         #expect(NoSlopError.dataAPINotEnabled != .http(status: 403))
+    }
+
+    @Test func theTVConnectionSpeaksInPlainSentencesNotGoogleSignInWording() {
+        #expect(NoSlopError.recommendationsNotConnected.errorDescription == "YouTube recommendations aren't connected.")
+        for message in ["The code expired. Start again.", "The sign-in was declined.", "The sign-in couldn't start. Try again later.", "The sign-in didn't work. Try again."] {
+            #expect(NoSlopError.oauth(message).errorDescription == message)
+        }
     }
 
     @Test func onlyFailuresTheViewerCanActOnAreShownAfterSignIn() {

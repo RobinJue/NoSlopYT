@@ -117,6 +117,9 @@ private final class ChangeFlag: @unchecked Sendable {
         first.settings.googleClientID = "123-abc.apps.googleusercontent.com"
         first.settings.contentLanguage = "de"
         first.settings.contentRegion = "AT"
+        first.settings.showYouTubeHome = false
+        first.settings.tellYouTubeAboutHiding = false
+        first.settings.sendWatchesToYouTube = false
 
         let reloaded = store().settings
 

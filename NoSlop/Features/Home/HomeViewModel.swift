@@ -2,7 +2,8 @@ import Foundation
 import NoSlopKit
 import Observation
 
-/// Loads the on-device "For you" feed for `HomeView`: the "Continue watching" row and the vertical feed.
+/// Loads the "For you" feed for `HomeView`: the "Continue watching" row and the vertical feed. The feed is YouTube's own
+/// Home when the recommendations connection is on and good enough (`HomeSourceDecision`), else the mix made on the device.
 ///
 /// Home never shows an error screen: the feed service has no failure path (it returns what it could build), and a failed
 /// refresh of the subscription uploads keeps what is cached. A feed with nothing in it is an empty state. What needs no
@@ -25,8 +26,16 @@ final class HomeViewModel {
     private(set) var phase: Phase = .idle
     /// "Continue watching", after the user's filters.
     private(set) var continueWatching: [HistoryEntry] = []
-    /// The feed, after the user's filters.
-    private(set) var forYou: [VideoSummary] = []
+    /// The feed, after the user's filters: YouTube's Home while it is shown, else the mix made on the device.
+    var forYou: [VideoSummary] { showsYouTube ? youTubePages.items : deviceFeed }
+    /// The on-device feed, after the user's filters.
+    private var deviceFeed: [VideoSummary] = []
+    /// YouTube's Home is on screen (its pages are in `youTubePages`).
+    private(set) var showsYouTube = false
+    /// YouTube's Home was asked for and did not make it: the device mix is shown instead, and says so.
+    private(set) var youTubeFellBack = false
+    /// YouTube's Home, page after page, through the same filter as every other paged list.
+    let youTubePages = FeedPages<VideoSummary>()
     /// The last feed that was built could not ask YouTube for related videos (see `HomeFeed.relatedUnavailable`): when
     /// `forYou` is empty it is empty for that reason, not because there is nothing more to suggest.
     private(set) var relatedUnavailable = false
@@ -40,17 +49,35 @@ final class HomeViewModel {
     /// What the loaded feed was built from. When it differs on a later visit the feed is rebuilt. The feed filters are
     /// not part of it: they are applied to the built feed (`applyFilter`), whenever they change.
     private struct Signature: Equatable {
+        /// YouTube's Home is wanted (connected, and the switch is on), and which connection it was asked through.
+        var wantsYouTube: Bool
+        var revision: Int
+        /// The feed that was built is YouTube's. Its own history and subscriptions are not what it was built from.
+        var shownYouTube: Bool
         var subscriptionIDs: [String]
         var historyCount: Int
         /// Changes whenever progress is recorded, so finishing or starting a video rebuilds the feed; the "Continue watching"
         /// row then takes the new entries (`applyFilter` compares entries, not ids).
         var lastWatchedAt: Date?
 
-        init(_ env: AppEnvironment) {
-            subscriptionIDs = env.library.subscriptions.map(\.id)
-            historyCount = env.library.history.count
-            lastWatchedAt = env.library.history.first?.lastWatchedAt
+        init(_ env: AppEnvironment, shownYouTube: Bool) {
+            wantsYouTube = HomeViewModel.wantsYouTube(env)
+            revision = env.recommendationsRevision
+            self.shownYouTube = shownYouTube
+            // YouTube's Home is not rebuilt for history changes: only its Continue watching row follows them.
+            subscriptionIDs = shownYouTube ? [] : env.library.subscriptions.map(\.id)
+            historyCount = shownYouTube ? 0 : env.library.history.count
+            lastWatchedAt = shownYouTube ? nil : env.library.history.first?.lastWatchedAt
         }
+
+        func isSameSource(as other: Signature) -> Bool {
+            wantsYouTube == other.wantsYouTube && revision == other.revision
+        }
+    }
+
+    /// Connected and the switch is on.
+    private static func wantsYouTube(_ env: AppEnvironment) -> Bool {
+        env.recommendationsAccount != nil && env.settings.showYouTubeHome
     }
 
     /// A feed older than this is rebuilt the next time Home appears, even when nothing else changed.
@@ -60,7 +87,14 @@ final class HomeViewModel {
     private static let maxAge: TimeInterval = 15 * 60
     #endif
 
+    /// YouTube's Home is kept this long (a pull to refresh, a connect or a disconnect load it again at once).
+    private static let youTubeMaxAge: TimeInterval = 20 * 60
+    /// How long YouTube gets, in all, to deliver the pages the decision needs.
+    private static let youTubeBudget: TimeInterval = 8
+
     @ObservationIgnored private var loadedSignature: Signature?
+    /// What the running load started from: a connection that changes meanwhile makes it load again when it is done.
+    @ObservationIgnored private var runningSignature: Signature?
     /// When the loaded feed was built from fresh data; nil when it could not be (see `publish`), so that the next visit
     /// tries again.
     @ObservationIgnored private var loadedAt: Date?
@@ -78,8 +112,9 @@ final class HomeViewModel {
     /// Returns immediately.
     func loadIfNeeded(using env: AppEnvironment) {
         guard loadTask == nil else { return }
-        if phase == .loaded, let loadedAt, loadedSignature == Signature(env),
-           Date().timeIntervalSince(loadedAt) < Self.maxAge {
+        if phase == .loaded, let loadedAt, let loadedSignature,
+           loadedSignature == Signature(env, shownYouTube: loadedSignature.shownYouTube),
+           Date().timeIntervalSince(loadedAt) < (loadedSignature.shownYouTube ? Self.youTubeMaxAge : Self.maxAge) {
             applyFilter(using: env)
             return
         }
@@ -107,17 +142,81 @@ final class HomeViewModel {
         }
     }
 
+    /// A card was sent "Not interested": takes it off the screen at once.
+    func cardDismissed(using env: AppEnvironment) {
+        guard showsYouTube else { return }
+        youTubePages.refilter(fetch: youTubeFetch(using: env), filter: youTubeFilter(using: env))
+    }
+
     /// Runs the user's filters on the feed already built (cheap; no network). Call it when they change: the user
     /// blocked a channel, or turned a setting on or off.
     func applyFilter(using env: AppEnvironment) {
         let filter = env.contentFilter
+        if showsYouTube {
+            // YouTube's Home: Continue watching comes from the history as it is now; the pages are filtered again.
+            let resumable = HomeFeed.continueWatching(in: env.library.history).filter { filter.allows($0.video) }.uniqued()
+            if resumable != continueWatching { continueWatching = resumable }
+            youTubePages.refilter(fetch: youTubeFetch(using: env), filter: youTubeFilter(using: env))
+            return
+        }
         let resumable = built.continueWatching.filter { filter.allows($0.video) }.uniqued()
         let feed = filter.filter(built.forYou).uniqued()
         // Not new values when nothing changed, so the screen is not redrawn for a setting that is not about the feed.
         // "Nothing changed" means the same entries, not only the same ids: the first card says how much is left of its
         // video, and that changes while the viewer watches. The Up next row only has ids to compare (its bars are live).
         if resumable != continueWatching { continueWatching = resumable }
-        if feed.map(\.id) != forYou.map(\.id) { forYou = feed }
+        if feed.map(\.id) != deviceFeed.map(\.id) { deviceFeed = feed }
+    }
+
+    /// The connection or the "Show YouTube's Home" switch may have changed (connected, disconnected, switched, the
+    /// account read at launch): loads again from the right source. A load that is running looks again when it is done.
+    func sourceMayHaveChanged(using env: AppEnvironment) {
+        if showsYouTube, !Self.wantsYouTube(env) {
+            // Disconnected or switched off: nothing of YouTube's stays on screen.
+            showsYouTube = false
+            youTubePages.removeAll()
+        }
+        guard loadTask == nil, let loadedSignature else { return }
+        guard !loadedSignature.isSameSource(as: Signature(env, shownYouTube: loadedSignature.shownYouTube)) else { return }
+        start(using: env, forceRefresh: false)
+    }
+
+    // MARK: YouTube's Home paging
+
+    func rowAppeared(_ video: VideoSummary, using env: AppEnvironment) {
+        guard showsYouTube else { return }
+        youTubePages.rowAppeared(video, fetch: youTubeFetch(using: env), filter: youTubeFilter(using: env))
+    }
+
+    func loadMore(using env: AppEnvironment) {
+        guard showsYouTube else { return }
+        youTubePages.loadMore(fetch: youTubeFetch(using: env), filter: youTubeFilter(using: env))
+    }
+
+    func retryLoadMore(using env: AppEnvironment) {
+        guard showsYouTube else { return }
+        youTubePages.retryLoadMore(fetch: youTubeFetch(using: env), filter: youTubeFilter(using: env))
+    }
+
+    private func youTubeFetch(using env: AppEnvironment) -> FeedPages<VideoSummary>.Fetch {
+        { token in
+            let page = try await env.recommendations.homePage(continuation: token)
+            env.recommendationCardIDs.formUnion(page.cardIDs)
+            return Page(items: page.videos, continuation: page.continuation)
+        }
+    }
+
+    /// The user's filters, and what Home already shows elsewhere (Continue watching) or the viewer has finished.
+    private func youTubeFilter(using env: AppEnvironment) -> FeedPages<VideoSummary>.Filter {
+        let filter = env.contentFilter
+        let excluded = Self.excludedIDs(env.library.history).union(HomeCardDismissals.shared.ids)
+        return { videos in videos.filter { filter.allows($0) && !excluded.contains($0.id) } }
+    }
+
+    private static func excludedIDs(_ history: [HistoryEntry]) -> Set<String> {
+        var ids = Set(HomeFeed.continueWatching(in: history).map(\.id))
+        ids.formUnion(history.lazy.filter(\.isFinished).map(\.id))
+        return ids
     }
 
     @discardableResult
@@ -129,7 +228,7 @@ final class HomeViewModel {
             // The subscriptions may have changed while the feed was loading (the viewer unsubscribed in Manage and came
             // back, or the account sync of the launch finished). `loadIfNeeded` returned at once because this load was
             // running, so look again here: the follow-up only fetches what the feed service has not got.
-            while !Task.isCancelled, Set(env.library.subscriptions.map(\.id)) != self.ranWithSubscriptionIDs {
+            while !Task.isCancelled, self.needsAnotherRun(using: env) {
                 self.loadIsForced = false
                 await self.run(using: env, forceRefresh: false)
             }
@@ -139,10 +238,19 @@ final class HomeViewModel {
         return task
     }
 
+    /// The subscriptions or the YouTube connection changed while a load ran.
+    private func needsAnotherRun(using env: AppEnvironment) -> Bool {
+        if Set(env.library.subscriptions.map(\.id)) != ranWithSubscriptionIDs { return true }
+        guard let runningSignature else { return false }
+        return !runningSignature.isSameSource(as: Signature(env, shownYouTube: runningSignature.shownYouTube))
+    }
+
     private func run(using env: AppEnvironment, forceRefresh: Bool) async {
         generation += 1
         let thisGeneration = generation
         phase = .loading
+        runningSignature = Signature(env, shownYouTube: false)
+        ranWithSubscriptionIDs = Set(env.library.subscriptions.map(\.id))
         #if DEBUG
         FeedLog.info("home run force=\(forceRefresh) hasContent=\(hasContent)")
         #endif
@@ -155,6 +263,22 @@ final class HomeViewModel {
             applyFilter(using: env)
         }
 
+        // YouTube's own Home first, when it is wanted: Continue watching is already on screen. Whatever it cannot do, the
+        // on-device mix below takes over.
+        if Self.wantsYouTube(env) {
+            switch await loadYouTube(using: env, generation: thisGeneration) {
+            case .shown:
+                return
+            case .superseded:
+                if phase == .loading { phase = loadedAt == nil ? .idle : .loaded }
+                return
+            case .fellBack:
+                break
+            }
+        } else if youTubeFellBack {
+            youTubeFellBack = false
+        }
+
         // A pull to refresh also brings in what was subscribed to elsewhere (on youtube.com, in another app) while the
         // app sat in the background: the Google subscriptions are synced first, so that the feed is built from the list as
         // it is now. A sync that fails keeps the list as it was.
@@ -162,7 +286,8 @@ final class HomeViewModel {
             await env.refreshAccount()
         }
 
-        let signature = Signature(env)
+        let signature = Signature(env, shownYouTube: false)
+        runningSignature = signature
         ranWithSubscriptionIDs = Set(signature.subscriptionIDs)
         let history = env.library.history
         let subscriptions = env.library.subscriptions
@@ -216,6 +341,7 @@ final class HomeViewModel {
     /// instead of waiting 15 minutes.
     private func publish(_ feed: HomeFeed, signature: Signature, uploadsFailed: Bool, using env: AppEnvironment) {
         built = feed
+        showsYouTube = false
         if relatedUnavailable != feed.relatedUnavailable { relatedUnavailable = feed.relatedUnavailable }
         applyFilter(using: env)
         loadedSignature = signature
@@ -227,6 +353,94 @@ final class HomeViewModel {
                 + "unavailable=\(feed.relatedUnavailable)"
         )
         #endif
+    }
+
+    private enum YouTubeOutcome {
+        /// YouTube's Home is on screen.
+        case shown
+        /// It was asked for and did not make it: the on-device mix goes on screen with a notice.
+        case fellBack
+        /// A newer load, or a change of the connection, took over meanwhile; nothing was published.
+        case superseded
+    }
+
+    /// Asks YouTube for up to `HomeSourceDecision.maximumPages` pages, within `youTubeBudget`, stopping as soon as the
+    /// decision says it has enough, and publishes them or reports why not. The result goes to the Diagnostics screen.
+    private func loadYouTube(using env: AppEnvironment, generation thisGeneration: Int) async -> YouTubeOutcome {
+        let started = Signature(env, shownYouTube: true)
+        let filter = env.contentFilter
+        let excluded = Self.excludedIDs(env.library.history)
+        let service = env.recommendations
+        let deadline = Date().addingTimeInterval(Self.youTubeBudget)
+        var pages: [TVHomePage] = []
+        var decision = HomeSourceDecision.Result(useYouTube: false, videos: [], continuation: nil)
+        var token: String?
+        while pages.count < HomeSourceDecision.maximumPages {
+            let remaining = deadline.timeIntervalSinceNow
+            guard remaining > 0 else { break }
+            do {
+                #if DEBUG
+                if !DebugLaunchHooks.mockConnection.isOnline { throw NoSlopError.network("The mock connection is off.") }
+                #endif
+                let next = token
+                pages.append(try await Self.within(remaining) { try await service.homePage(continuation: next) })
+            } catch {
+                // Any failure ends the attempt; the pages that did arrive are still judged.
+                break
+            }
+            decision = HomeSourceDecision.decide(pages: pages, filter: { filter.allows($0) }, excluded: excluded)
+            if decision.useYouTube || pages[0].loggedIn != true { break }
+            guard let next = pages.last?.continuation else { break }
+            token = next
+        }
+        guard !Task.isCancelled, thisGeneration == generation else { return .superseded }
+        // Disconnected, or switched off, while the pages were on their way: nothing of them is shown.
+        guard Self.wantsYouTube(env), env.recommendationsRevision == started.revision else { return .superseded }
+
+        if decision.useYouTube {
+            env.recommendationCardIDs = pages.reduce(into: Set<String>()) { $0.formUnion($1.cardIDs) }
+            built = HomeFeed(continueWatching: HomeFeed.continueWatching(in: env.library.history))
+            showsYouTube = true
+            youTubeFellBack = false
+            relatedUnavailable = false
+            youTubePages.reset(
+                with: Page(items: decision.videos, continuation: decision.continuation),
+                filter: youTubeFilter(using: env)
+            )
+            applyFilter(using: env)
+            loadedSignature = started
+            runningSignature = started
+            loadedAt = Date()
+            phase = .loaded
+        } else {
+            env.recommendationCardIDs = []
+            showsYouTube = false
+            youTubePages.removeAll()
+            youTubeFellBack = true
+        }
+        await env.refreshRecommendationsDiagnostics()
+        // The service reports whether it accepted the reply; whether Home used it is decided here.
+        env.recommendationsDiagnostics.lastHome?.usedYouTube = decision.useYouTube
+        #if DEBUG
+        FeedLog.info("home youtube used=\(decision.useYouTube) pages=\(pages.count) videos=\(decision.videos.count)")
+        #endif
+        return decision.useYouTube ? .shown : .fellBack
+    }
+
+    /// Runs `operation`, and gives up on it (cancelling it) after `seconds`.
+    private nonisolated static func within<T: Sendable>(
+        _ seconds: TimeInterval, _ operation: @escaping @Sendable () async throws -> T
+    ) async throws -> T {
+        try await withThrowingTaskGroup(of: T.self) { group in
+            group.addTask { try await operation() }
+            group.addTask {
+                try await Task.sleep(for: .seconds(seconds))
+                throw NoSlopError.network("YouTube's Home took too long.")
+            }
+            defer { group.cancelAll() }
+            guard let first = try await group.next() else { throw NoSlopError.cancelled }
+            return first
+        }
     }
 
     /// Drops uploads of channels that are no longer subscribed (a cache can be older than an unsubscribe).

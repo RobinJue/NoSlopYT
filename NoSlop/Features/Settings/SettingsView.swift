@@ -13,6 +13,7 @@ struct SettingsView: View {
             TitleSettingsSection()
             FeedFilterSettingsSection()
             AccountSettingsSection()
+            RecommendationsSettingsSection()
             StorageSettingsSection()
             AboutSettingsSection()
         }
