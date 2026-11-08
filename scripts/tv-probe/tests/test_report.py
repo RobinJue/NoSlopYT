@@ -138,6 +138,38 @@ class CliTests(unittest.TestCase):
         self.assertIn("LOGIN_REQUIRED", out)
         self.assertIsNone(self.st.read_json("reported.json"))
 
+    def test_failed_pings_exit_1_and_record_nothing(self):
+        for bad in (403, 429, 302):
+            def send(method, url, _bad=bad, **kw):
+                if "/api/stats/" in url:
+                    return http.Response(_bad, {}, b"")
+                return self.send(method, url, **kw)
+            code, out, err = run_cli(["report", "--video", "v4", "--delay", "0"], send=send, st=self.st)
+            self.assertEqual(code, 1, bad)
+            self.assertIsNone(self.st.read_json("reported.json"), bad)
+
+    def test_a_second_ping_failure_alone_also_fails(self):
+        def send(method, url, **kw):
+            if "/api/stats/watchtime" in url:
+                return http.Response(403, {}, b"")
+            return self.send(method, url, **kw)
+        code, out, err = run_cli(["report", "--video", "v4", "--delay", "0"], send=send, st=self.st)
+        self.assertEqual(code, 1)
+        self.assertIsNone(self.st.read_json("reported.json"))
+
+    def test_tracking_without_ei_sends_no_pings(self):
+        reply = load("player_signed.json")
+        raw = json.dumps(reply).replace("ei=", "xx=").encode()
+        def send(method, url, **kw):
+            self.calls.append((method, url, kw))
+            if "/youtubei/v1/player" in url:
+                return http.Response(200, {}, raw)
+            return http.Response(200, {}, b'"STS":1')
+        code, out, err = run_cli(["report", "--video", "v5", "--delay", "0"], send=send, st=self.st)
+        self.assertEqual(code, 1)
+        self.assertFalse(any("/api/stats/" in c[1] for c in self.calls))
+        self.assertIsNone(self.st.read_json("reported.json"))
+
     def test_history_prints_found_and_percent(self):
         code, out, err = run_cli(["history", "--video", "vidWATCHED1"], send=self.send, st=self.st)
         self.assertEqual(code, 0, err)

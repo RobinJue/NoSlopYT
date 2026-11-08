@@ -160,7 +160,8 @@ def run_report(args, state, send, out=print) -> int:
                     "vm": t.has_vm, "of": t.has_of, "playback_url": t.playback_url is not None,
                     "watchtime_url": t.watchtime_url is not None}))
     state.log("report_player", status=status, playability=t.status, ei=t.has_ei, vm=t.has_vm, of=t.has_of)
-    if status != 200 or not (t.playback_url and t.watchtime_url):
+    if (status != 200 or not (t.playback_url and t.watchtime_url)
+            or t.status != "OK" or not (t.has_ei and t.has_vm and t.has_of)):
         return 1
     length = t.length or 0.0
     cpn = new_cpn()
@@ -175,6 +176,8 @@ def run_report(args, state, send, out=print) -> int:
                                   cmt=float(args.delay), st=0.0, et=float(args.delay)), headers=dict(headers))
     out(json.dumps({"playback_ping": first.status, "watchtime_ping": second.status}))
     state.log("report_pings", playback=first.status, watchtime=second.status, auth=args.auth_on_pings)
+    if not (200 <= first.status < 300 and 200 <= second.status < 300):
+        return 1
     reported[args.video] = time.time()
     state.write_json("reported.json", reported)
     return 0
