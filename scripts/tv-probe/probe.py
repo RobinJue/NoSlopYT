@@ -5,11 +5,13 @@ from __future__ import annotations
 import argparse
 import os
 import re
+import secrets
 import sys
+import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # -I does not add the script folder
 
-from tvprobe import http  # noqa: E402
+from tvprobe import http, oauth  # noqa: E402
 from tvprobe.state import State, default_root  # noqa: E402
 
 COMMANDS = ("signin", "refresh", "home", "menu", "feedback", "report", "history", "next", "fixture", "results",
@@ -30,8 +32,70 @@ def _not_implemented(args, state, send) -> int:
     return 2
 
 
+def _signin(args, state, send) -> int:
+    if args.action == "start":
+        client = oauth.fetch_client_values(send=send)
+        state.write_json("client.json", {"client_id": client.client_id, "client_secret": client.client_secret})
+        device = state.read_json("device.json") or {}
+        device_id = device.get("device_id") or secrets.token_hex(16)
+        code = oauth.request_device_code(client, device_id, send=send)
+        state.write_json("device.json", {
+            "device_id": device_id, "device_code": code.device_code, "user_code": code.user_code,
+            "verification_url": code.verification_url, "expires_in": code.expires_in,
+            "interval": code.interval, "started_at": code.started_at})
+        state.log("signin_start", status=200)
+        print(code.user_code)
+        print(code.verification_url + "?user_code=" + code.user_code)
+        print("expires in %d minutes" % (code.expires_in // 60))
+        return 0
+    client = oauth.load_client(state)
+    data = state.read_json("device.json")
+    if not data or "device_code" not in data:
+        raise oauth.SignInError("no_pending_code")
+    code = oauth.DeviceCode(data["device_code"], data["user_code"], data["verification_url"],
+                            int(data["expires_in"]), int(data["interval"]), float(data["started_at"]))
+    tokens = oauth.poll(client, code, send=send)
+    oauth.save_tokens(state, tokens)
+    state.log("signin_wait", status=200)
+    print("connected")
+    print("access token lifetime: %d seconds" % round(tokens.expires_at - time.time()))
+    return 0
+
+
+def _refresh(args, state, send) -> int:
+    tokens = oauth.refresh(oauth.load_client(state), oauth.load_tokens(state), send=send)
+    oauth.save_tokens(state, tokens)
+    state.log("refresh", status=200)
+    print("refreshed")
+    print("access token lifetime: %d seconds" % round(tokens.expires_at - time.time()))
+    return 0
+
+
+def _revoke(args, state, send) -> int:
+    tokens = oauth.load_tokens(state)
+    answered = []
+    for url in oauth.REVOKE_URLS:
+        if oauth.revoke(tokens, send=_only(send, url)):
+            answered.append(url)
+    state.log("revoke", answered=len(answered))
+    print("revoke answered 200 at: %s" % (", ".join(answered) if answered else "none"))
+    state.wipe()
+    print("state folder removed")
+    return 0
+
+
+def _only(send, url):
+    """A transport that sends only to one revoke URL, so each endpoint is reported separately."""
+    def one(method, target, **kw):
+        if target != url:
+            return http.Response(0, {}, b"")
+        return send(method, target, **kw)
+    return one
+
+
 # Later tasks replace entries: handler(args, state, send) -> int
 HANDLERS = {name: _not_implemented for name in COMMANDS}
+HANDLERS.update({"signin": _signin, "refresh": _refresh, "revoke": _revoke})
 
 
 def build_parser() -> argparse.ArgumentParser:

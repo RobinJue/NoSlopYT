@@ -63,9 +63,8 @@ class CliSecretTests(unittest.TestCase):
         code, out, err = run_cli(["menu"], send=fake_500, handlers={"menu": handler})
         self.assertNotIn("SECRET", err)
 
-    def test_every_subcommand_exists_and_is_not_implemented(self):
-        for sub in ("signin start", "signin wait", "refresh", "home", "menu", "feedback", "report", "history",
-                    "next", "fixture", "results", "revoke"):
+    def test_later_subcommands_exist_and_are_not_implemented_yet(self):
+        for sub in ("home", "menu", "feedback", "report", "history", "next", "fixture", "results"):
             code, out, err = run_cli(sub.split(), send=fake_500)
             self.assertEqual(code, 2, sub)
             self.assertIn("not implemented", out + err)
