@@ -60,11 +60,11 @@ class CliSecretTests(unittest.TestCase):
     def test_dataclass_repr_with_a_token_is_filtered(self):
         def handler(args, state, send):
             raise RuntimeError(repr({"t": "ya29.SECRET"}))
-        code, out, err = run_cli(["menu"], send=fake_500, handlers={"menu": handler})
+        code, out, err = run_cli(["menu", "--video", "v1"], send=fake_500, handlers={"menu": handler})
         self.assertNotIn("SECRET", err)
 
     def test_later_subcommands_exist_and_are_not_implemented_yet(self):
-        for sub in ("menu", "feedback", "report", "history", "next", "fixture", "results"):
+        for sub in ("report", "history", "next", "fixture", "results"):
             code, out, err = run_cli(sub.split(), send=fake_500)
             self.assertEqual(code, 2, sub)
             self.assertIn("not implemented", out + err)
