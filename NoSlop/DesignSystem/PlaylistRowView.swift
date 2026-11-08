@@ -63,6 +63,12 @@ struct PlaylistRowView: View {
                 .padding(.vertical, 2)
                 .background(Theme.badgeBackground, in: RoundedRectangle(cornerRadius: 4, style: .continuous))
                 .padding(6)
+                // The badge sits on a thumbnail of fixed width: at accessibility sizes it would grow wider than the
+                // picture and end in "17...". It stays at the largest standard size; the count is also in the
+                // accessibility label.
+                .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
+                .lineLimit(1)
+                .fixedSize()
         }
     }
 }

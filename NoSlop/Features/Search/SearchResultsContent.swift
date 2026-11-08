@@ -9,10 +9,16 @@ struct SearchResultsContent: View {
 
     @Environment(AppEnvironment.self) private var env
 
+    /// The width of the results, to tell a phone's single column from the grid of a wider screen (`FeedGrid`).
+    @State private var availableWidth: CGFloat?
+
     var body: some View {
         ScrollView {
             content
                 .padding(.vertical, Theme.padding)
+        }
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width in
+            if availableWidth != width { availableWidth = width }
         }
         .scrollDismissesKeyboard(.interactively)
         .refreshable { await model.refresh(using: env) }
@@ -69,10 +75,23 @@ struct SearchResultsContent: View {
                 .padding(.bottom, Theme.padding)
             }
 
-            FeedGrid {
-                ForEach(model.list.items) { item in
-                    SearchItemRow(item: item)
-                        .onAppear { model.rowAppeared(item, using: env) }
+            if FeedGrid<EmptyView>.columnCount(forWidth: availableWidth) > 1 {
+                // Several columns: a channel or playlist row spans the whole width between runs of video cards. In a
+                // grid cell it would be a short row next to a tall card, with blank space under it.
+                ForEach(FeedRuns.split(model.list.items) { $0.video != nil }, id: \.items[0].id) { run in
+                    if run.isGrid {
+                        FeedGrid(initialWidth: availableWidth) {
+                            ForEach(run.items) { item in row(item) }
+                        }
+                        .padding(.bottom, Theme.feedSpacing)
+                    } else {
+                        ForEach(run.items) { item in row(item) }
+                            .padding(.bottom, 8)
+                    }
+                }
+            } else {
+                FeedGrid {
+                    ForEach(model.list.items) { item in row(item) }
                 }
             }
 
@@ -85,6 +104,11 @@ struct SearchResultsContent: View {
                 )
             }
         }
+    }
+
+    private func row(_ item: SearchItem) -> some View {
+        SearchItemRow(item: item)
+            .onAppear { model.rowAppeared(item, using: env) }
     }
 
     @ViewBuilder

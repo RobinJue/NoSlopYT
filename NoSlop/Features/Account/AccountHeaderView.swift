@@ -127,12 +127,24 @@ struct AccountHeaderView: View {
                 isShowingGuide = true
             }
         } label: {
-            HStack(spacing: 14) {
-                Image(systemName: "person.crop.circle.badge.plus")
-                    .font(.system(size: 36))
-                    .symbolRenderingMode(.hierarchical)
-                    .foregroundStyle(Theme.accent)
-                    .frame(width: 56, height: 56)
+            // At accessibility sizes the text beside an icon and a chevron is a column of one or two words. There the
+            // card stacks: the icon above the text, the text over the whole width, no chevron. It stays one button.
+            let stacked = dynamicTypeSize.isAccessibilitySize
+            let layout = stacked
+                ? AnyLayout(VStackLayout(alignment: .leading, spacing: 8))
+                : AnyLayout(HStackLayout(spacing: 14))
+
+            layout {
+                HStack(spacing: 14) {
+                    Image(systemName: "person.crop.circle.badge.plus")
+                        .font(.system(size: 36))
+                        .symbolRenderingMode(.hierarchical)
+                        .foregroundStyle(Theme.accent)
+                        .frame(width: 56, height: 56)
+                    if stacked, flow.isWorking {
+                        ProgressView()
+                    }
+                }
 
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Sign in with Google")
@@ -148,16 +160,19 @@ struct AccountHeaderView: View {
                     .multilineTextAlignment(.leading)
                 }
 
-                Spacer(minLength: 0)
+                if !stacked {
+                    Spacer(minLength: 0)
 
-                if flow.isWorking {
-                    ProgressView()
-                } else {
-                    Image(systemName: "chevron.right")
-                        .font(.footnote.weight(.semibold))
-                        .foregroundStyle(.tertiary)
+                    if flow.isWorking {
+                        ProgressView()
+                    } else {
+                        Image(systemName: "chevron.right")
+                            .font(.footnote.weight(.semibold))
+                            .foregroundStyle(.tertiary)
+                    }
                 }
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
