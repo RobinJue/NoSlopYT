@@ -329,6 +329,7 @@ import Testing
         #expect(s.wifiQuality == .auto && s.cellularQuality == .p720)
         #expect(s.defaultPlaybackRate == 1.0 && !s.autoplayNext && s.backgroundPlayback && s.autoPictureInPicture)
         #expect(s.preferredCaptionLanguage == nil && s.googleClientID == "" && s.contentLanguage == nil && s.contentRegion == nil)
+        #expect(s.showYouTubeHome && s.tellYouTubeAboutHiding && s.sendWatchesToYouTube)
         for category in SponsorCategory.allCases {
             let expected: SegmentBehavior = [.sponsor, .selfpromo, .interaction].contains(category) ? .autoSkip : .showInBar
             #expect(s.segmentBehaviors[category] == expected, "\(category)")
@@ -386,6 +387,19 @@ import Testing
         #expect(throws: (any Error).self) {
             _ = try JSONDecoder().decode(AppSettings.self, from: Data(text.utf8))
         }
+    }
+
+    @Test func theYouTubeRecommendationsSwitchesReadLeniently() throws {
+        let s = try JSONDecoder().decode(
+            AppSettings.self,
+            from: Data(#"{"showYouTubeHome":false,"tellYouTubeAboutHiding":"maybe","sendWatchesToYouTube":null,"hideShorts":false}"#.utf8)
+        )
+        #expect(!s.showYouTubeHome)
+        #expect(s.tellYouTubeAboutHiding, "a wrong type takes the default (on)")
+        #expect(s.sendWatchesToYouTube, "null takes the default (on)")
+        #expect(!s.hideShorts)
+        let old = try JSONDecoder().decode(AppSettings.self, from: Data(#"{"hideShorts":false}"#.utf8))
+        #expect(old.showYouTubeHome && old.tellYouTubeAboutHiding && old.sendWatchesToYouTube)
     }
 
     @Test func settingsRoundTripAndWriteBehavioursAsAKeyedObject() throws {

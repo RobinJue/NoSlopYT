@@ -65,6 +65,10 @@ import SwiftUI
 ///   its end when the card that asked has left the screen (like the real client's request), and every lookup is written to
 ///   the log (category `deArrow`, lines that start with "[deArrow]", see `LoggingDeArrow`). With `-offlineDeArrow YES` it
 ///   is how a slow connection looks: the lookup fails when its time is up, long after the card was scrolled away.
+/// - `-recommendationsConnected YES`: the mock YouTube recommendations connection (the TV sign-in) is connected from the
+///   start, as "Mock Account".
+/// - `-recommendationsDelay <seconds>`: the mock TV sign-in takes that long to be approved (2 s by default), so the code
+///   sheet stays long enough to look at.
 /// - `-uiScript '<steps>'`: taps, pulls and the like at given moments (see `DebugUIScript`).
 /// - `-playerScript '<steps>'`: steps for the player, separated by `;`, run in order once the first video plays (see
 ///   `PlayerDebugScript`). The main kinds: waiting (`wait=<seconds>`, `waitPlaying`, `waitVideo`), moving through the queue
@@ -162,6 +166,17 @@ enum DebugLaunchHooks {
             .filter { $0.channel != nil }
             .sorted { ($0.publishedAt ?? .distantPast) > ($1.publishedAt ?? .distantPast) }
         return Array(uploads.dropFirst())
+    }
+
+    /// `-recommendationsConnected YES`: the mock YouTube recommendations connection starts connected.
+    static var recommendationsConnected: Bool {
+        UserDefaults.standard.bool(forKey: "recommendationsConnected")
+    }
+
+    /// How long the mock TV sign-in takes to be approved: `-recommendationsDelay`, else 2 s.
+    static var recommendationsDelay: Duration {
+        let seconds = UserDefaults.standard.double(forKey: "recommendationsDelay")
+        return seconds > 0 ? .milliseconds(Int(seconds * 1_000)) : .seconds(2)
     }
 
     /// `-signedIn YES`: the mock account is signed in from the start.
