@@ -175,3 +175,49 @@ private func ok(_ text: String = "{\"ok\":true}") -> Data { Data(text.utf8) }
         #expect(NoSlopError.recommendationsNotConnected.errorDescription == "YouTube recommendations aren't connected.")
     }
 }
+
+/// Answers 302 to an off-list host and records every request URL it sees.
+private final class RedirectStubProtocol: URLProtocol {
+    nonisolated(unsafe) private static var seen: [URL] = []
+    private static let lock = NSLock()
+
+    static var seenURLs: [URL] { lock.withLock { seen } }
+    static func reset() { lock.withLock { seen = [] } }
+
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+
+    override func startLoading() {
+        guard let url = request.url else { return }
+        Self.lock.withLock { Self.seen.append(url) }
+        if url.host == "www.youtube.com" {
+            let target = URL(string: "https://consent.tvsynthetic.example/next")!
+            let response = HTTPURLResponse(url: url, statusCode: 302, httpVersion: "HTTP/1.1", headerFields: ["Location": target.absoluteString])!
+            client?.urlProtocol(self, wasRedirectedTo: URLRequest(url: target), redirectResponse: response)
+            // A declined redirect hands the 3xx itself to the caller; a followed one ignores what comes next.
+            client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+            client?.urlProtocolDidFinishLoading(self)
+        } else {
+            let response = HTTPURLResponse(url: url, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: nil)!
+            client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+            client?.urlProtocol(self, didLoad: Data("{\"leaked\":true}".utf8))
+            client?.urlProtocolDidFinishLoading(self)
+        }
+    }
+
+    override func stopLoading() {}
+}
+
+@Suite(.serialized) struct TVClientRedirectTests {
+    @Test func aRedirectOffTheAllowListIsNeverFollowed() async throws {
+        RedirectStubProtocol.reset()
+        let http = URLSessionHTTPClient.isolated(protocolClasses: [RedirectStubProtocol.self])
+        let client = TVClient(http: http, tokens: FakeTokens())
+        await #expect(throws: NoSlopError.http(status: 302)) {
+            _ = try await client.post("browse", body: ["browseId": "FEwhat_to_watch"], visitorData: "tvsynthetic_visitor")
+        }
+        let urls = RedirectStubProtocol.seenURLs
+        #expect(urls.count == 1)
+        #expect(urls.allSatisfy { $0.host == "www.youtube.com" })
+    }
+}
