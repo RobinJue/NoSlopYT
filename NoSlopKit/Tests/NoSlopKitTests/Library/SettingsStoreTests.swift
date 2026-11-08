@@ -252,9 +252,27 @@ private final class ChangeFlag: @unchecked Sendable {
         let saved = try JSONDecoder().decode(AppSettings.self, from: try #require(defaults.data(forKey: Self.key)))
         #expect(!saved.hideShorts)
 
-        locked.settings.autoplayNext = true
+        #expect(locked.settings.autoplayNext, "the other stored settings are not replaced by defaults")
+        #expect(saved.autoplayNext, "and they stay in what is saved")
+
+        locked.settings.backgroundPlayback = false
         let later = try JSONDecoder().decode(AppSettings.self, from: try #require(defaults.data(forKey: Self.key)))
-        #expect(later.autoplayNext, "saving works again")
+        #expect(!later.backgroundPlayback, "saving works again")
+        #expect(later.autoplayNext)
+    }
+
+    @Test func aChangeToAnOptionalSettingBeforeTheReadAgainWinsOverTheStoredValueAndLeavesTheRest() throws {
+        let locked = SettingsStore(defaults: defaults, key: Self.key, protectedDataAvailable: false)
+        stored(#"{"autoplayNext":true,"contentRegion":"FR","blockedKeywords":["a"]}"#)
+
+        locked.settings.contentRegion = "DE"
+        locked.settings.contentLanguage = "de"
+        locked.reloadIfNeeded()
+
+        #expect(locked.settings.contentRegion == "DE", "the viewer's value wins over the stored one")
+        #expect(locked.settings.contentLanguage == "de")
+        #expect(locked.settings.autoplayNext)
+        #expect(locked.settings.blockedKeywords == ["a"])
     }
 
     @Test func aStoreThatWasNotLockedSavesAndNeverReadsAgain() throws {

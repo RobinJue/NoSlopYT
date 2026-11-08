@@ -45,6 +45,9 @@ public final class SettingsStore {
         let changedMeanwhile = settings != firstRead
         let stored = Self.load(from: defaults, key: key, moveAside: true)
         if changedMeanwhile {
+            // The viewer's changes go on top of what is stored; every other stored setting stays as it was.
+            // Still blocked while `settings` is assigned, then saved once.
+            settings = Self.merged(changes: settings, since: firstRead, onto: stored)
             needsReload = false
             persist()
         } else {
@@ -61,6 +64,28 @@ public final class SettingsStore {
         // An unencodable value (a NaN rate set by a buggy caller) leaves the stored settings as they were.
         guard let data = try? Self.makeEncoder().encode(settings) else { return }
         defaults.set(data, forKey: key)
+    }
+
+    /// `base` with every setting that differs between `original` and `current` taken from `current`. It compares the
+    /// encoded keys, so a setting added later is covered without listing it here. A key that encodes to nothing (an
+    /// optional that is nil) counts as a value, so a change to nil is kept too. Falls back to `current` when
+    /// the settings cannot be encoded or decoded.
+    private static func merged(changes current: AppSettings, since original: AppSettings, onto base: AppSettings) -> AppSettings {
+        func object(_ value: AppSettings) -> [String: Any]? {
+            guard let data = try? makeEncoder().encode(value) else { return nil }
+            return (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+        }
+        guard let currentObject = object(current), let originalObject = object(original), var result = object(base) else {
+            return current
+        }
+        for key in Set(currentObject.keys).union(originalObject.keys) {
+            let now = currentObject[key], before = originalObject[key]
+            let same = (now as? NSObject) == (before as? NSObject)
+            if !same { result[key] = now }
+        }
+        guard let data = try? JSONSerialization.data(withJSONObject: result),
+              let merged = try? JSONDecoder().decode(AppSettings.self, from: data) else { return current }
+        return sanitized(merged)
     }
 
     private static func load(from defaults: UserDefaults, key: String, moveAside: Bool) -> AppSettings {
