@@ -164,7 +164,7 @@ class ResultsCommandTests(unittest.TestCase):
     def test_results_prints_the_summary(self):
         with tempfile.TemporaryDirectory() as td:
             st = State(Path(td) / "s")
-            st.log("home_try", try_passes=True, visible_unique=10)
+            st.log("home_try", try_passes=True, visible_unique=10, continuation_ok=True)
             out = io.StringIO()
             with contextlib.redirect_stdout(out):
                 code = probe.main(["results"], state=st, send=lambda *a, **k: None)

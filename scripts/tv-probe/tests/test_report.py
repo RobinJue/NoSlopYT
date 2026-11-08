@@ -176,6 +176,14 @@ class CliTests(unittest.TestCase):
         self.assertEqual(json.loads(out.strip().splitlines()[-1]), {"found": True, "percent": 50})
         self.assertNotIn("FAKE", out)
 
+    def test_history_saves_its_reply_as_a_capture_for_the_fixture_command(self):
+        run_cli(["history", "--video", "vidWATCHED1"], send=self.send, st=self.st)
+        self.assertEqual(self.st.read_json("captures/history-vidWATCHED1.json"), load("history_grid.json"))
+
+    def test_report_saves_the_player_reply_as_a_capture(self):
+        run_cli(["report", "--video", "v9", "--delay", "0"], send=self.send, st=self.st)
+        self.assertEqual(self.st.read_json("captures/player-v9.json"), load("player_signed.json"))
+
     def test_history_log_names_the_video_for_the_results_summary(self):
         run_cli(["history", "--video", "vidWATCHED1"], send=self.send, st=self.st)
         lines = [json.loads(x) for x in (self.st.root / "log.jsonl").read_text().splitlines()]

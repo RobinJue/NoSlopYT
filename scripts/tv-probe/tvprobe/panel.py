@@ -127,18 +127,25 @@ def _findings_line(status: int, f: Optional[PanelFindings]) -> dict:
             "ambiguous": f.ambiguous}
 
 
+def _log_menu(state, status: int, f: Optional[PanelFindings]) -> None:
+    state.log("menu", status=status, ambiguous=bool(f and f.ambiguous),
+              not_interested=bool(f and f.not_interested is not None),
+              dont_recommend=bool(f and f.dont_recommend is not None))
+
+
 def run_menu(args, state, send, out=print) -> int:
     token = oauth.valid_token(state, send=send)
     status, f = fetch_menu(args, state, send, token)
     line = _findings_line(status, f)
     out(json.dumps(line))
-    state.log("menu", status=status, ambiguous=bool(f and f.ambiguous))
+    _log_menu(state, status, f)
     return 0 if f is not None and status == 200 else 1
 
 
 def run_feedback(args, state, send, out=print) -> int:
     token = oauth.valid_token(state, send=send)
     status, f = fetch_menu(args, state, send, token)
+    _log_menu(state, status, f)
     out(json.dumps(_findings_line(status, f)))
     if f is None or status != 200:
         return 1
@@ -158,11 +165,16 @@ def run_feedback(args, state, send, out=print) -> int:
     body = {"context": innertube.context("tv"), "feedbackTokens": [feedback_token]}
     fstatus, reply = innertube.post("feedback", body, token=token, send=send)
     summary = {"sent": True, "kind": args.kind, "status": fstatus, "json": reply is not None}
+    processed = None  # False when YouTube says a feedback was not processed; None when it says nothing
     if reply is not None:
         summary["keys"] = sorted(reply.keys())
         responses = reply.get("feedbackResponses")
         if isinstance(responses, list):
             summary["is_processed"] = [r.get("isProcessed") if isinstance(r, dict) else None for r in responses]
+            flags = [r.get("isProcessed") for r in responses if isinstance(r, dict) and "isProcessed" in r]
+            if flags:
+                processed = all(x is True for x in flags)
     out(json.dumps(summary))
-    state.log("feedback", kind=args.kind, status=fstatus, error=bool(reply and "error" in reply))
+    state.log("feedback", kind=args.kind, status=fstatus, error=bool(reply and "error" in reply),
+              json=reply is not None, is_processed=processed)
     return 0 if fstatus == 200 else 1

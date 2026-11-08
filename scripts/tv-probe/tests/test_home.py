@@ -309,6 +309,24 @@ class HomeCommandTests(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertEqual(self.calls, [])
 
+    def _try_row(self, argv, replies):
+        self.run_cli(argv, self.fake(replies))
+        text = (self.state.root / "log.jsonl").read_text()
+        return [json.loads(l) for l in text.splitlines() if '"home_try"' in l][0]
+
+    def test_the_try_records_that_the_continuation_worked(self):
+        row = self._try_row(["home", "--pages", "2"], [load("home_mixed.json"),
+                                                        load("home_section_continuation.json")])
+        self.assertEqual((row["pages_fetched"], row["continuation_ok"]), (2, True))
+
+    def test_a_single_page_try_has_no_working_continuation(self):
+        row = self._try_row(["home", "--pages", "1"], [load("home_mixed.json")])
+        self.assertEqual((row["pages_fetched"], row["continuation_ok"]), (1, False))
+
+    def test_a_failing_continuation_is_not_ok(self):
+        row = self._try_row(["home", "--pages", "2"], [load("home_mixed.json"), {"error": {"code": 400}}])
+        self.assertIs(row["continuation_ok"], False)
+
     def test_the_log_holds_counts_not_secrets(self):
         self.run_cli(["home", "--pages", "1"], self.fake([load("home_mixed.json")]))
         text = (self.state.root / "log.jsonl").read_text()

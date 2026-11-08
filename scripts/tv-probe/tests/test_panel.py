@@ -96,6 +96,12 @@ class CommandTests(unittest.TestCase):
         for secret in ("FAKEPARAMS", "FAKEACCESS", '"NI"', '"DR"'):
             self.assertNotIn(secret, out + err)
         self.assertIsNotNone(self.state.read_json("captures/panel-vidPLAIN001.json"))
+        event = self._events("menu")[-1]
+        self.assertEqual((event["status"], event["not_interested"], event["dont_recommend"]), (200, True, True))
+
+    def _events(self, name):
+        text = (self.state.root / "log.jsonl").read_text()
+        return [e for e in map(json.loads, text.splitlines()) if e["event"] == name]
 
     def test_menu_without_a_capture_of_the_video_fails_cleanly(self):
         code, out, err = self.run_cli(["menu", "--video", "vidNONE0001"], self.fake([]))
@@ -111,6 +117,15 @@ class CommandTests(unittest.TestCase):
         self.assertEqual(json.loads(self.calls[1][3])["feedbackTokens"], ["NI"])
         last = json.loads(out.strip().splitlines()[-1])
         self.assertEqual((last["status"], last["keys"], last["is_processed"]), (200, ["feedbackResponses"], [True]))
+        menu = self._events("menu")[-1]
+        self.assertEqual((menu["not_interested"], menu["dont_recommend"]), (True, True))
+        fb = self._events("feedback")[-1]
+        self.assertEqual((fb["status"], fb["json"], fb["error"], fb["is_processed"]), (200, True, False, True))
+
+    def test_feedback_log_records_an_unprocessed_reply(self):
+        replies = [(200, load("panel_menu.json")), (200, {"feedbackResponses": [{"isProcessed": False}]})]
+        self.run_cli(["feedback", "--video", "vidPLAIN001", "--kind", "not-interested"], self.fake(replies))
+        self.assertIs(self._events("feedback")[-1]["is_processed"], False)
 
     def test_dont_recommend_needs_the_matching_channel_id(self):
         for extra in ([], ["--confirm-channel", "UCwrongwrongwrongwrongxx"]):

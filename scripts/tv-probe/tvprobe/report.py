@@ -155,6 +155,7 @@ def run_report(args, state, send, out=print) -> int:
     if reply is None:
         out(json.dumps({"player_status": status, "json": False}))
         return 1
+    state.write_json("captures/player-%s.json" % args.video, reply)  # for `fixture --capture player-<id>`
     t = tracking_from_player(reply)
     out(json.dumps({"player_status": status, "playability": t.status, "sts": sts is not None, "ei": t.has_ei,
                     "vm": t.has_vm, "of": t.has_of, "playback_url": t.playback_url is not None,
@@ -192,6 +193,7 @@ def run_history(args, state, send, out=print) -> int:
     if reply is None or status != 200:
         out(json.dumps({"status": status, "json": reply is not None}))
         return 1
+    state.write_json("captures/history-%s.json" % args.video, reply)  # for `fixture --capture history-<id>`
     found, percent = history_has(reply, args.video)
     out(json.dumps({"found": found, "percent": percent}))
     state.log("history", video=args.video, status=status, found=found, percent=percent)

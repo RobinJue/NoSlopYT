@@ -5,8 +5,9 @@ import unittest
 from tvprobe.results import summarize
 
 
-def home(ok, ts):
-    return {"event": "home_try", "ts": ts, "try_passes": ok, "visible_unique": 12 if ok else 3}
+def home(ok, ts, continuation_ok=True):
+    return {"event": "home_try", "ts": ts, "try_passes": ok, "visible_unique": 12 if ok else 3,
+            "pages_fetched": 3 if continuation_ok else 1, "continuation_ok": continuation_ok}
 
 
 def variant_home(ok, ts, **flags):
@@ -27,7 +28,11 @@ def found(video, ts, ok=True):
 LOG_TWO_HOME_PASSES_OF_THREE = [home(True, 1), home(False, 2), home(True, 3)]
 LOG_THREE_REPORTS_FOUND = [report("a", 100), found("a", 220), report("b", 300), found("b", 330),
                            report("c", 400), found("c", 600)]
-LOG_FEEDBACK_OK = [{"event": "feedback", "ts": 700, "kind": "not-interested", "status": 200}]
+MENU_BOTH = {"event": "menu", "ts": 690, "status": 200, "not_interested": True, "dont_recommend": True,
+             "ambiguous": False}
+FEEDBACK_OK = {"event": "feedback", "ts": 700, "kind": "not-interested", "status": 200, "json": True,
+               "error": False, "is_processed": True}
+LOG_FEEDBACK_OK = [MENU_BOTH, FEEDBACK_OK]
 
 
 class SummaryTests(unittest.TestCase):
@@ -40,6 +45,18 @@ class SummaryTests(unittest.TestCase):
     def test_one_home_pass_fails(self):
         text = summarize([home(True, 1), home(False, 2), home(False, 3)])
         self.assertIn("Home: fail (1 of 3 tries)", text)
+
+    def test_two_of_four_default_tries_pass(self):
+        text = summarize([home(True, 1), home(False, 2), home(False, 3), home(True, 4)])
+        self.assertIn("Home: pass (2 of 4 tries)", text)
+
+    def test_a_try_without_a_working_continuation_does_not_count(self):
+        log = [home(True, 1, continuation_ok=False), home(True, 2, continuation_ok=False), home(True, 3)]
+        self.assertIn("Home: fail (1 of 3 tries)", summarize(log))
+
+    def test_a_try_logged_without_continuation_info_does_not_count(self):
+        old = {"event": "home_try", "ts": 1, "try_passes": True, "visible_unique": 12}
+        self.assertIn("Home: fail (0 of 1 tries)", summarize([old]))
 
     def test_variant_home_tries_do_not_count_towards_the_rule(self):
         log = [variant_home(True, i) for i in (1, 2, 3)] + [
@@ -85,8 +102,21 @@ class SummaryTests(unittest.TestCase):
         self.assertIn("auth on pings off", text)
 
     def test_feedback_with_an_error_or_non_200_fails(self):
-        self.assertIn("Card actions: fail", summarize([{"event": "feedback", "status": 400}]))
-        self.assertIn("Card actions: fail", summarize([{"event": "feedback", "status": 200, "error": True}]))
+        for change in ({"status": 400}, {"error": True}, {"json": False}, {"is_processed": False}):
+            fb = dict(FEEDBACK_OK, **change)
+            self.assertIn("Card actions: fail", summarize([MENU_BOTH, fb]), change)
+
+    def test_a_menu_missing_either_action_fails_the_card_rule(self):
+        for change in ({"not_interested": False}, {"dont_recommend": False}, {"status": 500}):
+            menu = dict(MENU_BOTH, **change)
+            self.assertIn("Card actions: fail", summarize([menu, FEEDBACK_OK]), change)
+
+    def test_feedback_without_any_menu_event_fails(self):
+        self.assertIn("Card actions: fail", summarize([FEEDBACK_OK]))
+
+    def test_feedback_that_gave_no_is_processed_still_passes(self):
+        fb = dict(FEEDBACK_OK, is_processed=None)
+        self.assertIn("Card actions: pass", summarize([MENU_BOTH, fb]))
 
     def test_nothing_run_says_so(self):
         text = summarize([])

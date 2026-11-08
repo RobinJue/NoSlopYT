@@ -73,14 +73,29 @@ def _refresh(args, state, send) -> int:
 
 
 def _revoke(args, state, send) -> int:
-    tokens = oauth.load_tokens(state)
-    answered = []
-    for url in oauth.REVOKE_URLS:
-        if oauth.revoke(tokens, send=_only(send, url)):
-            answered.append(url)
-    state.log("revoke", answered=len(answered))
-    print("revoke answered 200 at: %s" % (", ".join(answered) if answered else "none"))
-    state.wipe()
+    try:
+        try:
+            tokens = oauth.load_tokens(state)
+        except (oauth.SignInError, KeyError, TypeError, ValueError):
+            tokens = None  # never signed in, code not approved, or a damaged file: still wipe below
+        if tokens is None:
+            print("no tokens to revoke")
+        else:
+            answered = []
+            for url in oauth.REVOKE_URLS:
+                if oauth.revoke(tokens, send=_only(send, url)):
+                    answered.append(url)
+            state.log("revoke", answered=len(answered))
+            print("revoke answered 200 at: %s" % (", ".join(answered) if answered else "none"))
+    finally:
+        try:
+            state.wipe()
+            gone = not state.root.exists()
+        except (OSError, ValueError) as e:
+            print("state folder NOT removed: %s" % safe_message(str(e)), file=sys.stderr)
+            gone = False
+    if not gone:
+        return 1
     print("state folder removed")
     return 0
 

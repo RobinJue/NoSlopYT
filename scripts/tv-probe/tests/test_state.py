@@ -47,6 +47,41 @@ class StateTests(unittest.TestCase):
         st.wipe()
         self.assertFalse(st.root.exists())
 
+    def test_wipe_refuses_a_folder_without_the_probe_marker(self):
+        root = Path(self.tmp) / "other"
+        root.mkdir()
+        (root / "mine.txt").write_text("keep")
+        with self.assertRaises(ValueError):
+            State(root).wipe()
+        self.assertTrue((root / "mine.txt").exists())
+
+    def test_wipe_refuses_a_symlink(self):
+        real = Path(self.tmp) / "real"
+        st = State(real)
+        st.write_json("tokens.json", {})
+        link = Path(self.tmp) / "link"
+        link.symlink_to(real)
+        with self.assertRaises(ValueError):
+            State(link).wipe()
+        self.assertTrue((real / "tokens.json").exists())
+
+    def test_wipe_raises_when_the_folder_is_still_there(self):
+        st = State(Path(self.tmp) / "p")
+        st.write_json("tokens.json", {})
+        with mock.patch("tvprobe.state.shutil.rmtree"):
+            with self.assertRaises(OSError):
+                st.wipe()
+
+    def test_wipe_of_a_missing_folder_is_fine(self):
+        State(Path(self.tmp) / "never").wipe()
+
+    def test_writing_into_a_foreign_non_empty_folder_is_refused(self):
+        root = Path(self.tmp) / "home"
+        root.mkdir()
+        (root / "mine.txt").write_text("keep")
+        with self.assertRaises(ValueError):
+            State(root).write_json("tokens.json", {})
+
     def test_names_cannot_escape_the_folder(self):
         st = State(Path(self.tmp) / "p")
         with self.assertRaises(ValueError):

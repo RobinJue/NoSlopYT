@@ -17,14 +17,22 @@ def default_root() -> Path:
     return Path.home() / ".noslop-tv-probe"
 
 
+MARKER = ".noslop-probe"  # wipe() deletes only a folder that holds this file
+
+
 class State:
     def __init__(self, root: Path):
         self.root = Path(root)
 
     def _ensure_root(self) -> None:
+        marker = self.root / MARKER
         if not self.root.exists():
             os.makedirs(self.root, mode=0o700, exist_ok=True)
+        elif not marker.exists() and any(self.root.iterdir()):
+            raise ValueError("%s exists and is not a probe state folder; point NOSLOP_PROBE_DIR elsewhere" % self.root)
         os.chmod(self.root, 0o700)
+        if not marker.exists():
+            os.close(os.open(str(marker), os.O_WRONLY | os.O_CREAT, 0o600))
 
     def path(self, name: str) -> Path:
         p = Path(name)
@@ -71,4 +79,13 @@ class State:
         os.chmod(target, 0o600)
 
     def wipe(self) -> None:
+        """Delete the state folder. Raises when it is not a probe folder or is still there afterwards."""
+        if self.root.is_symlink():
+            raise ValueError("the state folder is a symlink; refusing to wipe it")
+        if not self.root.exists():
+            return
+        if not (self.root / MARKER).is_file():
+            raise ValueError("the folder is not a probe state folder (no %s); refusing to wipe it" % MARKER)
         shutil.rmtree(self.root, ignore_errors=True)
+        if self.root.exists():
+            raise OSError("the state folder could not be fully removed: %s" % self.root)

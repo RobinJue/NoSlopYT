@@ -19,4 +19,8 @@ Tests: `/usr/bin/python3 -I -m unittest discover -s scripts/tv-probe/tests -t sc
 
 Commands added last: `next --video ID` (signed and anonymous Up next, counts and overlap), `fixture --capture NAME --out PATH
 [--hide-titles]` (scrubbed copy of a capture; exit 2 and nothing written when the leak check finds anything), `results`
-(Markdown pass-rule summary from `log.jsonl`: Home 2 of 3 tries, Reporting 3 of 3 videos within 5 minutes, Card actions).
+(Markdown pass-rule summary from `log.jsonl`: Home 2 of 3 tries, each with 8 visible videos and a working continuation; Reporting 3 of 3 videos within 5 minutes; Card actions needs a menu with both Not interested and Don't recommend and an accepted feedback call).
+
+Capture names for `fixture --capture`: `<home --capture NAME>-1`, `-2`, `-shelf`; `panel-<videoId>` (menu, feedback); `player-<videoId>` (report); `history-<videoId>` (history); `next-signed`, `next-anon` (next).
+
+`revoke` revokes the tokens when there are any, then always wipes the state folder, and exits 1 if it could not. It only deletes a folder holding the probe's own `.noslop-probe` marker and never follows a symlink.

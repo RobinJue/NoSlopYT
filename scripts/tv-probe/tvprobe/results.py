@@ -27,8 +27,9 @@ def _home(log: List[dict]) -> List[str]:
              for e in variants]
     if not default:
         return ["Home: not run (no default tries)"] + extra
-    passed = sum(1 for e in default if e.get("try_passes") is True)
-    ok = passed >= HOME_TRIES_NEEDED and passed * 3 >= len(default) * 2
+    # a try counts only when page 1 was signed in with 8 visible videos AND the continuation worked
+    passed = sum(1 for e in default if e.get("try_passes") is True and e.get("continuation_ok") is True)
+    ok = passed >= HOME_TRIES_NEEDED
     lines = ["Home: %s (%d of %d tries)" % ("pass" if ok else "fail", passed, len(default))]
     best = max((e.get("visible_unique") or 0) for e in default)
     lines.append("- most visible videos in one try: %d (needs 8 within 3 pages)" % best)
@@ -82,9 +83,17 @@ def _cards(log: List[dict]) -> List[str]:
     sent = [e for e in log if e.get("event") == "feedback"]
     if not sent:
         return ["Card actions: not run"]
-    ok = any(e.get("status") == 200 and not e.get("error") for e in sent)
-    return ["Card actions: %s (%d feedback call%s)" % ("pass" if ok else "fail", len(sent),
-                                                       "" if len(sent) == 1 else "s")]
+    menu_ok = any(e.get("event") == "menu" and e.get("status") == 200 and e.get("not_interested") is True
+                  and e.get("dont_recommend") is True for e in log)
+    fed_ok = any(e.get("status") == 200 and e.get("json") is True and not e.get("error")
+                 and e.get("is_processed") is not False for e in sent)
+    lines = ["Card actions: %s (%d feedback call%s)" % ("pass" if menu_ok and fed_ok else "fail", len(sent),
+                                                        "" if len(sent) == 1 else "s")]
+    if not menu_ok:
+        lines.append("- no menu showed both Not interested and Don't recommend")
+    if not fed_ok:
+        lines.append("- no feedback call was accepted (200, JSON, no error, not unprocessed)")
+    return lines
 
 
 def _next(log: List[dict]) -> List[str]:

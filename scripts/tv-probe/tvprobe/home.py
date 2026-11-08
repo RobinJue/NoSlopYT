@@ -360,6 +360,9 @@ def run_home(args, state, send, out=print) -> int:
         next_token = page.section_continuation
     passed, count = home_try_passes(pages)
     out(json.dumps({"try_passes": passed, "visible_unique": count}))
-    state.log("home_try", try_passes=passed, visible_unique=count, browse_id=args.browse_id, host=args.host,
+    later = pages[1] if len(pages) > 1 else None  # a working continuation: page 2 came back 200 with content
+    continuation_ok = later is not None and (bool(later.tiles) or later.section_continuation is not None)
+    state.log("home_try", try_passes=passed, visible_unique=count, pages_fetched=len(pages),
+              continuation_ok=continuation_ok, browse_id=args.browse_id, host=args.host,
               context=args.context, policy=args.visitor)  # "visitor" itself is a forbidden log field name
     return 0

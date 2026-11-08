@@ -6,6 +6,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import probe
 from tvprobe import http
@@ -254,6 +255,40 @@ class CliTests(unittest.TestCase):
             c, out, err = self.run_cli(["revoke"], send, st)
             self.assertEqual(c, 0, err)
             self.assertFalse(st.root.exists())
+
+    def test_revoke_without_tokens_still_wipes_the_folder(self):
+        with tempfile.TemporaryDirectory() as td:
+            st = State(Path(td) / "s")
+            st.write_json("client.json", {"client_id": "ID1", "client_secret": "SEC1"})
+            st.write_json("device.json", {"device_code": "DEVSECRET"})
+            calls = []
+
+            def send(method, url, **kw):
+                calls.append(url)
+                return http.Response(200, {}, b"")
+            c, out, err = self.run_cli(["revoke"], send, st)
+            self.assertEqual(c, 0, err)
+            self.assertIn("no tokens to revoke", out)
+            self.assertEqual(calls, [])
+            self.assertFalse(st.root.exists())
+
+    def test_revoke_with_malformed_tokens_still_wipes_the_folder(self):
+        with tempfile.TemporaryDirectory() as td:
+            st = State(Path(td) / "s")
+            st.write_json("tokens.json", {"access_token": "x"})
+            c, out, err = self.run_cli(["revoke"], lambda m, u, **kw: http.Response(200, {}, b""), st)
+            self.assertEqual(c, 0, err)
+            self.assertFalse(st.root.exists())
+
+    def test_revoke_fails_loudly_when_the_folder_cannot_be_removed(self):
+        with tempfile.TemporaryDirectory() as td:
+            st = State(Path(td) / "s")
+            st.write_json("client.json", {"client_id": "ID1", "client_secret": "SEC1"})
+            with mock.patch("tvprobe.state.shutil.rmtree"):
+                c, out, err = self.run_cli(["revoke"], lambda m, u, **kw: http.Response(200, {}, b""), st)
+            self.assertNotEqual(c, 0)
+            self.assertNotIn("state folder removed", out)
+            self.assertTrue(st.root.exists())
 
     def test_second_start_keeps_the_device_id(self):
         with tempfile.TemporaryDirectory() as td:
