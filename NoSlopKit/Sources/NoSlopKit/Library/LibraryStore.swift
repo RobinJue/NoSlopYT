@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import Synchronization
 
 /// Everything the user keeps on the device: subscriptions, watch history with progress, Watch Later,
 /// local playlists and recent searches.
@@ -12,6 +13,12 @@ import Observation
 /// If only some entries of a list cannot be read, the others are kept and written back to a clean file at once (the
 /// original, damaged entries included, still goes to `.corrupt`).
 ///
+/// A file that exists but cannot be read (the phone was restarted and not unlocked yet: iOS can start the app in the
+/// background for a finished download before that) is not decoded, not moved aside and not written to; that collection
+/// starts empty. `reloadIfUnreadable()` reads those files again once they can be read (the app calls it when the
+/// protected data becomes available and when it becomes active) and merges what changed in memory meanwhile into what is
+/// on disk; until then the changes live in memory only, and a launch that ends before it loses them.
+///
 /// ## What is kept of a video
 /// A video is stored as it was when it was saved (Watch Later, a playlist) or watched (the history), minus what was
 /// only true on that day: the relative age becomes a date, a stream that was live or a premiere that was upcoming is
@@ -23,6 +30,11 @@ import Observation
 /// when the app goes to the background. `flushNow()` does the same without an `await`, blocking the caller for a
 /// moment, for the one place where nothing can be awaited: the notice that the process is about to end. A process that
 /// is killed without any notice loses the changes of the last half second.
+///
+/// A write that fails (the disk is full) is not forgotten: the collection stays marked as changed, is written again
+/// with the next write or flush, and meanwhile on a timer with a growing pause (`retryDelay`, doubling up to a minute).
+/// A collection whose file was refused as unreadable is not retried on the timer (that lasts until
+/// `reloadIfUnreadable()` has read it), but it stays marked, so `flush()` and `flushNow()` say it is not on disk.
 @MainActor
 @Observable
 public final class LibraryStore {
@@ -52,6 +64,16 @@ public final class LibraryStore {
     @ObservationIgnored private var dirty: Set<LibraryFile> = []
     @ObservationIgnored private var timer: Task<Void, Never>?
     @ObservationIgnored private var timerGeneration = 0
+    /// The pending timer is a pause before trying a failed write again, not the usual delay after a change.
+    @ObservationIgnored private var timerIsRetry = false
+    /// Failed writes in a row since the last good one; the pause before the next try grows with it.
+    @ObservationIgnored private var failedRounds = 0
+    @ObservationIgnored private let retryDelay: Duration
+    /// What the background writes report to the main actor, without the main actor: `flushNow` waits for them on the
+    /// main thread, so they must never need it before they are counted as finished.
+    @ObservationIgnored private let writeOutcomes = WriteLog()
+    /// The files that came back unreadable when they were read (see `reloadIfUnreadable`).
+    @ObservationIgnored private var unreadable: Set<LibraryFile> = []
     /// The most recent background write; each new write waits for the one before it.
     @ObservationIgnored private var lastWrite: Task<Void, Never>?
     /// The background writes that were started and have not finished. `flushNow` waits on it; nothing else does.
@@ -69,11 +91,13 @@ public final class LibraryStore {
         directory: URL,
         saveDelay: Duration,
         now: @escaping @Sendable () -> Date,
-        beforeWrite: (@Sendable () -> Void)? = nil
+        beforeWrite: (@Sendable () -> Void)? = nil,
+        retryDelay: Duration = .seconds(5)
     ) {
         let files = JSONFileStore(directory: directory)
         self.files = files
         self.saveDelay = saveDelay
+        self.retryDelay = retryDelay
         self.now = now
         self.beforeWrite = beforeWrite
 
@@ -98,6 +122,103 @@ public final class LibraryStore {
                 return playlist
             }
         searchHistory = Self.cleaned(files.loadList(LibraryFile.searchHistory.rawValue))
+        unreadable = Set(LibraryFile.allCases.filter { files.isUnreadable($0.rawValue) })
+    }
+
+    // MARK: Files that could not be read
+
+    /// Whether some file came back unreadable at launch and has not been read since.
+    public var hasUnreadableFiles: Bool { !unreadable.isEmpty }
+
+    /// Reads again the files that could not be read at launch, now that they may be: the device has been unlocked.
+    /// Does nothing (and is cheap) when every file was read.
+    ///
+    /// What was changed in memory meanwhile is newer than the file and is kept: subscriptions, Watch Later and playlists
+    /// are merged by id with the memory's entries first; for a video in both histories the newer entry wins (the
+    /// stored duration is kept when the newer one has none); the searches of memory come before the stored ones. A merged
+    /// collection that had content in memory is marked as changed, so the merge is written. A file that still cannot be
+    /// read stays as it is and is tried again at the next call.
+    public func reloadIfUnreadable() {
+        for file in LibraryFile.allCases where unreadable.contains(file) {
+            switch file {
+            case .subscriptions:
+                let stored = Self.unique(files.loadList(file.rawValue) as [SubscribedChannel], by: \.id)
+                guard !files.isUnreadable(file.rawValue) else { continue }
+                let known = Set(subscriptions.map(\.id))
+                let added = stored.filter { !known.contains($0.id) }
+                let hadContent = !subscriptions.isEmpty
+                subscriptions += added
+                if !added.isEmpty { subscriptionRevision += 1 }
+                if hadContent { markDirty(file) }
+            case .history:
+                let stored = Self.unique(files.loadList(file.rawValue) as [HistoryEntry], by: \.id).map { entry in
+                    var entry = entry
+                    entry.video = entry.video.forLibrary(savedAt: entry.lastWatchedAt)
+                    return entry
+                }
+                guard !files.isUnreadable(file.rawValue) else { continue }
+                let hadContent = !history.isEmpty
+                mergeHistory(stored)
+                if hadContent { markDirty(file) }
+            case .watchLater:
+                let stored = Self.unique(files.loadList(file.rawValue) as [VideoSummary], by: \.id)
+                guard !files.isUnreadable(file.rawValue) else { continue }
+                let known = Set(watchLater.map(\.id))
+                let hadContent = !watchLater.isEmpty
+                watchLater += stored.filter { !known.contains($0.id) }.map { $0.forLibrary(savedAt: nil) }
+                if hadContent { markDirty(file) }
+            case .playlists:
+                let stored = Self.unique(files.loadList(file.rawValue) as [LocalPlaylist], by: \.id)
+                guard !files.isUnreadable(file.rawValue) else { continue }
+                let known = Set(playlists.map(\.id))
+                let hadContent = !playlists.isEmpty
+                playlists += stored.filter { !known.contains($0.id) }.map { playlist in
+                    var playlist = playlist
+                    playlist.videos = playlist.videos.map { $0.forLibrary(savedAt: nil) }
+                    return playlist
+                }
+                if hadContent { markDirty(file) }
+            case .searchHistory:
+                let stored: [String] = files.loadList(file.rawValue)
+                guard !files.isUnreadable(file.rawValue) else { continue }
+                let hadContent = !searchHistory.isEmpty
+                searchHistory = Self.cleaned(searchHistory + stored)
+                if hadContent { markDirty(file) }
+            }
+            unreadable.remove(file)
+        }
+    }
+
+    /// Merges the stored history into the one in memory: one entry per video, the newer one (the memory's on a tie)
+    /// with the duration of the other when it has none, most recent first, at most 5000.
+    private func mergeHistory(_ stored: [HistoryEntry]) {
+        guard !history.isEmpty else {
+            history = Array(stored.prefix(Self.historyLimit))
+            historyByID = Dictionary(history.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+            return
+        }
+        var best = historyByID
+        for entry in stored {
+            guard var current = best[entry.id] else {
+                best[entry.id] = entry
+                continue
+            }
+            if entry.lastWatchedAt > current.lastWatchedAt {
+                var newer = entry
+                newer.durationSeconds = newer.durationSeconds ?? current.durationSeconds
+                best[entry.id] = newer
+            } else if current.durationSeconds == nil, let duration = entry.durationSeconds {
+                current.durationSeconds = duration
+                best[entry.id] = current
+            }
+        }
+        // Memory first, then the stored entries that memory did not have; a stable sort keeps that order among equal dates.
+        let order = history.map(\.id) + stored.map(\.id).filter { historyByID[$0] == nil }
+        let merged = order.compactMap { best[$0] }.enumerated()
+            .sorted { ($0.element.lastWatchedAt, $1.offset) > ($1.element.lastWatchedAt, $0.offset) }
+            .map(\.element)
+        history = Array(merged.prefix(Self.historyLimit))
+        historyByID = Dictionary(history.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
     }
 
     // MARK: Subscriptions
@@ -358,13 +479,17 @@ public final class LibraryStore {
 
     // MARK: Persistence
 
-    /// Writes everything that changed and returns once it (and every earlier write) is on disk.
-    public func flush() async {
-        timerGeneration += 1
-        timer?.cancel()
-        timer = nil
+    /// Writes everything that changed and returns once that write (and every earlier one) has finished.
+    ///
+    /// - Returns: whether everything that changed is on disk. False when a write failed (the disk is full) or a file was
+    ///   refused as unreadable; the collection stays marked as changed and is tried again (see the type's documentation).
+    @discardableResult
+    public func flush() async -> Bool {
+        cancelTimer()
         startWrite()
         await lastWrite?.value
+        reclaimFailedWrites()
+        return dirty.isEmpty
     }
 
     /// Writes everything that changed, on the calling thread, and returns once it is on disk. For the last moment of the
@@ -377,42 +502,78 @@ public final class LibraryStore {
     /// time (the disk hangs) nothing is written, and the call returns false: the changes stay marked as changed. The
     /// wait cannot deadlock, because the background writes never need the main actor.
     ///
+    /// A write that failed earlier in the background is tried again here. A collection whose write fails (or is refused)
+    /// stays marked as changed.
+    ///
     /// - Returns: whether everything that changed is on disk.
     @discardableResult
     public func flushNow(timeout: TimeInterval = 2) -> Bool {
-        timerGeneration += 1
-        timer?.cancel()
-        timer = nil
+        cancelTimer()
         guard writesInFlight.wait(timeout: .now() + timeout) == .success else { return false }
         // Nothing runs in the background now, and nothing can start one: starting is the main actor's, and this is it.
+        reclaimFailedWrites()
         let snapshots = dirty.map { snapshot(of: $0) }
         dirty.removeAll()
-        for snapshot in snapshots {
-            snapshot.write(to: files)
+        var allWritten = true
+        for snapshot in snapshots where !snapshot.write(to: files) {
+            dirty.insert(snapshot.file)
+            allWritten = false
         }
-        return true
+        return allWritten
     }
 
     private func markDirty(_ file: LibraryFile) {
         dirty.insert(file)
-        guard timer == nil else { return }
+        // A pause before trying a failed write again does not hold up a change the viewer just made.
+        guard timer == nil || timerIsRetry else { return }
+        armTimer(after: saveDelay, isRetry: false)
+    }
+
+    private func armTimer(after delay: Duration, isRetry: Bool) {
+        timer?.cancel()
         timerGeneration += 1
+        timerIsRetry = isRetry
         let generation = timerGeneration
-        timer = Task { [weak self, saveDelay] in
-            do { try await Task.sleep(for: saveDelay) } catch { return }
+        timer = Task { [weak self] in
+            do { try await Task.sleep(for: delay) } catch { return }
             self?.timerFired(generation)
         }
+    }
+
+    private func cancelTimer() {
+        timerGeneration += 1
+        timer?.cancel()
+        timer = nil
+        timerIsRetry = false
     }
 
     private func timerFired(_ generation: Int) {
         // A flush (or a newer timer) has taken over since this timer was started.
         guard generation == timerGeneration else { return }
         timer = nil
+        timerIsRetry = false
         startWrite()
+    }
+
+    /// Marks again as changed the collections whose write failed or was refused in the background, and arms the timer
+    /// for a new try with a pause that doubles from `retryDelay` up to a minute and starts over after a good write. A
+    /// refused file is not tried on the timer: it is unreadable until `reloadIfUnreadable` has read it.
+    private func reclaimFailedWrites() {
+        let outcome = writeOutcomes.take()
+        guard !outcome.failed.isEmpty else {
+            if outcome.cleanWrites > 0 { failedRounds = 0 }
+            return
+        }
+        dirty.formUnion(outcome.failed)
+        guard outcome.failed.contains(where: { !files.isUnreadable($0.rawValue) }), timer == nil else { return }
+        let pause = min(retryDelay * (1 << min(failedRounds, 10)), .seconds(60))
+        failedRounds += 1
+        armTimer(after: pause, isRetry: true)
     }
 
     /// Takes a copy of every collection that changed and writes the copies in the background, after the previous write.
     private func startWrite() {
+        reclaimFailedWrites()
         guard !dirty.isEmpty else { return }
         let snapshots = dirty.map { snapshot(of: $0) }
         dirty.removeAll()
@@ -420,15 +581,29 @@ public final class LibraryStore {
         let files = files
         let beforeWrite = beforeWrite
         let writesInFlight = writesInFlight
+        let outcomes = writeOutcomes
         writesInFlight.enter()
-        lastWrite = Task.detached(priority: .utility) {
-            defer { writesInFlight.leave() }
+        lastWrite = Task.detached(priority: .utility) { [weak self] in
             await previous?.value
             beforeWrite?()
-            for snapshot in snapshots {
-                snapshot.write(to: files)
+            var failed: Set<LibraryFile> = []
+            for snapshot in snapshots where !snapshot.write(to: files) {
+                failed.insert(snapshot.file)
+            }
+            outcomes.record(failed: failed)
+            // Finished as far as `flushNow` (which waits for this on the main thread) is concerned. Nothing above or
+            // below needs the main actor before this point.
+            writesInFlight.leave()
+            if !failed.isEmpty {
+                // Not awaited by anyone: a later write waits for this task, and must not wait for the main actor.
+                Task { @MainActor [weak self] in self?.writesFailed() }
             }
         }
+    }
+
+    /// A background write reported a failure: the collection is marked as changed again and a new try is scheduled.
+    private func writesFailed() {
+        reclaimFailedWrites()
     }
 
     private func snapshot(of file: LibraryFile) -> Snapshot {
@@ -470,7 +645,7 @@ public final class LibraryStore {
 // MARK: - Files
 
 /// The files of a `LibraryStore`, named as on disk.
-private enum LibraryFile: String, Sendable {
+private enum LibraryFile: String, Sendable, CaseIterable {
     case subscriptions = "subscriptions.json"
     case history = "history.json"
     case watchLater = "watch-later.json"
@@ -479,6 +654,36 @@ private enum LibraryFile: String, Sendable {
 }
 
 /// A copy of one collection, ready to be encoded and written away from the main actor.
+private struct WriteOutcomes: Sendable {
+    /// The collections whose last background write failed or was refused, not yet taken back by the main actor.
+    var failed: Set<LibraryFile> = []
+    /// Background writes that wrote everything they had since the main actor last looked.
+    var cleanWrites = 0
+}
+
+/// What the background writes report: kept under a lock so that reporting never needs the main actor.
+private final class WriteLog: Sendable {
+    private let outcomes = Mutex(WriteOutcomes())
+
+    func record(failed: Set<LibraryFile>) {
+        outcomes.withLock { outcomes in
+            if failed.isEmpty {
+                outcomes.cleanWrites += 1
+            } else {
+                outcomes.failed.formUnion(failed)
+            }
+        }
+    }
+
+    /// What was reported since the last call.
+    func take() -> WriteOutcomes {
+        outcomes.withLock { outcomes in
+            defer { outcomes = WriteOutcomes() }
+            return outcomes
+        }
+    }
+}
+
 private enum Snapshot: Sendable {
     case subscriptions([SubscribedChannel])
     case history([HistoryEntry])
@@ -486,13 +691,24 @@ private enum Snapshot: Sendable {
     case playlists([LocalPlaylist])
     case searchHistory([String])
 
-    func write(to store: JSONFileStore) {
+    var file: LibraryFile {
         switch self {
-        case .subscriptions(let value): store.save(value, to: LibraryFile.subscriptions.rawValue)
-        case .history(let value): store.save(value, to: LibraryFile.history.rawValue)
-        case .watchLater(let value): store.save(value, to: LibraryFile.watchLater.rawValue)
-        case .playlists(let value): store.save(value, to: LibraryFile.playlists.rawValue)
-        case .searchHistory(let value): store.save(value, to: LibraryFile.searchHistory.rawValue)
+        case .subscriptions: .subscriptions
+        case .history: .history
+        case .watchLater: .watchLater
+        case .playlists: .playlists
+        case .searchHistory: .searchHistory
+        }
+    }
+
+    /// Whether the content is on disk afterwards.
+    func write(to store: JSONFileStore) -> Bool {
+        switch self {
+        case .subscriptions(let value): store.save(value, to: file.rawValue)
+        case .history(let value): store.save(value, to: file.rawValue)
+        case .watchLater(let value): store.save(value, to: file.rawValue)
+        case .playlists(let value): store.save(value, to: file.rawValue)
+        case .searchHistory(let value): store.save(value, to: file.rawValue)
         }
     }
 }
