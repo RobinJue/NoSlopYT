@@ -416,13 +416,19 @@ private struct WatchDetailsContent: View {
                 isShowingComments = true
             } label: {
                 VStack(alignment: .leading, spacing: 10) {
+                    // At accessibility sizes the count goes under "Comments" instead of squeezing it into "Com-ments".
+                    let layout = dynamicTypeSize.isAccessibilitySize
+                        ? AnyLayout(VStackLayout(alignment: .leading, spacing: 2))
+                        : AnyLayout(HStackLayout(spacing: 6))
                     HStack(spacing: 6) {
-                        Text("Comments")
-                            .font(.subheadline.weight(.semibold))
-                        if let count = details.commentCountText, !count.isEmpty {
-                            Text(count)
-                                .font(.subheadline)
-                                .foregroundStyle(.secondary)
+                        layout {
+                            Text("Comments")
+                                .font(.subheadline.weight(.semibold))
+                            if let count = details.commentCountText, !count.isEmpty {
+                                Text(count)
+                                    .font(.subheadline)
+                                    .foregroundStyle(.secondary)
+                            }
                         }
                         Spacer(minLength: 0)
                         Image(systemName: "chevron.right")

@@ -14,23 +14,41 @@ struct VideoCardView: View {
 
     @Environment(AppEnvironment.self) private var env
     @Environment(\.videoCardLayout) private var layout
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        // At accessibility text sizes the title may take 4 lines and the subtitle wraps: the channel on its own line,
+        // then views and age, as in `VideoRowView`. A card is as tall as its text, so cards in a grid row line up
+        // at the top and never overlap.
+        let large = dynamicTypeSize.isAccessibilitySize
+        return VStack(alignment: .leading, spacing: 10) {
             ThumbnailView(video: video)
                 .clipShape(RoundedRectangle(cornerRadius: layout == .inset ? Theme.cornerRadius : 0, style: .continuous))
 
             HStack(alignment: .top, spacing: Theme.padding) {
                 avatar
                 VStack(alignment: .leading, spacing: 2) {
-                    VideoTitleText(video: video, lineLimit: 2)
+                    VideoTitleText(video: video, lineLimit: large ? 4 : 2)
                         .font(.subheadline.weight(.medium))
                         .foregroundStyle(.primary)
                         .multilineTextAlignment(.leading)
-                    Text(Formatting.subtitle(for: video))
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
+                    if large {
+                        if let name = video.channel?.name, !name.isEmpty {
+                            Text(name)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        if let stats = Formatting.statsLine(for: video) {
+                            Text(stats)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    } else {
+                        Text(Formatting.subtitle(for: video))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
                 }
                 Spacer(minLength: 0)
             }

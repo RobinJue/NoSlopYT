@@ -65,6 +65,10 @@ struct ThumbnailView: View {
             .padding(.vertical, 2)
             .background(background, in: RoundedRectangle(cornerRadius: 4, style: .continuous))
             .padding(6)
+            // On a 160 pt thumbnail a badge at accessibility sizes would end in "1:19:...".
+            .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
+            .lineLimit(1)
+            .fixedSize()
     }
 
     @ViewBuilder

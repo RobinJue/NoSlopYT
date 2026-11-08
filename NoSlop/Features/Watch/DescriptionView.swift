@@ -37,7 +37,7 @@ struct DescriptionView: View {
             withAnimation(.snappy) { isExpanded = true }
         } label: {
             VStack(alignment: .leading, spacing: 6) {
-                Text(description.text)
+                Text(DescriptionPreview.collapsedText(description.text))
                     .font(.subheadline)
                     .foregroundStyle(.primary)
                     .lineLimit(3)
