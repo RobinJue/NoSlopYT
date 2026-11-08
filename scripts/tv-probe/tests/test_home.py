@@ -317,5 +317,11 @@ class HomeCommandTests(unittest.TestCase):
         self.assertIn("home_try", text)
 
 
+class ScrubbedFlagTests(unittest.TestCase):
+    def test_the_logged_in_flag_left_by_scrub_is_read(self):
+        self.assertIs(parse_home({"_loggedIn": True}).logged_in, True)
+        self.assertIs(parse_home({"_loggedIn": False}).logged_in, False)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import re
 import secrets
@@ -11,7 +12,7 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # -I does not add the script folder
 
-from tvprobe import home, http, oauth, panel, report  # noqa: E402
+from tvprobe import home, http, oauth, panel, report, results, scrub, upnext  # noqa: E402
 from tvprobe.state import State, default_root  # noqa: E402
 
 COMMANDS = ("signin", "refresh", "home", "menu", "feedback", "report", "history", "next", "fixture", "results",
@@ -93,11 +94,53 @@ def _only(send, url):
     return one
 
 
+_CAPTURE = re.compile(r"^[A-Za-z0-9_-]{1,60}$")
+
+
+def _mask(text: str) -> str:
+    return text[:3] + "***"
+
+
+def _fixture(args, state, send) -> int:
+    """Write a scrubbed, pretty copy of one capture, only when the leak check finds nothing."""
+    if not _CAPTURE.match(args.capture):
+        raise ValueError("--capture takes letters, digits, - and _ only")
+    raw = state.read_json("captures/%s.json" % args.capture)
+    if raw is None:
+        raise FileNotFoundError("no capture named %s" % args.capture)
+    text = json.dumps(scrub.scrub(raw, hide_titles=args.hide_titles), indent=2, ensure_ascii=False) + "\n"
+    found = scrub.leaks(text)
+    if found:
+        print("refused: %d possible leak%s: %s" % (len(found), "" if len(found) == 1 else "s",
+                                                   ", ".join(_mask(x) for x in found[:10])))
+        return 2
+    dest = os.path.abspath(args.out)
+    os.makedirs(os.path.dirname(dest), exist_ok=True)
+    with open(dest, "w") as f:
+        f.write(text)
+    print("wrote %s (%d bytes)" % (args.out, len(text)))
+    return 0
+
+
+def _results(args, state, send) -> int:
+    lines = []
+    path = state.path("log.jsonl")
+    if path.exists():
+        for raw in path.read_text().splitlines():
+            try:
+                lines.append(json.loads(raw))
+            except ValueError:
+                continue
+    print(results.summarize(lines), end="")
+    return 0
+
+
 # Later tasks replace entries: handler(args, state, send) -> int
 HANDLERS = {name: _not_implemented for name in COMMANDS}
 HANDLERS.update({"signin": _signin, "refresh": _refresh, "revoke": _revoke, "home": home.run_home,
                  "menu": panel.run_menu, "feedback": panel.run_feedback,
-                 "report": report.run_report, "history": report.run_history})
+                 "report": report.run_report, "history": report.run_history, "next": upnext.run_next,
+                 "fixture": _fixture, "results": _results})
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -124,6 +167,12 @@ def build_parser() -> argparse.ArgumentParser:
             p.add_argument("--auth-on-pings", choices=("on", "off"), default="on")
             p.add_argument("--delay", type=float, default=30)
             p.add_argument("--force", action="store_true")
+        if name == "next":
+            p.add_argument("--video", required=True)
+        if name == "fixture":
+            p.add_argument("--capture", required=True, metavar="NAME")
+            p.add_argument("--out", required=True, metavar="PATH")
+            p.add_argument("--hide-titles", action="store_true")
         if name == "feedback":
             p.add_argument("--kind", choices=("not-interested", "dont-recommend"), required=True)
             p.add_argument("--confirm-channel", metavar="ID")

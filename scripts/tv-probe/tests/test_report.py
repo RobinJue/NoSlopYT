@@ -176,6 +176,11 @@ class CliTests(unittest.TestCase):
         self.assertEqual(json.loads(out.strip().splitlines()[-1]), {"found": True, "percent": 50})
         self.assertNotIn("FAKE", out)
 
+    def test_history_log_names_the_video_for_the_results_summary(self):
+        run_cli(["history", "--video", "vidWATCHED1"], send=self.send, st=self.st)
+        lines = [json.loads(x) for x in (self.st.root / "log.jsonl").read_text().splitlines()]
+        self.assertEqual([e["video"] for e in lines if e["event"] == "history"], ["vidWATCHED1"])
+
 
 if __name__ == "__main__":
     unittest.main()

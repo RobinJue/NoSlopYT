@@ -164,5 +164,5 @@ def run_feedback(args, state, send, out=print) -> int:
         if isinstance(responses, list):
             summary["is_processed"] = [r.get("isProcessed") if isinstance(r, dict) else None for r in responses]
     out(json.dumps(summary))
-    state.log("feedback", kind=args.kind, status=fstatus)
+    state.log("feedback", kind=args.kind, status=fstatus, error=bool(reply and "error" in reply))
     return 0 if fstatus == 200 else 1

@@ -16,3 +16,7 @@ Run order (plan Task 7), with the owner:
 5. `revoke` and confirm the state folder is gone.
 
 Tests: `/usr/bin/python3 -I -m unittest discover -s scripts/tv-probe/tests -t scripts/tv-probe -v`
+
+Commands added last: `next --video ID` (signed and anonymous Up next, counts and overlap), `fixture --capture NAME --out PATH
+[--hide-titles]` (scrubbed copy of a capture; exit 2 and nothing written when the leak check finds anything), `results`
+(Markdown pass-rule summary from `log.jsonl`: Home 2 of 3 tries, Reporting 3 of 3 videos within 5 minutes, Card actions).

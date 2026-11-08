@@ -63,11 +63,9 @@ class CliSecretTests(unittest.TestCase):
         code, out, err = run_cli(["menu", "--video", "v1"], send=fake_500, handlers={"menu": handler})
         self.assertNotIn("SECRET", err)
 
-    def test_later_subcommands_exist_and_are_not_implemented_yet(self):
-        for sub in ("next", "fixture", "results"):
-            code, out, err = run_cli(sub.split(), send=fake_500)
-            self.assertEqual(code, 2, sub)
-            self.assertIn("not implemented", out + err)
+    def test_every_subcommand_is_implemented(self):
+        for name, handler in probe.HANDLERS.items():
+            self.assertIsNot(handler, probe._not_implemented, name)
 
 
 if __name__ == "__main__":

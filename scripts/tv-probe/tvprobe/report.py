@@ -175,7 +175,8 @@ def run_report(args, state, send, out=print) -> int:
     second = send("GET", ping_url(t.watchtime_url, kind="watchtime", docid=args.video, length=length, cpn=cpn,
                                   cmt=float(args.delay), st=0.0, et=float(args.delay)), headers=dict(headers))
     out(json.dumps({"playback_ping": first.status, "watchtime_ping": second.status}))
-    state.log("report_pings", playback=first.status, watchtime=second.status, auth=args.auth_on_pings)
+    state.log("report_pings", video=args.video, playback=first.status, watchtime=second.status,
+              auth=args.auth_on_pings, sts=args.sts)
     if not (200 <= first.status < 300 and 200 <= second.status < 300):
         return 1
     reported[args.video] = time.time()
@@ -193,5 +194,5 @@ def run_history(args, state, send, out=print) -> int:
         return 1
     found, percent = history_has(reply, args.video)
     out(json.dumps({"found": found, "percent": percent}))
-    state.log("history", status=status, found=found, percent=percent)
+    state.log("history", video=args.video, status=status, found=found, percent=percent)
     return 0

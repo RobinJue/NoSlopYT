@@ -1,0 +1,90 @@
+"""The results summary: each design pass rule, the tries behind it and the verdict."""
+from __future__ import annotations
+
+from typing import List
+
+WINDOW_SECONDS = 300
+HOME_TRIES_NEEDED = 2
+REPORTS_NEEDED = 3
+
+
+def _home(log: List[dict]) -> List[str]:
+    tries = [e for e in log if e.get("event") == "home_try"]
+    if not tries:
+        return ["Home: not run"]
+    passed = sum(1 for e in tries if e.get("try_passes") is True)
+    ok = passed >= HOME_TRIES_NEEDED and passed * 3 >= len(tries) * 2
+    lines = ["Home: %s (%d of %d tries)" % ("pass" if ok else "fail", passed, len(tries))]
+    best = max((e.get("visible_unique") or 0) for e in tries)
+    lines.append("- most visible videos in one try: %d (needs 8 within 3 pages)" % best)
+    return lines
+
+
+def _credited(report: dict, histories: List[dict]) -> bool:
+    for h in histories:
+        if h.get("found") is not True:
+            continue
+        same = report.get("video") is None or h.get("video") is None or report["video"] == h["video"]
+        delta = (h.get("ts") or 0) - (report.get("ts") or 0)
+        if same and 0 <= delta <= WINDOW_SECONDS:
+            return True
+    return False
+
+
+def _reporting(log: List[dict]) -> List[str]:
+    reports = sorted((e for e in log if e.get("event") in ("report_pings", "report")), key=lambda e: e.get("ts", 0))
+    histories = [e for e in log if e.get("event") == "history"]
+    if not reports:
+        return ["Reporting: not run"]
+
+    def sent(e: dict) -> bool:
+        return all(200 <= (e.get(k) if isinstance(e.get(k), int) else 200) < 300 for k in ("playback", "watchtime"))
+
+    verdict, extra, seen = [], [], set()
+    for r in reports:
+        if len(verdict) < REPORTS_NEEDED and r.get("video") not in seen:
+            seen.add(r.get("video"))
+            verdict.append(r)
+        else:
+            extra.append(r)
+    found = sum(1 for r in verdict if sent(r) and _credited(r, histories))
+    ok = len(verdict) >= REPORTS_NEEDED and found == len(verdict)
+    lines = ["Reporting: %s (%d of %d videos found in history within 5 minutes)" % (
+        "pass" if ok else "fail", found, len(verdict))]
+    for r in extra:
+        variant = []
+        if r.get("auth") == "off":
+            variant.append("auth on pings off")
+        if r.get("sts") == "off":
+            variant.append("sts off")
+        lines.append("- informational run (%s): %s" % (
+            ", ".join(variant) or "default", "found" if sent(r) and _credited(r, histories) else "not found"))
+    return lines
+
+
+def _cards(log: List[dict]) -> List[str]:
+    sent = [e for e in log if e.get("event") == "feedback"]
+    if not sent:
+        return ["Card actions: not run"]
+    ok = any(e.get("status") == 200 and not e.get("error") for e in sent)
+    return ["Card actions: %s (%d feedback call%s)" % ("pass" if ok else "fail", len(sent),
+                                                       "" if len(sent) == 1 else "s")]
+
+
+def _next(log: List[dict]) -> List[str]:
+    runs = [e for e in log if e.get("event") == "next"]
+    if not runs:
+        return ["Up next: not run"]
+    last = runs[-1]
+    return ["Up next (informational): signed status %s, logged in %s, %s%% of the signed list also in the "
+            "anonymous list" % (last.get("signed_status"), last.get("signed_logged_in"),
+                                round(100 * (last.get("overlap") or 0)))]
+
+
+def summarize(log_lines: List[dict]) -> str:
+    """A Markdown block with each pass rule, the tries behind it and the verdict."""
+    parts = ["## Phase 0 pass rules", ""]
+    for block in (_home(log_lines), _reporting(log_lines), _cards(log_lines), _next(log_lines)):
+        parts.append("- " + block[0])
+        parts.extend("  " + line for line in block[1:])
+    return "\n".join(parts) + "\n"

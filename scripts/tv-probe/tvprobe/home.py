@@ -146,6 +146,8 @@ class _Walker:
             self.section_list(val)
         elif key in _ITEM_LISTS:
             self.item_list(key, val)
+        elif key == "_loggedIn" and isinstance(val, bool):  # left by scrub in committed fixtures
+            self.page.logged_in = val
         elif key == "responseContext":
             self.response_context(val)
         elif in_list:
