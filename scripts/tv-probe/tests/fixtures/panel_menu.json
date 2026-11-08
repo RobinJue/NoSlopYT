@@ -1,0 +1,143 @@
+{
+  "content": {
+    "engagementPanelSectionListRenderer": {
+      "header": {
+        "engagementPanelTitleHeaderRenderer": {
+          "title": {
+            "simpleText": "Video title"
+          },
+          "subtitle": {
+            "simpleText": "Some Channel \u2022 @somechannel"
+          }
+        }
+      },
+      "content": {
+        "listViewModel": {
+          "listItems": [
+            {
+              "listItemViewModel": {
+                "title": {
+                  "content": "Play"
+                },
+                "rendererContext": {
+                  "commandContext": {
+                    "onTap": {
+                      "innertubeCommand": {
+                        "watchEndpoint": {
+                          "videoId": "vidPLAIN001"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "listItemViewModel": {
+                "title": {
+                  "content": "Save to Watch later"
+                },
+                "rendererContext": {
+                  "commandContext": {
+                    "onTap": {
+                      "innertubeCommand": {
+                        "playlistEditEndpoint": {
+                          "playlistId": "WL",
+                          "actions": [
+                            {
+                              "addedVideoId": "vidPLAIN001",
+                              "action": "ACTION_ADD_VIDEO"
+                            }
+                          ]
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "listItemViewModel": {
+                "title": {
+                  "content": "Go to channel"
+                },
+                "rendererContext": {
+                  "commandContext": {
+                    "onTap": {
+                      "innertubeCommand": {
+                        "browseEndpoint": {
+                          "browseId": "UCabcdefghijklmnopqrstuv"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "listItemViewModel": {
+                "title": {
+                  "content": "Not interested"
+                },
+                "rendererContext": {
+                  "commandContext": {
+                    "onTap": {
+                      "innertubeCommand": {
+                        "feedbackEndpoint": {
+                          "feedbackToken": "NI",
+                          "actions": [
+                            {
+                              "replaceEnclosingAction": {
+                                "item": {
+                                  "notificationActionRenderer": {
+                                    "responseText": {
+                                      "simpleText": "Got it"
+                                    }
+                                  }
+                                }
+                              }
+                            }
+                          ]
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "listItemViewModel": {
+                "title": {
+                  "content": "Don't recommend channel"
+                },
+                "rendererContext": {
+                  "commandContext": {
+                    "onTap": {
+                      "innertubeCommand": {
+                        "openPopupAction": {
+                          "popup": {
+                            "confirmDialogRenderer": {
+                              "confirmButton": {
+                                "buttonRenderer": {
+                                  "serviceEndpoint": {
+                                    "feedbackEndpoint": {
+                                      "feedbackToken": "DR"
+                                    }
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          ]
+        }
+      }
+    }
+  }
+}

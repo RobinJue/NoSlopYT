@@ -1,0 +1,698 @@
+{
+ "responseContext": {
+  "serviceTrackingParams": [
+   {
+    "service": "CSI",
+    "params": [
+     {
+      "key": "c",
+      "value": "TVHTML5"
+     }
+    ]
+   },
+   {
+    "service": "GFEEDBACK",
+    "params": [
+     {
+      "key": "logged_in",
+      "value": "1"
+     }
+    ]
+   }
+  ]
+ },
+ "contents": {
+  "tvBrowseRenderer": {
+   "content": {
+    "tvSurfaceContentRenderer": {
+     "content": {
+      "sectionListRenderer": {
+       "contents": [
+        {
+         "adSlotRenderer": {
+          "fulfillmentContent": {
+           "fulfilledLayout": {
+            "tileRenderer": {
+             "contentId": "vidAD00001",
+             "contentType": "TILE_CONTENT_TYPE_VIDEO",
+             "style": "TILE_STYLE_YTLR_DEFAULT",
+             "onSelectCommand": {
+              "watchEndpoint": {
+               "videoId": "vidAD00001"
+              }
+             },
+             "header": {
+              "tileHeaderRenderer": {
+               "thumbnail": {
+                "thumbnails": []
+               },
+               "thumbnailOverlays": [
+                {
+                 "thumbnailOverlayTimeStatusRenderer": {
+                  "text": {
+                   "simpleText": "4:00"
+                  },
+                  "style": "DEFAULT"
+                 }
+                }
+               ]
+              }
+             },
+             "metadata": {
+              "tileMetadataRenderer": {
+               "title": {
+                "simpleText": "An ad"
+               },
+               "lines": [
+                {
+                 "lineRenderer": {
+                  "items": [
+                   {
+                    "lineItemRenderer": {
+                     "text": {
+                      "simpleText": "Some Channel"
+                     }
+                    }
+                   }
+                  ]
+                 }
+                },
+                {
+                 "lineRenderer": {
+                  "items": [
+                   {
+                    "lineItemRenderer": {
+                     "text": {
+                      "simpleText": "1K views"
+                     }
+                    }
+                   }
+                  ]
+                 }
+                }
+               ]
+              }
+             },
+             "onLongPressCommand": {
+              "showEngagementPanelEndpoint": {
+               "identifier": {
+                "tag": "PAcontext_menu"
+               },
+               "globalConfiguration": {
+                "params": "FAKEPARAMS-vidAD00001"
+               }
+              }
+             }
+            }
+           }
+          }
+         }
+        },
+        {
+         "shelfRenderer": {
+          "tvhtml5ShelfRendererType": "TVHTML5_SHELF_RENDERER_TYPE_SHORTS",
+          "content": {
+           "horizontalListRenderer": {
+            "items": [
+             {
+              "tileRenderer": {
+               "contentId": "vidSHORT001",
+               "contentType": "TILE_CONTENT_TYPE_SHORTS",
+               "style": "TILE_STYLE_YTLR_SHORTS",
+               "onSelectCommand": {
+                "watchEndpoint": {
+                 "videoId": "vidSHORT001"
+                }
+               },
+               "header": {
+                "tileHeaderRenderer": {
+                 "thumbnail": {
+                  "thumbnails": []
+                 },
+                 "thumbnailOverlays": [
+                  {
+                   "thumbnailOverlayTimeStatusRenderer": {
+                    "text": {
+                     "simpleText": "SHORTS"
+                    },
+                    "style": "SHORTS"
+                   }
+                  }
+                 ]
+                }
+               },
+               "metadata": {
+                "tileMetadataRenderer": {
+                 "title": {
+                  "simpleText": "Short one"
+                 },
+                 "lines": [
+                  {
+                   "lineRenderer": {
+                    "items": [
+                     {
+                      "lineItemRenderer": {
+                       "text": {
+                        "simpleText": "Some Channel"
+                       }
+                      }
+                     }
+                    ]
+                   }
+                  },
+                  {
+                   "lineRenderer": {
+                    "items": [
+                     {
+                      "lineItemRenderer": {
+                       "text": {
+                        "simpleText": "1K views"
+                       }
+                      }
+                     }
+                    ]
+                   }
+                  }
+                 ]
+                }
+               },
+               "onLongPressCommand": {
+                "showEngagementPanelEndpoint": {
+                 "identifier": {
+                  "tag": "PAcontext_menu"
+                 },
+                 "globalConfiguration": {
+                  "params": "FAKEPARAMS-vidSHORT001"
+                 }
+                }
+               }
+              }
+             },
+             {
+              "tileRenderer": {
+               "contentId": "vidSHORT002",
+               "contentType": "TILE_CONTENT_TYPE_SHORTS",
+               "style": "TILE_STYLE_YTLR_DEFAULT",
+               "onSelectCommand": {
+                "watchEndpoint": {
+                 "videoId": "vidSHORT002"
+                }
+               },
+               "header": {
+                "tileHeaderRenderer": {
+                 "thumbnail": {
+                  "thumbnails": []
+                 },
+                 "thumbnailOverlays": [
+                  {
+                   "thumbnailOverlayTimeStatusRenderer": {
+                    "text": {
+                     "simpleText": "SHORTS"
+                    },
+                    "style": "SHORTS"
+                   }
+                  }
+                 ]
+                }
+               },
+               "metadata": {
+                "tileMetadataRenderer": {
+                 "title": {
+                  "simpleText": "Short two"
+                 },
+                 "lines": [
+                  {
+                   "lineRenderer": {
+                    "items": [
+                     {
+                      "lineItemRenderer": {
+                       "text": {
+                        "simpleText": "Some Channel"
+                       }
+                      }
+                     }
+                    ]
+                   }
+                  },
+                  {
+                   "lineRenderer": {
+                    "items": [
+                     {
+                      "lineItemRenderer": {
+                       "text": {
+                        "simpleText": "1K views"
+                       }
+                      }
+                     }
+                    ]
+                   }
+                  }
+                 ]
+                }
+               },
+               "onLongPressCommand": {
+                "showEngagementPanelEndpoint": {
+                 "identifier": {
+                  "tag": "PAcontext_menu"
+                 },
+                 "globalConfiguration": {
+                  "params": "FAKEPARAMS-vidSHORT002"
+                 }
+                }
+               }
+              }
+             }
+            ]
+           }
+          }
+         }
+        },
+        {
+         "shelfRenderer": {
+          "tvhtml5ShelfRendererType": "TVHTML5_SHELF_RENDERER_TYPE_GRID_XL",
+          "content": {
+           "horizontalListRenderer": {
+            "items": [
+             {
+              "tileRenderer": {
+               "contentId": "vidLIVE0001",
+               "contentType": "TILE_CONTENT_TYPE_VIDEO",
+               "style": "TILE_STYLE_YTLR_DEFAULT",
+               "onSelectCommand": {
+                "watchEndpoint": {
+                 "videoId": "vidLIVE0001"
+                }
+               },
+               "header": {
+                "tileHeaderRenderer": {
+                 "thumbnail": {
+                  "thumbnails": []
+                 },
+                 "thumbnailOverlays": [
+                  {
+                   "thumbnailOverlayTimeStatusRenderer": {
+                    "text": {
+                     "simpleText": "LIVE"
+                    },
+                    "style": "LIVE"
+                   }
+                  }
+                 ]
+                }
+               },
+               "metadata": {
+                "tileMetadataRenderer": {
+                 "title": {
+                  "simpleText": "A live stream"
+                 },
+                 "lines": [
+                  {
+                   "lineRenderer": {
+                    "items": [
+                     {
+                      "lineItemRenderer": {
+                       "text": {
+                        "simpleText": "Some Channel"
+                       }
+                      }
+                     }
+                    ]
+                   }
+                  },
+                  {
+                   "lineRenderer": {
+                    "items": [
+                     {
+                      "lineItemRenderer": {
+                       "text": {
+                        "simpleText": "1K views"
+                       }
+                      }
+                     }
+                    ]
+                   }
+                  }
+                 ]
+                }
+               },
+               "onLongPressCommand": {
+                "showEngagementPanelEndpoint": {
+                 "identifier": {
+                  "tag": "PAcontext_menu"
+                 },
+                 "globalConfiguration": {
+                  "params": "FAKEPARAMS-vidLIVE0001"
+                 }
+                }
+               }
+              }
+             },
+             {
+              "tileRenderer": {
+               "contentId": "vidMEMBER01",
+               "contentType": "TILE_CONTENT_TYPE_VIDEO",
+               "style": "TILE_STYLE_YTLR_DEFAULT",
+               "onSelectCommand": {
+                "watchEndpoint": {
+                 "videoId": "vidMEMBER01"
+                }
+               },
+               "header": {
+                "tileHeaderRenderer": {
+                 "thumbnail": {
+                  "thumbnails": []
+                 },
+                 "thumbnailOverlays": [
+                  {
+                   "thumbnailOverlayTimeStatusRenderer": {
+                    "text": {
+                     "simpleText": "4:00"
+                    },
+                    "style": "DEFAULT"
+                   }
+                  }
+                 ]
+                }
+               },
+               "metadata": {
+                "tileMetadataRenderer": {
+                 "title": {
+                  "simpleText": "Members video"
+                 },
+                 "lines": [
+                  {
+                   "lineRenderer": {
+                    "items": [
+                     {
+                      "lineItemRenderer": {
+                       "text": {
+                        "simpleText": "Some Channel"
+                       }
+                      }
+                     },
+                     {
+                      "lineItemRenderer": {
+                       "badge": {
+                        "metadataBadgeRenderer": {
+                         "style": "BADGE_STYLE_TYPE_MEMBERS_ONLY"
+                        }
+                       }
+                      }
+                     }
+                    ]
+                   }
+                  },
+                  {
+                   "lineRenderer": {
+                    "items": [
+                     {
+                      "lineItemRenderer": {
+                       "text": {
+                        "simpleText": "1K views"
+                       }
+                      }
+                     }
+                    ]
+                   }
+                  }
+                 ]
+                }
+               },
+               "onLongPressCommand": {
+                "showEngagementPanelEndpoint": {
+                 "identifier": {
+                  "tag": "PAcontext_menu"
+                 },
+                 "globalConfiguration": {
+                  "params": "FAKEPARAMS-vidMEMBER01"
+                 }
+                }
+               }
+              }
+             },
+             {
+              "tileRenderer": {
+               "contentId": "vidPLAIN001",
+               "contentType": "TILE_CONTENT_TYPE_VIDEO",
+               "style": "TILE_STYLE_YTLR_DEFAULT",
+               "onSelectCommand": {
+                "watchEndpoint": {
+                 "videoId": "vidPLAIN001"
+                }
+               },
+               "header": {
+                "tileHeaderRenderer": {
+                 "thumbnail": {
+                  "thumbnails": []
+                 },
+                 "thumbnailOverlays": [
+                  {
+                   "thumbnailOverlayTimeStatusRenderer": {
+                    "text": {
+                     "simpleText": "4:00"
+                    },
+                    "style": "DEFAULT"
+                   }
+                  },
+                  {
+                   "thumbnailOverlayResumePlaybackRenderer": {
+                    "percentDurationWatched": 40
+                   }
+                  }
+                 ]
+                }
+               },
+               "metadata": {
+                "tileMetadataRenderer": {
+                 "title": {
+                  "simpleText": "Plain video"
+                 },
+                 "lines": [
+                  {
+                   "lineRenderer": {
+                    "items": [
+                     {
+                      "lineItemRenderer": {
+                       "text": {
+                        "simpleText": "Some Channel"
+                       }
+                      }
+                     }
+                    ]
+                   }
+                  },
+                  {
+                   "lineRenderer": {
+                    "items": [
+                     {
+                      "lineItemRenderer": {
+                       "text": {
+                        "simpleText": "1K views"
+                       }
+                      }
+                     }
+                    ]
+                   }
+                  }
+                 ]
+                }
+               },
+               "onLongPressCommand": {
+                "showEngagementPanelEndpoint": {
+                 "identifier": {
+                  "tag": "PAcontext_menu"
+                 },
+                 "globalConfiguration": {
+                  "params": "FAKEPARAMS-vidPLAIN001"
+                 }
+                }
+               }
+              }
+             },
+             {
+              "tileRenderer": {
+               "contentId": "UCchannel001",
+               "contentType": "TILE_CONTENT_TYPE_CHANNEL",
+               "style": "TILE_STYLE_YTLR_DEFAULT",
+               "onSelectCommand": {
+                "watchEndpoint": {
+                 "videoId": "UCchannel001"
+                }
+               },
+               "header": {
+                "tileHeaderRenderer": {
+                 "thumbnail": {
+                  "thumbnails": []
+                 },
+                 "thumbnailOverlays": []
+                }
+               },
+               "metadata": {
+                "tileMetadataRenderer": {
+                 "title": {
+                  "simpleText": "A channel"
+                 },
+                 "lines": [
+                  {
+                   "lineRenderer": {
+                    "items": [
+                     {
+                      "lineItemRenderer": {
+                       "text": {
+                        "simpleText": "Some Channel"
+                       }
+                      }
+                     }
+                    ]
+                   }
+                  },
+                  {
+                   "lineRenderer": {
+                    "items": [
+                     {
+                      "lineItemRenderer": {
+                       "text": {
+                        "simpleText": "1K views"
+                       }
+                      }
+                     }
+                    ]
+                   }
+                  }
+                 ]
+                }
+               }
+              }
+             },
+             {
+              "lockupViewModel": {
+               "contentId": "vidLOCKSH01",
+               "contentType": "LOCKUP_CONTENT_TYPE_SHORT",
+               "metadata": {
+                "lockupMetadataViewModel": {
+                 "title": {
+                  "content": "A lockup short"
+                 }
+                }
+               }
+              }
+             }
+            ],
+            "continuations": [
+             {
+              "nextContinuationData": {
+               "continuation": "SHELFCONT-1"
+              }
+             }
+            ]
+           }
+          }
+         }
+        },
+        {
+         "shelfRenderer": {
+          "tvhtml5ShelfRendererType": "TVHTML5_SHELF_RENDERER_TYPE_EDU",
+          "content": {
+           "horizontalListRenderer": {
+            "items": [
+             {
+              "tileRenderer": {
+               "contentId": "vidEDU00001",
+               "contentType": "TILE_CONTENT_TYPE_EDU",
+               "style": "TILE_STYLE_YTLR_DEFAULT",
+               "onSelectCommand": {
+                "watchEndpoint": {
+                 "videoId": "vidEDU00001"
+                }
+               },
+               "header": {
+                "tileHeaderRenderer": {
+                 "thumbnail": {
+                  "thumbnails": []
+                 },
+                 "thumbnailOverlays": [
+                  {
+                   "thumbnailOverlayTimeStatusRenderer": {
+                    "text": {
+                     "simpleText": "4:00"
+                    },
+                    "style": "DEFAULT"
+                   }
+                  }
+                 ]
+                }
+               },
+               "metadata": {
+                "tileMetadataRenderer": {
+                 "title": {
+                  "simpleText": "An edu tile"
+                 },
+                 "lines": [
+                  {
+                   "lineRenderer": {
+                    "items": [
+                     {
+                      "lineItemRenderer": {
+                       "text": {
+                        "simpleText": "Some Channel"
+                       }
+                      }
+                     }
+                    ]
+                   }
+                  },
+                  {
+                   "lineRenderer": {
+                    "items": [
+                     {
+                      "lineItemRenderer": {
+                       "text": {
+                        "simpleText": "1K views"
+                       }
+                      }
+                     }
+                    ]
+                   }
+                  }
+                 ]
+                }
+               },
+               "onLongPressCommand": {
+                "showEngagementPanelEndpoint": {
+                 "identifier": {
+                  "tag": "PAcontext_menu"
+                 },
+                 "globalConfiguration": {
+                  "params": "FAKEPARAMS-vidEDU00001"
+                 }
+                }
+               }
+              }
+             }
+            ]
+           }
+          }
+         }
+        },
+        {
+         "gridButtonRenderer": {
+          "text": {
+           "simpleText": "Refresh"
+          }
+         }
+        }
+       ],
+       "continuations": [
+        {
+         "nextContinuationData": {
+          "continuation": "SECTIONCONT-1"
+         }
+        }
+       ]
+      }
+     }
+    }
+   }
+  }
+ }
+}

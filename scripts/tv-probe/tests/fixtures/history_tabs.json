@@ -1,0 +1,5 @@
+{"contents": {"tvBrowseRenderer": {"content": {"tvSecondaryNavRenderer": {"sections": [{"tvSecondaryNavSectionRenderer": {"tabs": [
+  {"tabRenderer": {"title": "Today", "content": {"tvSurfaceContentRenderer": {"content": {"gridRenderer": {"items": [
+    {"tileRenderer": {"contentId": "vidWATCHED1", "onSelectCommand": {"watchEndpoint": {"videoId": "vidWATCHED1"}}}}
+  ]}}}}}}
+]}}]}}}}}

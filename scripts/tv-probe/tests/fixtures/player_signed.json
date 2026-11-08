@@ -1,0 +1,8 @@
+{
+  "playabilityStatus": {"status": "OK"},
+  "videoDetails": {"videoId": "v1", "lengthSeconds": "60"},
+  "playbackTracking": {
+    "videostatsPlaybackUrl": {"baseUrl": "https://s.youtube.com/api/stats/playback?cl=1&docid=v1&ei=FAKE_EI&el=leanback&of=FAKE_OF&plid=FAKE_PLID&vm=FAKE_VM&len=60"},
+    "videostatsWatchtimeUrl": {"baseUrl": "https://s.youtube.com/api/stats/watchtime?cl=1&docid=v1&ei=FAKE_EI&el=leanback&of=FAKE_OF&plid=FAKE_PLID&vm=FAKE_VM&len=60"}
+  }
+}

@@ -1,0 +1,9 @@
+{"contents": {"tvBrowseRenderer": {"content": {"tvSurfaceContentRenderer": {"content": {"gridRenderer": {"items": [
+  {"tileRenderer": {"contentId": "vidOTHER001", "contentType": "TILE_CONTENT_TYPE_VIDEO",
+    "onSelectCommand": {"watchEndpoint": {"videoId": "vidOTHER001"}}}},
+  {"adSlotRenderer": {"tileRenderer": {"contentId": "vidNOTTHERE", "onSelectCommand": {"watchEndpoint": {"videoId": "vidNOTTHERE"}}}}},
+  {"tileRenderer": {"contentId": "vidWATCHED1", "contentType": "TILE_CONTENT_TYPE_VIDEO",
+    "onSelectCommand": {"watchEndpoint": {"videoId": "vidWATCHED1"}},
+    "header": {"tileHeaderRenderer": {"thumbnailOverlays": [
+      {"thumbnailOverlayResumePlaybackRenderer": {"percentDurationWatched": 50}}]}}}}
+]}}}}}}}

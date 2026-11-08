@@ -1,0 +1,104 @@
+{
+ "responseContext": {
+  "serviceTrackingParams": [
+   {
+    "service": "CSI",
+    "params": [
+     {
+      "key": "c",
+      "value": "TVHTML5"
+     }
+    ]
+   },
+   {
+    "service": "GFEEDBACK",
+    "params": [
+     {
+      "key": "logged_in",
+      "value": "1"
+     }
+    ]
+   }
+  ]
+ },
+ "continuationContents": {
+  "horizontalListContinuation": {
+   "items": [
+    {
+     "tileRenderer": {
+      "contentId": "vidMORE0001",
+      "contentType": "TILE_CONTENT_TYPE_VIDEO",
+      "style": "TILE_STYLE_YTLR_DEFAULT",
+      "onSelectCommand": {
+       "watchEndpoint": {
+        "videoId": "vidMORE0001"
+       }
+      },
+      "header": {
+       "tileHeaderRenderer": {
+        "thumbnail": {
+         "thumbnails": []
+        },
+        "thumbnailOverlays": [
+         {
+          "thumbnailOverlayTimeStatusRenderer": {
+           "text": {
+            "simpleText": "4:00"
+           },
+           "style": "DEFAULT"
+          }
+         }
+        ]
+       }
+      },
+      "metadata": {
+       "tileMetadataRenderer": {
+        "title": {
+         "simpleText": "More in shelf"
+        },
+        "lines": [
+         {
+          "lineRenderer": {
+           "items": [
+            {
+             "lineItemRenderer": {
+              "text": {
+               "simpleText": "Some Channel"
+              }
+             }
+            }
+           ]
+          }
+         },
+         {
+          "lineRenderer": {
+           "items": [
+            {
+             "lineItemRenderer": {
+              "text": {
+               "simpleText": "1K views"
+              }
+             }
+            }
+           ]
+          }
+         }
+        ]
+       }
+      },
+      "onLongPressCommand": {
+       "showEngagementPanelEndpoint": {
+        "identifier": {
+         "tag": "PAcontext_menu"
+        },
+        "globalConfiguration": {
+         "params": "FAKEPARAMS-vidMORE0001"
+        }
+       }
+      }
+     }
+    }
+   ]
+  }
+ }
+}
