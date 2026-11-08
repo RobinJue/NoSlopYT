@@ -40,4 +40,13 @@ import Testing
     @Test func theSkipWaitsAboutTwoSeconds() {
         #expect(FailedVideoAdvance.delay == .seconds(2))
     }
+
+    @Test func aSuggestionFollowsOnlyWhenAutoplayIsOn() {
+        let step = AutoplayPlanner.Step(next: VideoSummary(id: "a", title: "A"), remaining: [])
+        #expect(FailedVideoAdvance.hasNext(.queued, autoplayNext: false))
+        #expect(FailedVideoAdvance.hasNext(.nextPage, autoplayNext: false))
+        #expect(!FailedVideoAdvance.hasNext(.suggested(step), autoplayNext: false))
+        #expect(FailedVideoAdvance.hasNext(.suggested(step), autoplayNext: true))
+        #expect(!FailedVideoAdvance.hasNext(.nothing, autoplayNext: true))
+    }
 }

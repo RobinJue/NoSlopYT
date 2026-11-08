@@ -946,7 +946,8 @@ final class PlayerController {
         failedAdvanceTask = nil
         isSkippingFailedVideo = false
         guard FailedVideoAdvance.action(
-            isWorthRetrying: isWorthRetrying, reachedByAdvance: startedByAdvance, hasNext: canPlayNext,
+            isWorthRetrying: isWorthRetrying, reachedByAdvance: startedByAdvance,
+            hasNext: FailedVideoAdvance.hasNext(nextVideo, autoplayNext: settings.autoplayNext),
             skippedInARow: skippedInARow
         ) == .skipToNext else { return }
         // Nobody sees the screen when the app is not in front, and the process may be suspended soon: go on at once.
@@ -1227,6 +1228,12 @@ final class PlayerController {
             if !added.isEmpty {
                 refillQueueIfNeeded()
             }
+        }
+        // The skip of a failed video waited for this page and nothing started (the page failed or held nothing): the error
+        // screen stops promising a next video.
+        if isSkippingFailedVideo, failureMessage != nil, pendingAdvance != .now {
+            isSkippingFailedVideo = false
+            skippedInARow = max(0, skippedInARow - 1)
         }
         updateNowPlaying()
     }

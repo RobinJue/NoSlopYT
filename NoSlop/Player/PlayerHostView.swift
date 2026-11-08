@@ -158,24 +158,30 @@ private struct PlayerFailureView: View {
         .frame(maxWidth: 420)
     }
 
+    /// In a row when it fits the width, stacked when it does not (three buttons at a large text size on a narrow phone).
     private var buttons: some View {
-        HStack(spacing: 10) {
-            if canRetry {
-                Button("Retry", action: retry)
-                    .buttonStyle(.borderedProminent)
-            }
-            if canPlayNext {
-                Button("Next video", action: playNext)
-                    .buttonStyle(.bordered)
-                    .tint(.white)
-            }
-            if let video {
-                Button("Open on YouTube") { openURL(video.watchURL) }
-                    .buttonStyle(.bordered)
-                    .tint(.white)
-            }
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 10) { buttonItems }
+            VStack(spacing: 8) { buttonItems }
         }
         .controlSize(.small)
+    }
+
+    @ViewBuilder private var buttonItems: some View {
+        if canRetry {
+            Button("Retry", action: retry)
+                .buttonStyle(.borderedProminent)
+        }
+        if canPlayNext {
+            Button("Next video", action: playNext)
+                .buttonStyle(.bordered)
+                .tint(.white)
+        }
+        if let video {
+            Button("Open on YouTube") { openURL(video.watchURL) }
+                .buttonStyle(.bordered)
+                .tint(.white)
+        }
     }
 }
 

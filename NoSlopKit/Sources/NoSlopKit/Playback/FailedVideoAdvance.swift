@@ -31,4 +31,14 @@ public enum FailedVideoAdvance {
         guard !isWorthRetrying, reachedByAdvance, hasNext, skippedInARow < maxSkipsInARow else { return .stay }
         return .skipToNext
     }
+
+    /// Whether `next` counts as a video that could follow. Queued videos and further pages of the list always do; a
+    /// suggestion from Up next only with "Autoplay next video" on, as at the natural end of a queue.
+    public static func hasNext(_ next: NextVideo, autoplayNext: Bool) -> Bool {
+        switch next {
+        case .queued, .nextPage: true
+        case .suggested: autoplayNext
+        case .nothing: false
+        }
+    }
 }

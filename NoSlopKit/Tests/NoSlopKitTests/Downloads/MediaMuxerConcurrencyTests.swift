@@ -83,10 +83,14 @@ import Testing
                 try await gate.acquire()
                 held += 1
             }
+            // Other suites queue on this gate too, so a waiter is not proof: count from the line as it is now, and
+            // then keep the gate shut for a while. A merge that bypassed the gate would have exported by then.
+            let before = await gate.waitingCount
             let merge = Task {
                 try await MediaMuxer.mux(videoFile: video, audioFile: audio, durationSeconds: Self.trueDuration, output: output)
             }
-            #expect(await eventually(timeout: .seconds(5)) { await gate.waitingCount >= 1 }, "the public merge queued on the shared gate")
+            #expect(await eventually(timeout: .seconds(5)) { await gate.waitingCount > before }, "the public merge queued on the shared gate")
+            try await Task.sleep(for: .seconds(2))
             #expect(!FileManager.default.fileExists(atPath: output.path), "nothing is exported while the shared gate is closed")
 
             for _ in 0..<held { await gate.release() }
