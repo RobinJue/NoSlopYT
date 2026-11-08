@@ -35,6 +35,9 @@ actor ExportGate {
         self.available = max(1, permits)
     }
 
+    /// How many exports this gate lets run at once. Read-only; mostly for tests.
+    var capacity: Int { permits }
+
     /// Permits nobody holds. Mostly for tests.
     var availablePermits: Int { available }
 

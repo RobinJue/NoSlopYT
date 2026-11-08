@@ -42,8 +42,9 @@ import Testing
 
     // MARK: How many
 
-    @Test func theSharedGateLetsTwoExportsRunAtOnce() {
+    @Test func theSharedGateLetsTwoExportsRunAtOnce() async {
         #expect(ExportGate.defaultPermits == 2)
+        #expect(await ExportGate.shared.capacity == 2, "the gate the app's merges go through, not only the constant")
     }
 
     @Test func atMostTwoAreInsideAtOnce() async throws {

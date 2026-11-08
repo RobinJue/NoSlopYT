@@ -24,7 +24,8 @@ import UIKit
 ///
 /// A failed download keeps what it fetched, so a retry only fetches what is missing: the chunks that finished, and
 /// the concatenated streams of a merge that was interrupted. Only a download that is proven bad (an unreadable stream,
-/// a video YouTube no longer offers) is thrown away. A stream address that stops working (it expired, or it was made
+/// a video YouTube has ruled out: private, removed, not playable) is thrown away; a lookup that fails for any other
+/// reason, or a plan that cannot be written to a full disk, keeps everything. A stream address that stops working (it expired, or it was made
 /// for an IP address the phone has left) is replaced once, automatically.
 ///
 /// Extras: a download is played offline, so what the player would ask YouTube for while it streams (SponsorBlock
@@ -48,6 +49,8 @@ public final class DownloadManager {
     /// Fetches the extras of a video when its download starts; nil for none (the tests that do not care).
     @ObservationIgnored private let extrasProvider: (any DownloadExtrasProviding)?
     @ObservationIgnored private let extrasStore: DownloadExtrasStore
+    /// The last of the jobs on the extras files, which run one after the other off the main actor (see `enqueueExtrasWork`).
+    @ObservationIgnored private var extrasWork: Task<Void, Never>?
     /// Items whose chunk tasks exist, by item id.
     @ObservationIgnored private var jobs: [String: DownloadJob] = [:]
     /// Items that are still resolving their stream URLs and preparing their directory.
@@ -118,7 +121,7 @@ public final class DownloadManager {
         if !restored.isUnreadable {
             workspace.prune(keeping: restored.unfinishedIDs)
             // The extras of a video whose last download was removed, when the process ended before they were.
-            extrasStore.prune(keeping: Set(restored.items.map(\.video.id)))
+            pruneExtras(keeping: Set(restored.items.map(\.video.id)))
         }
 
         // Events are handled one at a time, in order, on the main actor.
@@ -204,7 +207,7 @@ public final class DownloadManager {
         var unfinishedIDs = restored.unfinishedIDs
         for item in items where item.state != .completed { unfinishedIDs.insert(item.id) }
         workspace.prune(keeping: unfinishedIDs)
-        extrasStore.prune(keeping: Set(items.map(\.video.id)))
+        pruneExtras(keeping: Set(items.map(\.video.id)))
 
         let restoredIDs = restored.restoredIDs.filter { !known.contains($0) }
         Task { @MainActor [weak self] in
@@ -303,7 +306,9 @@ public final class DownloadManager {
     /// What the downloads of this video kept (SponsorBlock segments, chapters, captions: see `DownloadExtras`); nil when
     /// nothing was kept, which is the case for downloads made before this existed. Read off the main actor.
     public func extras(forVideoID videoID: String) async -> DownloadExtras? {
-        await extrasStore.loadOffMainActor(videoID: videoID)
+        // What was saved before is on disk by now.
+        await extrasWork?.value
+        return await extrasStore.loadOffMainActor(videoID: videoID)
     }
 
     /// Keeps `extras` with the downloads of the video, over what is kept already (`DownloadExtras.merging`): the parts
@@ -312,14 +317,57 @@ public final class DownloadManager {
     /// download.
     public func saveExtras(_ extras: DownloadExtras, forVideoID videoID: String) {
         guard !extras.isEmpty, items.contains(where: { $0.video.id == videoID }) else { return }
-        extrasStore.merge(extras, videoID: videoID)
+        mergeExtras(extras, videoID: videoID)
+    }
+
+    /// Runs `work` after every job queued before it, off the main actor, and returns the task that finishes with it. The
+    /// extras files are changed by one writer at a time, in the order the changes were asked for: two merges never
+    /// interleave (which would lose one of them), and a merge that comes after a removal can only be one that was asked
+    /// for later. A file of captions is megabytes of text: reading, decoding, merging and writing it stays off the main
+    /// actor.
+    @discardableResult
+    private func enqueueExtrasWork(_ work: @escaping @Sendable () async -> Void) -> Task<Void, Never> {
+        let previous = extrasWork
+        let task = Task.detached(priority: .utility) {
+            await previous?.value
+            await work()
+        }
+        extrasWork = task
+        return task
+    }
+
+    /// Merges `extras` into the file of the video; the returned task finishes when it is on disk.
+    @discardableResult
+    private func mergeExtras(_ extras: DownloadExtras, videoID: String) -> Task<Void, Never> {
+        let store = extrasStore
+        let observer = tuning.extrasMergeObserver
+        return enqueueExtrasWork {
+            observer?()
+            store.merge(extras, videoID: videoID)
+        }
     }
 
     /// Deletes the extras of a video once none of its downloads is left in the list (there is one file per video, shared
-    /// by its qualities).
+    /// by its qualities). The list is looked at again when the removal runs, so a download that was added meanwhile keeps
+    /// its file.
     private func removeExtrasIfUnused(videoID: String) {
         guard !items.contains(where: { $0.video.id == videoID }) else { return }
-        extrasStore.remove(videoID: videoID)
+        let store = extrasStore
+        enqueueExtrasWork { [weak self] in
+            guard let self, await self.isUnused(videoID: videoID) else { return }
+            store.remove(videoID: videoID)
+        }
+    }
+
+    private func isUnused(videoID: String) -> Bool {
+        !items.contains(where: { $0.video.id == videoID })
+    }
+
+    /// Deletes the files of every video that is not in `videoIDs` (what an interrupted removal left behind), in order with
+    /// the other jobs on the files.
+    private func pruneExtras(keeping videoIDs: Set<String>) {
+        let store = extrasStore
+        enqueueExtrasWork { store.prune(keeping: videoIDs) }
     }
 
     /// Asks the provider for the extras of the video that is about to download, for at most `extrasTimeout`; nil when
@@ -442,8 +490,9 @@ public final class DownloadManager {
             do {
                 info = try await streams.streamInfo(videoID: item.video.id)
             } catch {
-                // Offline or throttled: what an interrupted earlier attempt already fetched stays for the next retry.
-                keepWork = Self.isTransient(error)
+                // A lookup that fails says nothing about the parts on disk unless YouTube ruled on the video itself: what an
+                // interrupted earlier attempt already fetched stays for the next retry.
+                keepWork = Self.keepsWork(afterLookupFailure: error)
                 throw error
             }
             try ensureStarting(id, generation)
@@ -464,7 +513,7 @@ public final class DownloadManager {
             engine.cancelTasks(itemID: id)
             await engine.cancelInheritedTasks(itemID: id)
             try ensureStarting(id, generation)
-            let present = try await DownloadAssembler.prepare(plan: plan, workspace: workspace)
+            let present = try await DownloadAssembler.prepare(plan: plan, workspace: workspace, savePlan: tuning.savePlan)
             try ensureStarting(id, generation)
 
             // Fetching what is missing takes room, and so does the merge at the end: it writes a second copy before the
@@ -483,7 +532,11 @@ public final class DownloadManager {
             if fetchesExtras {
                 let extras = await fetchExtras(for: info)
                 try ensureStarting(id, generation)
-                if let extras { extrasStore.merge(extras, videoID: item.video.id) }
+                if let extras {
+                    // On disk before the first chunk is requested, written off the main actor.
+                    await mergeExtras(extras, videoID: item.video.id).value
+                    try ensureStarting(id, generation)
+                }
             }
 
             starts[id] = nil
@@ -511,13 +564,13 @@ public final class DownloadManager {
         }
     }
 
-    /// True for failures that say nothing about the video itself: no connection, a throttled or busy server.
-    private static func isTransient(_ error: any Error) -> Bool {
-        if error is URLError { return true }
+    /// A failed lookup (no connection, a throttled server, a captive portal's page, an HTTP error, an answer without
+    /// streams) says nothing about the parts already on disk. Only YouTube's verdicts on the video itself do: it is
+    /// private, removed or not playable, and there is nothing left to resume.
+    nonisolated static func keepsWork(afterLookupFailure error: any Error) -> Bool {
         switch error as? NoSlopError {
-        case .network, .botCheck, .cancelled: return true
-        case .http(let status): return status >= 500 || status == 429
-        default: return false
+        case .unplayable, .unavailable: return false
+        default: return true
         }
     }
 
@@ -873,7 +926,7 @@ public final class DownloadManager {
     /// A full disk, or a merge the system interrupted, is not the download's fault: what was fetched stays, and a
     /// retry after making room carries on.
     private func fail(_ id: String, error: any Error, keepingWork: Bool = false) {
-        teardown(id, keepingWork: keepingWork || (error as? DownloadFailure)?.keepsDownloadedData == true)
+        teardown(id, keepingWork: keepingWork || DownloadFailure.from(error).keepsDownloadedData)
         let message = Self.message(for: error)
         update(id) { item in
             item.state = .failed

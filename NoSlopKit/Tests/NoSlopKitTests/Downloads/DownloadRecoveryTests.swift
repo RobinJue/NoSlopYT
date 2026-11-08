@@ -1,5 +1,6 @@
 import AVFoundation
 import Foundation
+import Synchronization
 import Testing
 @testable import NoSlopKit
 
@@ -157,5 +158,120 @@ import Testing
         #expect(item.state == .failed)
         #expect(item.errorMessage == "Can't reach YouTube. Check your connection.")
         #expect(["job.json", "audio.0.part", "audio.1.part", "video.0.part"].allSatisfy { exists($0, in: work) }, "the parts stay")
+    }
+
+    // MARK: A lookup that fails keeps the parts, unless YouTube ruled on the video
+
+    nonisolated private static let lookupFailures: [NoSlopError] = [
+        .decoding("Invalid JSON"),
+        .notPlayableYet(reason: "No playable streams were returned for this video."),
+        .http(status: 400),
+        .http(status: 403),
+        .network("offline"),
+    ]
+
+    @Test(arguments: lookupFailures)
+    func aRetryWhoseLookupFailsWithoutAVerdictKeepsTheParts(error: NoSlopError) async throws {
+        let directory = try DownloadTestDirectory.make()
+        let server = DownloadStubServer()
+        defer { directory.remove() }
+        try ZooFixture.serveFixtures(on: server)
+        let failing = Mutex(true)
+        let resolver = DownloadStubResolver { _, _ in
+            let stillFailing = failing.withLock { $0 }
+            if stillFailing { throw error }
+            return ZooFixture.streamInfo(server: server)
+        }
+        let (manager, work) = try interruptedDownload(in: directory, server: server, resolver: resolver)
+        #expect(await awaitDownloadCondition { manager.items.first?.state == .paused })
+
+        manager.retry(id: ZooFixture.itemID)
+        #expect(await awaitDownloadCondition { downloadIsSettled(manager, ZooFixture.itemID) })
+
+        let item = try #require(manager.items.first)
+        #expect(item.state == .failed)
+        #expect(item.errorMessage == error.errorDescription)
+        #expect(["job.json", "audio.0.part", "audio.1.part", "video.0.part"].allSatisfy { exists($0, in: work) }, "the parts stay")
+
+        // The way is clear again: the retry fetches only what is missing.
+        failing.withLock { $0 = false }
+        manager.retry(id: ZooFixture.itemID)
+        #expect(await awaitDownloadCondition { downloadIsSettled(manager, ZooFixture.itemID) })
+        #expect(manager.items.first?.state == .completed, "\(manager.items.first?.errorMessage ?? "")")
+        #expect(server.requests == [Self.lastVideoChunk])
+    }
+
+    @Test func aVerdictOfYouTubeStillDiscardsTheParts() async throws {
+        let directory = try DownloadTestDirectory.make()
+        let server = DownloadStubServer()
+        defer { directory.remove() }
+        try ZooFixture.serveFixtures(on: server)
+        let resolver = DownloadStubResolver { _, _ in throw NoSlopError.unplayable(reason: "This video is private.") }
+        let (manager, work) = try interruptedDownload(in: directory, server: server, resolver: resolver)
+        #expect(await awaitDownloadCondition { manager.items.first?.state == .paused })
+
+        manager.retry(id: ZooFixture.itemID)
+        #expect(await awaitDownloadCondition { downloadIsSettled(manager, ZooFixture.itemID) })
+
+        #expect(manager.items.first?.state == .failed)
+        #expect(["job.json", "audio.0.part", "audio.1.part", "video.0.part"].allSatisfy { !exists($0, in: work) }, "nothing is left to resume")
+    }
+
+    @Test func aNewAddressThatAnswersWithAnHTTPErrorKeepsTheParts() async throws {
+        let directory = try DownloadTestDirectory.make()
+        let server = DownloadStubServer()
+        defer { directory.remove() }
+        try ZooFixture.serveFixtures(on: server)
+        server.fail("/video.mp4", rangeStart: 100_000, with: .status(403))
+        let resolver = DownloadStubResolver { _, call in
+            if call >= 2 { throw NoSlopError.http(status: 400) }
+            return ZooFixture.streamInfo(server: server)
+        }
+        let (manager, work) = try interruptedDownload(in: directory, server: server, resolver: resolver)
+        #expect(await awaitDownloadCondition { manager.items.first?.state == .paused })
+
+        manager.retry(id: ZooFixture.itemID)
+        #expect(await awaitDownloadCondition { downloadIsSettled(manager, ZooFixture.itemID) })
+
+        #expect(manager.items.first?.state == .failed)
+        #expect(["job.json", "audio.0.part", "audio.1.part", "video.0.part"].allSatisfy { exists($0, in: work) }, "the parts stay")
+    }
+
+    // MARK: A plan that cannot be written keeps the parts
+
+    @Test func aPlanThatCannotBeWrittenOnAFullDeviceKeepsTheParts() async throws {
+        let directory = try DownloadTestDirectory.make()
+        let server = DownloadStubServer()
+        defer { directory.remove() }
+        try ZooFixture.serveFixtures(on: server)
+        let full = Mutex(true)
+        var tuning = Self.chunked
+        tuning.savePlan = { workspace, plan in
+            let isFull = full.withLock { $0 }
+            if isFull { throw CocoaError(.fileWriteOutOfSpace) }
+            try workspace.savePlan(plan)
+        }
+        let resolver = DownloadStubResolver { _, _ in ZooFixture.streamInfo(server: server) }
+        let root = directory.url.appendingPathComponent("Downloads", isDirectory: true)
+        try DownloadHarness.leaveInterruptedDownload(
+            in: root, state: .downloading, server: server, chunkSize: 100_000, videoChunks: [0], audioChunks: [0, 1]
+        )
+        let manager = DownloadHarness.newManager(root: root, resolver: resolver, tuning: tuning)
+        let work = DownloadWorkspace(root: root).directory(for: ZooFixture.itemID)
+        #expect(await awaitDownloadCondition { manager.items.first?.state == .paused })
+
+        manager.retry(id: ZooFixture.itemID)
+        #expect(await awaitDownloadCondition { downloadIsSettled(manager, ZooFixture.itemID) })
+
+        let item = try #require(manager.items.first)
+        #expect(item.state == .failed)
+        #expect(item.errorMessage == "There isn't enough free space on this device.")
+        #expect(["job.json", "audio.0.part", "audio.1.part", "video.0.part"].allSatisfy { exists($0, in: work) }, "the parts stay")
+
+        full.withLock { $0 = false }
+        manager.retry(id: ZooFixture.itemID)
+        #expect(await awaitDownloadCondition { downloadIsSettled(manager, ZooFixture.itemID) })
+        #expect(manager.items.first?.state == .completed, "\(manager.items.first?.errorMessage ?? "")")
+        #expect(server.requests == [Self.lastVideoChunk])
     }
 }
