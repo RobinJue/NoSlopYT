@@ -6,21 +6,22 @@ import Testing
 /// `AVAssetExportSession.export(to:as:)` does not suspend while it sets the export up: it blocks the calling thread
 /// until CoreMedia's queue, which every export in the process shares, lets it through. Called from Swift concurrency,
 /// that thread is one of the cooperative pool, which has as many threads as the machine has cores. Exports that
-/// overlap therefore keep pool threads away from everything else, and the download tests (about eighty of them, all
+/// overlapped therefore kept pool threads away from everything else, and the download tests (about eighty of them, all
 /// started at once, most of them muxing the same two fixture files) overlap completely:
 ///
-/// - The other tests starve. This was one of the reasons for the 5 to 7 seconds that `HomeFeedServiceTests`'s 300 ms
+/// - The other tests starved. This was one of the reasons for the 5 to 7 seconds that `HomeFeedServiceTests`'s 300 ms
 ///   timeout took in a full run: for seconds, every thread of the pool was waiting inside an export.
-/// - With enough overlap the test run hangs for good. In a hung process all ten pool threads were inside
+/// - With enough overlap the test run hung for good. In a hung process all ten pool threads were inside
 ///   `AVAssetExportSession.export`, waiting for the shared queue, and that queue was itself waiting in
 ///   `FigReadSchedulerExpediteRequest` for a read that never completed. `DownloadManagerTests` alone hung in twelve of
 ///   twelve runs on an idle ten-core machine.
 ///
-/// A few exports at a time are fine (the default is half the cores, at most four, so that threads stay free for
-/// everyone else), and so is one after the other. `NOSLOP_TEST_EXPORTS=<n>` sets another number, for experiments.
-///
-/// The production fix belongs to `MediaMuxer`/`DownloadManager`, which merge as many downloads at once as finish at
-/// once: they should not run more than a few exports at a time either.
+/// The app is protected on its own now: `MediaMuxer.mux` takes a permit of `ExportGate.shared` (two at a time, for the
+/// whole process), and `MediaMuxerConcurrencyTests` exercises that gate without this trait. This trait is a second,
+/// test-side limit: it keeps the many download tests from all being active at once and queueing behind those two
+/// permits. A few exports at a time are fine here (the default is half the cores, at most four, so that threads stay
+/// free for everyone else), and so is one after the other. `NOSLOP_TEST_EXPORTS=<n>` sets another number, for
+/// experiments.
 actor MediaExportGate {
     static let shared = MediaExportGate(permits: configuredPermits)
 

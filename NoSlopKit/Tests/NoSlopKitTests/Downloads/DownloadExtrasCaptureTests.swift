@@ -142,9 +142,11 @@ private struct CaptureRig {
     func manager(
         extras: (any DownloadExtrasProviding)?,
         extrasTimeout: Duration = .seconds(8),
-        borrowedTime: BorrowedTimeLog? = nil
+        borrowedTime: BorrowedTimeLog? = nil,
+        mergeObserver: (@Sendable () -> Void)? = nil
     ) -> DownloadManager {
         var tuning = DownloadTuning.testing
+        tuning.extrasMergeObserver = mergeObserver
         tuning.extrasTimeout = extrasTimeout
         tuning.mux = { _, _, _, output in try Data("muxed".utf8).write(to: output) }
         if let borrowedTime { tuning.backgroundTime = borrowedTime.source }
@@ -269,8 +271,8 @@ private struct CaptureRig {
 
         // Deleting the download takes the extras with it.
         relaunched.delete(id: ZooFixture.itemID)
+        #expect(await relaunched.extras(forVideoID: ZooFixture.videoID) == nil, "the removal is done once the extras are asked for")
         #expect(!rig.sidecarExists())
-        #expect(await relaunched.extras(forVideoID: ZooFixture.videoID) == nil)
     }
 
     @Test func aDownloadStartedWithSponsorBlockSwitchedOffNeverAsksItAndKeepsTheRest() async throws {
@@ -482,10 +484,11 @@ private struct CaptureRig {
 
         // Still wanted by the other quality.
         manager.delete(id: "jNQXAC9IVRw-144")
-        #expect(rig.sidecarExists())
         #expect(await manager.extras(forVideoID: ZooFixture.videoID) != nil)
+        #expect(rig.sidecarExists())
         // Not wanted by anyone any more.
         manager.delete(id: "jNQXAC9IVRw-360")
+        #expect(await manager.extras(forVideoID: ZooFixture.videoID) == nil)
         #expect(!rig.sidecarExists())
     }
 
@@ -527,11 +530,11 @@ private struct CaptureRig {
         rig.server.setDelay(60)   // the chunks never arrive in this test: the download stays in flight
         let manager = rig.manager(extras: StubExtras { _, _ in ExtrasSample.all })
         manager.enqueue(video: ZooFixture.summary, quality: quality144)
-        #expect(await awaitDownloadCondition { rig.sidecarExists() })
-        #expect(manager.items.first?.state == .downloading)
+        #expect(await awaitDownloadCondition { rig.sidecarExists() && manager.items.first?.state == .downloading })
 
         manager.cancel(id: ZooFixture.itemID)
         #expect(manager.items.isEmpty)
+        #expect(await manager.extras(forVideoID: ZooFixture.videoID) == nil, "the removal is done once the extras are asked for")
         #expect(!rig.sidecarExists())
     }
 
@@ -553,6 +556,57 @@ private struct CaptureRig {
         // A later answer for the same part replaces it.
         manager.saveExtras(DownloadExtras(segments: []), forVideoID: ZooFixture.videoID)
         #expect(await manager.extras(forVideoID: ZooFixture.videoID) == DownloadExtras(segments: [], chapters: ExtrasSample.chapters))
+    }
+
+    @Test func keepingMoreRunsOffTheMainThread() async throws {
+        let rig = try CaptureRig.zoo()
+        defer { rig.cleanUp() }
+        let ranOnMain = Mutex<[Bool]>([])
+        let manager = rig.manager(extras: nil, mergeObserver: { ranOnMain.withLock { $0.append(Thread.isMainThread) } })
+        manager.enqueue(video: ZooFixture.summary, quality: quality144)
+        #expect(await complete(manager))
+
+        manager.saveExtras(DownloadExtras(chapters: ExtrasSample.chapters), forVideoID: ZooFixture.videoID)
+        #expect(await manager.extras(forVideoID: ZooFixture.videoID) == DownloadExtras(chapters: ExtrasSample.chapters))
+        #expect(ranOnMain.withLock { $0 } == [false])
+    }
+
+    @Test func manySavesInARowAreAllKept() async throws {
+        let rig = try CaptureRig.zoo()
+        defer { rig.cleanUp() }
+        let manager = rig.manager(extras: nil)
+        manager.enqueue(video: ZooFixture.summary, quality: quality144)
+        #expect(await complete(manager))
+
+        var languages: [String] = []
+        for index in 0..<30 {
+            switch index % 3 {
+            case 0: manager.saveExtras(DownloadExtras(segments: ExtrasSample.segments), forVideoID: ZooFixture.videoID)
+            case 1: manager.saveExtras(DownloadExtras(chapters: ExtrasSample.chapters), forVideoID: ZooFixture.videoID)
+            default:
+                let language = "l\(index)"
+                languages.append(language)
+                let track = CaptionTrack(languageCode: language, name: language, baseURL: URL(string: "https://example.com/\(language)")!)
+                manager.saveExtras(DownloadExtras(captions: [StoredCaptions(track: track, cues: ExtrasSample.englishCues)]), forVideoID: ZooFixture.videoID)
+            }
+        }
+        let kept = try #require(await manager.extras(forVideoID: ZooFixture.videoID))
+        #expect(kept.segments == ExtrasSample.segments)
+        #expect(kept.chapters == ExtrasSample.chapters)
+        #expect(Set(kept.captionTracks.map(\.languageCode)) == Set(languages), "no save was lost to another")
+    }
+
+    @Test func aSaveFollowedByTheRemovalLeavesNoFile() async throws {
+        let rig = try CaptureRig.zoo()
+        defer { rig.cleanUp() }
+        let manager = rig.manager(extras: nil)
+        manager.enqueue(video: ZooFixture.summary, quality: quality144)
+        #expect(await complete(manager))
+
+        manager.saveExtras(ExtrasSample.all, forVideoID: ZooFixture.videoID)
+        manager.delete(id: ZooFixture.itemID)
+        #expect(await manager.extras(forVideoID: ZooFixture.videoID) == nil)
+        #expect(!rig.sidecarExists())
     }
 
     @Test func nothingIsKeptForAVideoThatHasNoDownload() async throws {

@@ -63,7 +63,10 @@ struct PlayerHostView: View {
                     message: message,
                     video: player.currentVideo,
                     canRetry: player.failureIsWorthRetrying,
-                    retry: { player.retry() }
+                    canPlayNext: player.canPlayNext,
+                    isSkipping: player.isSkippingFailedVideo,
+                    retry: { player.retry() },
+                    playNext: { player.playNext() }
                 )
             }
 
@@ -80,7 +83,8 @@ struct PlayerHostView: View {
 }
 
 /// What the player area shows when the video cannot be played: the reason, Retry (only when asking again could end
-/// differently: not for a video YouTube will not hand out, `PlayerFailureAdvice`), and the way out to YouTube. The top
+/// differently: not for a video YouTube will not hand out, `PlayerFailureAdvice`), Next video (when there is one, as on
+/// the lock screen) and the way out to YouTube. The top
 /// bar with the chevron that minimizes the player stays above it either way.
 ///
 /// The area is the 16:9 frame of the player, which does not grow with the text. So the text follows the viewer's text
@@ -91,7 +95,11 @@ private struct PlayerFailureView: View {
     let message: String
     let video: VideoSummary?
     let canRetry: Bool
+    let canPlayNext: Bool
+    /// The player is about to go on to the next video by itself.
+    let isSkipping: Bool
     let retry: () -> Void
+    let playNext: () -> Void
 
     @Environment(\.openURL) private var openURL
 
@@ -135,27 +143,45 @@ private struct PlayerFailureView: View {
     }
 
     private var reason: some View {
-        Text(message)
-            .font(.footnote)
-            .multilineTextAlignment(.center)
-            .foregroundStyle(.white)
-            .fixedSize(horizontal: false, vertical: true)
-            .frame(maxWidth: 420)
-    }
-
-    private var buttons: some View {
-        HStack(spacing: 10) {
-            if canRetry {
-                Button("Retry", action: retry)
-                    .buttonStyle(.borderedProminent)
-            }
-            if let video {
-                Button("Open on YouTube") { openURL(video.watchURL) }
-                    .buttonStyle(.bordered)
-                    .tint(.white)
+        VStack(spacing: 4) {
+            Text(message)
+                .font(.footnote)
+                .foregroundStyle(.white)
+            if isSkipping {
+                Text("Going on to the next video\u{2026}")
+                    .font(.caption)
+                    .foregroundStyle(.white.opacity(0.7))
             }
         }
+        .multilineTextAlignment(.center)
+        .fixedSize(horizontal: false, vertical: true)
+        .frame(maxWidth: 420)
+    }
+
+    /// In a row when it fits the width, stacked when it does not (three buttons at a large text size on a narrow phone).
+    private var buttons: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 10) { buttonItems }
+            VStack(spacing: 8) { buttonItems }
+        }
         .controlSize(.small)
+    }
+
+    @ViewBuilder private var buttonItems: some View {
+        if canRetry {
+            Button("Retry", action: retry)
+                .buttonStyle(.borderedProminent)
+        }
+        if canPlayNext {
+            Button("Next video", action: playNext)
+                .buttonStyle(.bordered)
+                .tint(.white)
+        }
+        if let video {
+            Button("Open on YouTube") { openURL(video.watchURL) }
+                .buttonStyle(.bordered)
+                .tint(.white)
+        }
     }
 }
 

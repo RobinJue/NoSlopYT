@@ -9,7 +9,8 @@ import Foundation
 public enum PlayerFailureAdvice {
     /// Whether the error screen of a video that could not be loaded with `error` offers Retry.
     ///
-    /// - `NoSlopError.isWorthRetrying` says no for content YouTube calls gone (`unavailable`).
+    /// - `NoSlopError.isWorthRetrying` says no for content YouTube calls gone (`unavailable`) and for its verdicts
+    ///   about a video (`unplayable`); every error screen in the app follows that one rule.
     /// - `unplayable` is how the `player` endpoint reports a verdict of YouTube's about a video: removed, private,
     ///   terminated channel, age-restricted, made for kids, blocked in the country. The README says it too: these videos
     ///   cannot be played through this kind of client, and asking again gets the same verdict, so there is no Retry.
@@ -20,9 +21,7 @@ public enum PlayerFailureAdvice {
     ///   live or upcoming flags either.
     /// - Anything else (no connection, a server error, a bot check, a response that could not be read) can pass.
     public static func isWorthRetrying(_ error: any Error) -> Bool {
-        guard let error = error as? NoSlopError else { return true }
-        if case .unplayable = error { return false }
-        return error.isWorthRetrying
+        (error as? NoSlopError)?.isWorthRetrying ?? true
     }
 
     /// Whether the error screen of a video that failed while it played offers Retry. Every failure does but one: media

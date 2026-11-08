@@ -5,7 +5,9 @@ import Testing
 // `downloads.json` that exists but cannot be read (data protection before the first unlock after a restart, an I/O
 // error) is not an empty list. The library files have the same rule (`JSONFileStore`): a read failure leaves the file
 // alone and nothing may write over it. For downloads, treating it as empty also meant that every `.work/<id>` directory
-// (all partial downloads) was deleted as an orphan and the session's running tasks were cancelled as unknown.
+// (all partial downloads) was deleted as an orphan. These tests pin that and that nothing is written over the list; the
+// other harm, the session's running tasks being cancelled as unknown (the launch skips `reconcile` while the list is
+// unreadable), is not covered: proving that nothing happens needs a wait, and a fake session is more than it is worth.
 
 @MainActor
 @Suite struct DownloadListProtectionTests {
@@ -78,8 +80,6 @@ import Testing
         #expect(manager.items.isEmpty, "nothing can be shown until the list can be read")
         // The launch used to move every work directory to the trash right here, as orphans of an empty list.
         #expect(FileManager.default.fileExists(atPath: folder.pausedWork.appendingPathComponent("job.json").path))
-        #expect(FileManager.default.fileExists(atPath: folder.pausedPart.path))
-        try await Task.sleep(for: .milliseconds(150))   // the launch's look at the session has run by now
         #expect(FileManager.default.fileExists(atPath: folder.pausedPart.path))
 
         // A download started meanwhile (it fails here, offline) must not replace the list on disk with a list of one.

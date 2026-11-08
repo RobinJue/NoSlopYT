@@ -23,12 +23,16 @@ public enum SegmentLookup {
 
     /// Asks `provider` for the segments of `videoID`, trying again after each of `retryDelays` when a try fails.
     ///
-    /// - Parameter sleep: waits for a pause to pass; tests pass one that returns at once. A sleep that throws (the
+    /// - Parameters:
+    ///   - shouldRetry: asked after each pause and before the next request; false ends the lookup as `.failed`. The
+    ///     player passes whether SponsorBlock is still on, so that switching it off stops a lookup that is waiting.
+    ///   - sleep: waits for a pause to pass; tests pass one that returns at once. A sleep that throws (the
     ///   task was cancelled) ends the lookup.
     public static func fetch(
         videoID: String,
         from provider: any SponsorBlockProviding,
         retryDelays: [Duration] = SegmentLookup.retryDelays,
+        shouldRetry: @Sendable () async -> Bool = { true },
         sleep: @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) }
     ) async -> Outcome {
         var retries = 0
@@ -44,6 +48,7 @@ public enum SegmentLookup {
             } catch {
                 return .failed
             }
+            guard await shouldRetry() else { return .failed }
             retries += 1
         }
     }

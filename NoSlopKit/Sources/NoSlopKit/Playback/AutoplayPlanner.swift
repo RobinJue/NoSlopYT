@@ -24,8 +24,9 @@ public enum AutoplayPlanner {
 
     /// The first suggestion autoplay can start, with the ones that stay up next behind it.
     ///
-    /// A suggestion is skipped when it is the video that just ended, when the viewer has watched it (at least
-    /// `watchedAfter` seconds), when it is a Short, a live stream or a premiere that has not started, and when the
+    /// A suggestion is skipped when it is the video that just ended, when it was started earlier in this run
+    /// (`startedThisRun`, whatever its progress: a video skipped after 4 s is not offered again by the next video's list),
+    /// when the viewer has watched it in an earlier run (at least `watchedAfter` seconds), when it is a Short, a live stream or a premiere that has not started, and when the
     /// viewer's filters do not allow it (a channel blocked since the list was published, members-only videos, blocked
     /// keywords). None of those stays in `remaining`: the video just started and anything watched are gone, and so is
     /// what autoplay would pass over anyway.
@@ -34,6 +35,7 @@ public enum AutoplayPlanner {
     ///   - currentVideoID: the video that just ended.
     ///   - upNext: the suggestions, in order.
     ///   - progress: the seconds played of a video; nil when the viewer never watched it.
+    ///   - startedThisRun: the videos that started since the player was opened or last closed; none by default.
     ///   - allows: whether the viewer's filters let a suggestion through, as of now. The list may be older than the
     ///     last change of the filters (the player was minimized, or the list was carried over from an earlier video),
     ///     so the player asks with the settings it has when autoplay decides. Allows everything by default.
@@ -42,10 +44,12 @@ public enum AutoplayPlanner {
         after currentVideoID: String?,
         upNext: [VideoSummary],
         progress: (String) -> Double?,
+        startedThisRun: Set<String> = [],
         allows: (VideoSummary) -> Bool = { _ in true }
     ) -> Step? {
         let candidates = upNext.filter { video in
             video.id != currentVideoID
+                && !startedThisRun.contains(video.id)
                 && !video.isShort && !video.isLive && !video.isUpcoming
                 && allows(video)
                 && (progress(video.id) ?? 0) < watchedAfter

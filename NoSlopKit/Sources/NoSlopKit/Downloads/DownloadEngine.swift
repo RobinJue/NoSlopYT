@@ -174,6 +174,12 @@ struct DownloadTuning: Sendable {
     /// How many bytes are free on the volume of the given folder; nil when that cannot be told, and the download then
     /// goes ahead. Tests replace it to run out of room without filling a disk.
     var availableCapacity: @Sendable (URL) -> Int64? = { DownloadAssembler.availableCapacity(at: $0) }
+    /// Writes the plan (`job.json`) of a download that starts. Tests replace it to make the write fail the way it does on a
+    /// full device.
+    var savePlan: @Sendable (DownloadWorkspace, DownloadJobPlan) throws -> Void = { workspace, plan in try workspace.savePlan(plan) }
+    /// Called inside every merge of extras into a video's file, on whatever thread the merge runs on. Tests replace it to
+    /// see that the work is off the main thread.
+    var extrasMergeObserver: (@Sendable () -> Void)?
     /// How long a download that starts waits for the extras of its video (SponsorBlock segments, chapters, captions).
     /// After that it starts without them.
     var extrasTimeout: Duration = .seconds(8)
@@ -512,7 +518,11 @@ enum DownloadAssembler {
     /// same streams and sizes (the app was killed mid-download, the formats did not change): a retry then fetches
     /// only what is missing. Anything else is thrown away. The plan on disk is replaced by this one.
     @concurrent
-    static func prepare(plan: DownloadJobPlan, workspace: DownloadWorkspace) async throws -> Present {
+    static func prepare(
+        plan: DownloadJobPlan,
+        workspace: DownloadWorkspace,
+        savePlan: @Sendable (DownloadWorkspace, DownloadJobPlan) throws -> Void = DownloadTuning.standard.savePlan
+    ) async throws -> Present {
         let fileManager = FileManager.default
         let directory = workspace.directory(for: plan.itemID)
         var reusable = false
@@ -524,7 +534,7 @@ enum DownloadAssembler {
             workspace.discard(itemID: plan.itemID)
         }
         try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
-        try workspace.savePlan(plan)
+        try savePlan(workspace, plan)
         return present(in: plan, workspace: workspace, cleanUp: true)
     }
 

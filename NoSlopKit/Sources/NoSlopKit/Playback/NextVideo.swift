@@ -7,8 +7,8 @@ import Foundation
 /// whether there is a next video, or about which one it is. The order:
 /// 1. a video that is queued,
 /// 2. the next page of the list the queue came from, when nothing is queued but the list goes on,
-/// 3. the first suggestion autoplay could start (`AutoplayPlanner.step`): not the video itself, not a watched one, not a
-///    Short, a live stream or a premiere that has not started, nothing the viewer's filters hide,
+/// 3. the first suggestion autoplay could start (`AutoplayPlanner.step`): not the video itself, not one that started
+///    earlier in this run, not a watched one, not a Short, a live stream or a premiere that has not started, nothing the viewer's filters hide,
 /// 4. nothing: the button is disabled.
 public enum NextVideo: Equatable, Sendable {
     /// Start the first queued video.

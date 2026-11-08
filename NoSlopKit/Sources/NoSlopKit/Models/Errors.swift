@@ -61,12 +61,16 @@ public enum NoSlopError: Error, Equatable, Sendable, LocalizedError {
         }
     }
 
-    /// Whether trying again could end differently. Not for content YouTube says is gone: "Retry" on a deleted playlist
-    /// would only ask the same question again. Every other failure may pass (a dropped connection, a bot check, a page
+    /// Whether trying again could end differently. Not for a verdict of YouTube's: content it says is gone
+    /// (`unavailable`: "Retry" on a deleted playlist would only ask the same question again) and a video it will not
+    /// hand to this app (`unplayable`: private, age-restricted, made for kids, blocked in the country). Every other
+    /// failure may pass (a dropped connection, a bot check, a live event that has not begun (`notPlayableYet`), a page
     /// that came back in a format that is read differently next time).
     public var isWorthRetrying: Bool {
-        if case .unavailable = self { return false }
-        return true
+        switch self {
+        case .unavailable, .unplayable: return false
+        default: return true
+        }
     }
 
     /// The text of `.oauth(message)`. The message is either a bare reason from Google or from the redirect

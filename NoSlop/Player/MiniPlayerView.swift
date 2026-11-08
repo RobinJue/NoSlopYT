@@ -39,7 +39,9 @@ struct MiniPlayerView: View {
                     .frame(width: 44, height: 44)
                     .contentShape(Rectangle())
             }
-            .accessibilityLabel(player.isPlaybackActive ? "Pause" : (player.state == .ended ? "Replay" : "Play"))
+            // A video YouTube will not hand out has nothing to press: play would only ask again.
+            .disabled(player.failureMessage != nil && !player.failureIsWorthRetrying)
+            .accessibilityLabel(transportLabel(player))
 
             Button {
                 player.close()
@@ -86,6 +88,13 @@ struct MiniPlayerView: View {
                 ProgressView()
                     .controlSize(.small)
                     .tint(.white)
+            } else if player.failureMessage != nil {
+                ZStack {
+                    Color.black.opacity(0.6)
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.title3)
+                        .foregroundStyle(.white)
+                }
             }
         }
         .frame(width: 85, height: 48)
@@ -99,7 +108,12 @@ struct MiniPlayerView: View {
                 VideoTitleText(video: video, lineLimit: 1)
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(.primary)
-                if let channel = video.channel?.name, !channel.isEmpty {
+                if player.failureMessage != nil {
+                    Text("Couldn\u{2019}t play")
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                } else if let channel = video.channel?.name, !channel.isEmpty {
                     Text(channel)
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -130,7 +144,15 @@ struct MiniPlayerView: View {
         return CGFloat(min(max(player.currentTime / player.duration, 0), 1))
     }
 
+    private func transportLabel(_ player: PlayerController) -> String {
+        if player.failureMessage != nil { return player.failureIsWorthRetrying ? "Retry" : "Couldn\u{2019}t play" }
+        return player.isPlaybackActive ? "Pause" : (player.state == .ended ? "Replay" : "Play")
+    }
+
     private func playPauseIcon(_ player: PlayerController) -> String {
+        if player.failureMessage != nil {
+            return player.failureIsWorthRetrying ? "arrow.clockwise" : "exclamationmark.triangle.fill"
+        }
         if player.state == .ended { return "arrow.counterclockwise" }
         return player.isPlaybackActive ? "pause.fill" : "play.fill"
     }
@@ -153,6 +175,7 @@ struct MiniPlayerView: View {
         // The title the visible text shows: with De-clickbait titles on, the community title.
         guard let video = player.currentVideo, let shown = player.displayTitle else { return "Player" }
         let title = shown.isEmpty ? "Video" : shown
+        if player.failureMessage != nil { return "\(title), couldn\u{2019}t play" }
         if let channel = video.channel?.name, !channel.isEmpty {
             return "\(title), \(channel)"
         }

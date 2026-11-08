@@ -66,6 +66,14 @@ import SwiftUI
 ///   the log (category `deArrow`, lines that start with "[deArrow]", see `LoggingDeArrow`). With `-offlineDeArrow YES` it
 ///   is how a slow connection looks: the lookup fails when its time is up, long after the card was scrolled away.
 /// - `-uiScript '<steps>'`: taps, pulls and the like at given moments (see `DebugUIScript`).
+/// - `-playerScript '<steps>'`: steps for the player, separated by `;`, run in order once the first video plays (see
+///   `PlayerDebugScript`). The main kinds: waiting (`wait=<seconds>`, `waitPlaying`, `waitVideo`), moving through the queue
+///   (`next`, `jump=<n>`, `hops=<count>`), what the controls and the settings do (`quality=`, `rate=`, `pause`, `play`,
+///   `seek=`, `captions=`, `sponsorBlock=`, `fullscreen`, `minimize`), failures and Retry (`fail`, `failNotYet`,
+///   `failVerdict`, `failDecode`, `retry`), a switch for the services the player asks (`playerServices=on|off`), the end of
+///   the process the way iOS does it (`terminate`), and `log=<tag>` to write the state of the player to the log.
+/// - `-debugWatchDetails YES` (or `-debugWatchDetails <video id>` for a sample video other than the first): the Library tab
+///   presents the watch page of that video in a sheet once, without a player, so the page can be looked at on its own.
 enum DebugLaunchHooks {
     private static var isPrepared = false
     private static var isSearchTextTaken = false

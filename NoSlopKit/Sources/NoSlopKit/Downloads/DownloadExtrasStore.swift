@@ -10,9 +10,9 @@ import Foundation
 /// alone and nothing is written over it. A file that is there but cannot be decoded is renamed `<file>.corrupt`, like
 /// every persisted JSON of the app, and counts as not there. Writes are atomic.
 ///
-/// The methods read and write files on the calling thread, and the files are small except for the captions: the manager
-/// calls them from the main actor only where that is as cheap as saving `downloads.json` is, and reads off it
-/// (`loadOffMainActor`).
+/// The methods read and write files on the calling thread, and the files are small except for the captions (up to
+/// megabytes). The manager therefore never calls them on the main actor: it reads with `loadOffMainActor`, and merges,
+/// removals and prunes run one after the other on a background writer, so that two changes of a file never interleave.
 struct DownloadExtrasStore: Sendable {
     let directory: URL
 

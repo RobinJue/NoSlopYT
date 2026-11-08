@@ -2,8 +2,10 @@ import Testing
 @testable import NoSlopKit
 
 @Suite struct QueueAdvanceTests {
-    private func action(_ request: QueueAdvance.Request?, queued: Int, isEnded: Bool) -> QueueAdvance.Action {
-        QueueAdvance.action(for: request, queued: queued, isEnded: isEnded)
+    private func action(
+        _ request: QueueAdvance.Request?, queued: Int, isEnded: Bool, listIsOver: Bool = false
+    ) -> QueueAdvance.Action {
+        QueueAdvance.action(for: request, queued: queued, isEnded: isEnded, listIsOver: listIsOver)
     }
 
     // MARK: Nobody waited
@@ -48,5 +50,26 @@ import Testing
 
     @Test func nextWithNothingBehindItAfterTheVideoEndedLeavesItToAutoplay() {
         #expect(action(.now, queued: 0, isEnded: true) == .autoplay)
+    }
+
+    @Test func nextAtTheEndOfTheListFallsThroughToTheSuggestionWhateverTheVideoIsDoing() {
+        #expect(action(.now, queued: 0, isEnded: false, listIsOver: true) == .suggestion)
+        #expect(action(.now, queued: 0, isEnded: true, listIsOver: true) == .suggestion)
+    }
+
+    @Test func nextWhenThePageFailedKeepsThePlaylist() {
+        // The list goes on (hasMore): a failed or empty page is no reason to leave it.
+        #expect(action(.now, queued: 0, isEnded: false, listIsOver: false) == .nothing)
+        #expect(action(.now, queued: 0, isEnded: true, listIsOver: false) == .autoplay)
+    }
+
+    @Test func aPageThatBroughtVideosStartsThemEvenWhenTheListIsOver() {
+        #expect(action(.now, queued: 2, isEnded: false, listIsOver: true) == .startNext)
+    }
+
+    @Test func theEndOfTheListStaysWithAutoplayWhenTheVideoEnded() {
+        // Autoplay still governs the natural end of a queue.
+        #expect(action(.whenEnded, queued: 0, isEnded: true, listIsOver: true) == .autoplay)
+        #expect(action(.whenEnded, queued: 0, isEnded: false, listIsOver: true) == .nothing)
     }
 }

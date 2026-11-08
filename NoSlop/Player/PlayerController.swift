@@ -105,6 +105,11 @@ final class PlayerController {
     /// Whether the error screen offers Retry (`PlayerFailureAdvice`): not for a video YouTube will not hand out, where
     /// asking again only brings the same message back. Only meaningful while the state is `.failed`.
     private(set) var failureIsWorthRetrying = true
+    /// The failure of a video the queue or autoplay started is shown for a moment, and the next video starts by itself
+    /// (`FailedVideoAdvance`). The error screen says so while it waits.
+    private(set) var isSkippingFailedVideo = false
+    /// Next is waiting for the next page of the list behind the queue: the button shows it and ignores further presses.
+    private(set) var isWaitingForNextPage = false
     /// The caption tracks of the download that plays whose text it kept (`DownloadExtras`). They work without a
     /// connection and are there before the stream info is, so they are part of `captionTracks`.
     private(set) var keptCaptionTracks: [CaptionTrack] = []
@@ -173,7 +178,17 @@ final class PlayerController {
     /// The request for the next page of `queueSource` that is on its way.
     @ObservationIgnored private var refillTask: Task<Void, Never>?
     /// Set while the player waits for that page because nothing was queued: what to do when it arrives.
-    @ObservationIgnored private var pendingAdvance: QueueAdvance.Request?
+    @ObservationIgnored private var pendingAdvance: QueueAdvance.Request? {
+        didSet { isWaitingForNextPage = pendingAdvance == .now }
+    }
+    /// The videos that started since the player was opened or last closed (any way: open, Next, autoplay, the queue).
+    /// Next and autoplay never offer them again, whatever their progress (`AutoplayPlanner`).
+    @ObservationIgnored private var startedThisRun: Set<String> = []
+    /// The current video was started by the queue, autoplay or Next, not opened by the viewer (`FailedVideoAdvance`).
+    @ObservationIgnored private var startedByAdvance = false
+    /// Videos skipped for being unplayable since one played or the viewer opened one.
+    @ObservationIgnored private var skippedInARow = 0
+    @ObservationIgnored private var failedAdvanceTask: Task<Void, Never>?
     @ObservationIgnored private var progressThrottle = ProgressSaveThrottle()
     @ObservationIgnored private var wasPlayingBeforeInterruption = false
     @ObservationIgnored private var didDetachSurfaces = false
@@ -402,11 +417,15 @@ final class PlayerController {
         queue: [VideoSummary],
         more: QueueSource?,
         upNext: [VideoSummary] = [],
-        expand: Bool
+        expand: Bool,
+        byAdvance: Bool = false
     ) {
         saveProgress(force: true)
         tearDownItem()
         cancelWork()
+        startedThisRun.insert(video.id)
+        startedByAdvance = byAdvance
+        if !byAdvance { skippedInARow = 0 }
 
         generation += 1
         let token = generation
@@ -715,6 +734,9 @@ final class PlayerController {
         titleTask?.cancel()
         captionTask?.cancel()
         skipNoticeTask?.cancel()
+        failedAdvanceTask?.cancel()
+        failedAdvanceTask = nil
+        isSkippingFailedVideo = false
         loadTask = nil
         recoveryTask = nil
         segmentsTask = nil
@@ -807,7 +829,7 @@ final class PlayerController {
         // What stays up next goes along: with the player minimized the watch page is not on screen to replace the
         // list, and the next hop would find it empty. Autoplay leaves the list of the queue behind.
         endQueueRun()
-        start(step.next, startAt: nil, queue: [], more: nil, upNext: step.remaining, expand: false)
+        start(step.next, startAt: nil, queue: [], more: nil, upNext: step.remaining, expand: false, byAdvance: true)
     }
 
     /// The first up-next suggestion the viewer has not watched and the viewer's filters allow, and the suggestions that
@@ -821,6 +843,7 @@ final class PlayerController {
             after: video.id,
             upNext: upNext,
             progress: { [library] id in library.progress(for: id)?.progressSeconds },
+            startedThisRun: startedThisRun,
             allows: { filter.allows($0) }
         )
     }
@@ -913,11 +936,45 @@ final class PlayerController {
         shouldPlayWhenReady = false
         saveProgress(force: true)
         updateNowPlaying()
+        skipFailedVideoIfNeeded(isWorthRetrying: isWorthRetrying)
+    }
+
+    /// A video the queue, autoplay or Next started and that cannot be played does not end the run: after a moment (so the
+    /// failure is seen, on the error screen or in the mini player) the next video starts. See `FailedVideoAdvance`.
+    private func skipFailedVideoIfNeeded(isWorthRetrying: Bool) {
+        failedAdvanceTask?.cancel()
+        failedAdvanceTask = nil
+        isSkippingFailedVideo = false
+        guard FailedVideoAdvance.action(
+            isWorthRetrying: isWorthRetrying, reachedByAdvance: startedByAdvance,
+            hasNext: FailedVideoAdvance.hasNext(nextVideo, autoplayNext: settings.autoplayNext),
+            skippedInARow: skippedInARow
+        ) == .skipToNext else { return }
+        // Nobody sees the screen when the app is not in front, and the process may be suspended soon: go on at once.
+        let wait: Duration = UIApplication.shared.applicationState == .active ? FailedVideoAdvance.delay : .zero
+        let token = generation
+        isSkippingFailedVideo = true
+        Self.log.info("skipping the video that cannot be played, \(self.skippedInARow) skipped before")
+        failedAdvanceTask = Task { [weak self] in
+            if wait > .zero {
+                try? await Task.sleep(for: wait)
+            }
+            // The viewer acted meanwhile (retry, another video, close): the generation or the state moved on.
+            guard !Task.isCancelled, let self, self.generation == token, self.failureMessage != nil else { return }
+            self.skippedInARow += 1
+            if !self.playNext() {
+                self.isSkippingFailedVideo = false
+                self.skippedInARow -= 1
+            }
+        }
     }
 
     /// Tries again from the error screen: fresh URLs, same position, and a clean slate for the failure counter.
     func retry() {
         guard currentVideo != nil else { return }
+        failedAdvanceTask?.cancel()
+        failedAdvanceTask = nil
+        isSkippingFailedVideo = false
         recoveryAttempts = 0
         shouldPlayWhenReady = true
         beginReload(at: currentTime, waitForConnection: false)
@@ -1050,7 +1107,7 @@ final class PlayerController {
         case .suggested(let step):
             // The queue is over, or there never was one: what stays up next goes along, as with autoplay.
             endQueueRun()
-            start(step.next, startAt: nil, queue: [], more: nil, upNext: step.remaining, expand: false)
+            start(step.next, startAt: nil, queue: [], more: nil, upNext: step.remaining, expand: false, byAdvance: true)
             return true
         case .nothing:
             return false
@@ -1074,10 +1131,12 @@ final class PlayerController {
     private func advanceQueue(as request: QueueAdvance.Request) -> Bool {
         if let next = queue.first {
             queuePosition += 1
-            start(next, startAt: nil, queue: Array(queue.dropFirst()), more: queueSource, expand: false)
+            start(next, startAt: nil, queue: Array(queue.dropFirst()), more: queueSource, expand: false, byAdvance: true)
             return true
         }
         guard let source = queueSource, source.hasMore else { return false }
+        // A second press while the page is on its way changes nothing.
+        if pendingAdvance == .now { return true }
         // A viewer who pressed Next keeps asking for the next video, whether or not the one that plays has ended since.
         if pendingAdvance != .now {
             pendingAdvance = request
@@ -1153,9 +1212,12 @@ final class PlayerController {
 
         let request = pendingAdvance
         pendingAdvance = nil
-        switch QueueAdvance.action(for: request, queued: queue.count, isEnded: state == .ended) {
+        switch QueueAdvance.action(for: request, queued: queue.count, isEnded: state == .ended, listIsOver: !source.hasMore) {
         case .startNext:
             _ = advanceQueue(as: .now)
+        case .suggestion:
+            // The list is over and the viewer asked for the next video: the suggestion, whatever the autoplay setting.
+            _ = playNext()
         case .autoplay:
             if let video = currentVideo {
                 autoplayAfterQueue(of: video)
@@ -1166,6 +1228,12 @@ final class PlayerController {
             if !added.isEmpty {
                 refillQueueIfNeeded()
             }
+        }
+        // The skip of a failed video waited for this page and nothing started (the page failed or held nothing): the error
+        // screen stops promising a next video.
+        if isSkippingFailedVideo, failureMessage != nil, pendingAdvance != .now {
+            isSkippingFailedVideo = false
+            skippedInARow = max(0, skippedInARow - 1)
         }
         updateNowPlaying()
     }
@@ -1245,6 +1313,9 @@ final class PlayerController {
         refillTask = nil
         pendingAdvance = nil
         queueSource = nil
+        startedThisRun = []
+        startedByAdvance = false
+        skippedInARow = 0
         upNext = []
         detailsHandedOverFor = nil
         segments = []
@@ -1414,6 +1485,7 @@ final class PlayerController {
             stallTask?.cancel()
             if !hasStartedPlayback {
                 hasStartedPlayback = true
+                skippedInARow = 0
                 saveProgress(force: true)
             }
             state = .playing
@@ -1558,10 +1630,19 @@ final class PlayerController {
         segmentsTask?.cancel()
         segmentsTask = Task { [weak self] in
             guard let self else { return }
-            let outcome = await SegmentLookup.fetch(videoID: videoID, from: self.sponsorBlock)
+            let outcome = await SegmentLookup.fetch(
+                videoID: videoID, from: self.sponsorBlock,
+                shouldRetry: { [weak self] in await self?.settings.sponsorBlockEnabled ?? false }
+            )
             guard !Task.isCancelled, self.currentVideo?.id == videoID else { return }
             switch outcome {
             case .loaded(let loaded):
+                // SponsorBlock was switched off while the answer was on its way: it is dropped (not kept, not written
+                // into a download's extras), and switching it on again asks afresh.
+                guard self.settings.sponsorBlockEnabled else {
+                    self.segmentsRequestedFor = nil
+                    return
+                }
                 // The live answer is the truth, an empty one too. A failed lookup (below) leaves what the download kept.
                 self.liveSegmentsArrived = true
                 self.rawSegments = loaded
