@@ -26,9 +26,18 @@ Design: [`docs/superpowers/specs/2026-11-03-noslop-design.md`](docs/superpowers/
   from) above Up next. It shows where the video is in the queue ("3 of 14", or "3 of 100+" while more of the list is
   still to be fetched) and up to three of the videos that come next; a tap on one skips ahead to it. A queue without a
   name (Watch Later, a playlist on the device) reads "Playing from your queue". The Next button in the player controls
-  starts the next queued video or, when nothing is queued, the first video in Up next that you have not watched (no
-  Short, live or upcoming video, and nothing your feed filters hide), also when Autoplay next video is off. The lock
-  screen's Next does the same. Next is off when there is nothing to start. There is no Previous.
+  starts the next queued video. When nothing is queued but the list goes on, it waits for the next page (the button
+  shows a spinner, and pressing it again changes nothing); when the list is over, it starts the first video in Up next
+  that you have not watched (no Short, live or upcoming video, and nothing your feed filters hide), also when Autoplay
+  next video is off. Next, like autoplay, never offers a video that already started since the player was opened,
+  even one you left after a few seconds. The lock screen's Next does the same. Next is off when there is nothing to
+  start. There is no Previous.
+- A video that YouTube will not hand out (private, removed, age-restricted, not playable) does not end a queue or
+  autoplay. When the queue, autoplay or Next started it, the player shows the reason for two seconds ("Going on to the
+  next video…") and starts the next one, at once when the app is not on screen. This happens for up to three videos
+  in a row, never for a video you opened yourself, and never for a failure that Retry could fix (no connection, a
+  busy server): that stays on its error screen. With Autoplay next video off, a failure where only a suggestion would
+  follow also stays; its Next video button starts it.
 - Downloads videos (pick a quality, or audio only) for offline viewing. Downloads continue while the app is in the
   background, and the files show up in the Files app. A download also keeps its video's SponsorBlock segments,
   chapters and captions, so offline it still skips sponsors, shows segments and chapter marks in the seek bar, and has
@@ -194,14 +203,18 @@ by building it and by running it with the mock services ("Debug launch arguments
   video's length), for audio-only downloads too. A half-written file never counts as finished. Merging needs room
   for a second copy of the video, so before it fetches anything the app checks the free space and refuses a download
   that would not fit, saying how much it needs and how much is free. A download that fails keeps what it fetched, and
-  so does a merge that the system interrupted: Retry only fetches or merges what is missing.
+  so does a merge that the system interrupted: Retry only fetches or merges what is missing. Retry throws the parts
+  away only when YouTube rules on the video itself (private, removed, not playable); a failed lookup of the stream
+  addresses (no connection, a captive portal's page, an HTTP error, an answer without streams) keeps them, and so does
+  a plan that cannot be written on a full device.
 - **Offline extras.** Offline the player cannot ask SponsorBlock, the watch page or the caption service, so a download
   keeps their answers. When it starts (the phone is online then) the app also fetches the video's SponsorBlock segments
   (every category, so your settings still decide when the video plays; not asked while SponsorBlock is off in Settings),
   its chapters and the text of up to three caption tracks, the one captions open with first. They are kept per video,
   not per quality, in `.extras/<video id>.json` in the downloads folder. `.extras` starts with a dot, like `.work` where
   the parts of unfinished downloads go, so the Files app does not list it; the file goes with the last download of the
-  video. The fetch is best effort: it waits at most eight seconds (each lookup gets six) before the first part of the
+  video. The extras file is written in the background, so keeping a long list of captions does not
+  stall the screen. The fetch is best effort: it waits at most eight seconds (each lookup gets six) before the first part of the
   video is requested, leaves out what did not arrive and never fails the download. The whole start of a download
   (stream addresses, free-space check, this fetch) runs on running time borrowed from iOS, so leaving the app right
   after you tap Download does not hold it up. A download then plays offline with sponsor skipping, the segments and
@@ -214,7 +227,8 @@ by building it and by running it with the mock services ("Debug launch arguments
   and the app keeps the entry for its own video. The server never learns what you watch. A DeArrow lookup that fails
   (no connection, a timeout, a busy server) is not an answer: the original title shows, the same video is not asked
   about again for a minute, and the app asks again when the connection comes back or De-clickbait titles is switched
-  on.
+  on. A SponsorBlock lookup that fails is tried again twice, after 3 and 10 seconds; switching SponsorBlock off in
+  Settings ends a lookup that is waiting for its next try, and an answer that arrives after that is dropped.
 - **Your data** stays on the device: subscriptions, history, Watch Later, playlists and recent searches are JSON
   files in Application Support, written half a second after a change, at once when the app leaves the foreground, and
   when iOS announces that it is about to end the app (an app that plays in the background can get that notice when it
@@ -272,8 +286,12 @@ shows a plain "Can't open this link" message.
 - **A video says it is unavailable, private, age-restricted or made for kids.** The message is YouTube's own reason.
   These videos cannot be played through this kind of client, and asking again gets the same answer, so the player shows
   no Retry for them, only "Open on YouTube", which opens them in the YouTube app or in Safari (the chevron at the top
-  still minimizes the player). Retry stays for failures that can pass: no connection, a busy server, a bot check, and a
-  live event or premiere that has not begun yet.
+  still minimizes the player), and "Next video" when there is one. Other screens that ask YouTube about such a video,
+  such as the Download sheet, say "Not available" with the reason and no Retry. Retry stays for failures that can pass:
+  no connection, a busy server, a bot check, and a live event or premiere that has not begun yet. In a queue or
+  autoplay the player goes on to the next video by itself (see the feature list). The mini player then shows a warning
+  on the thumbnail and "Couldn't play" under the title, and its play button is a Retry button, or is off when Retry
+  would not help. At large text sizes the error screen's buttons stack instead of sitting in a row.
 - **Playback stops after a long pause or a lost connection.** The app re-resolves the stream (or waits for the
   connection) and resumes once; if playback fails again it shows the error with a Retry button. A stream that this
   device cannot decode gets no Retry, since fresh addresses would not help; for a download that cannot be played, Retry
@@ -282,7 +300,9 @@ shows a plain "Can't open this link" message.
   that are still good, so only what is missing is fetched again. When a stream address stops working (it expired, or
   the phone left the Wi-Fi it was made for), the app asks YouTube for new ones by itself once before it gives up.
   "There isn't enough free space" means the download, plus a second copy for the merge, would not fit: free some
-  space and tap Retry, the parts that were fetched are kept.
+  space and tap Retry, the parts that were fetched are kept, also when the phone was too full to write the download's plan.
+  A Retry whose lookup of stream addresses fails (no connection, a captive portal) keeps them too; only a video that
+  YouTube calls private, removed or not playable loses its parts.
 - **A download stopped after you swiped the app away.** iOS cancels the background transfers of an app that was
   force-quit and does not start it again. Open No Slop: the parts that were already fetched are kept, and if the row
   says Paused, tap Retry.
