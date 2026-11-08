@@ -49,6 +49,9 @@ private final class GatedHTTP: HTTPClient, @unchecked Sendable {
         while lock.withLock({ waiting.isEmpty }) { try? await Task.sleep(nanoseconds: 2_000_000) }
     }
 
+    /// Holds the next requests again after a `release()`.
+    func close() { lock.withLock { open = false } }
+
     func release() {
         let all = lock.withLock { () -> [CheckedContinuation<Void, Never>] in
             open = true
@@ -334,5 +337,61 @@ private final class GatedHTTP: HTTPClient, @unchecked Sendable {
         try await service.notInterested(videoID: "vidPLAIN001")
         let report = await service.diagnostics().lastCardAction
         #expect(report?.accepted == false && report?.status == 200)
+    }
+
+    @Test func anEmptyFeedbackReplyIsNotAccepted() async throws {
+        let http = MockHTTPClient()
+        let service = try await connected(http)
+        http.enqueue("youtubei/v1/get_panel", body: try data(try Fixture.json("tvsynthetic_panel_menu.json")))
+        http.enqueue("youtubei/v1/feedback", body: Data())
+        try await service.notInterested(videoID: "vidPLAIN001")
+        let report = await service.diagnostics().lastCardAction
+        #expect(report?.accepted == false && report?.status == 200)
+    }
+
+    @Test func aFeedbackReplyWithAnErrorIsNotAccepted() async throws {
+        let http = MockHTTPClient()
+        let service = try await connected(http)
+        http.enqueue("youtubei/v1/get_panel", body: try data(try Fixture.json("tvsynthetic_panel_menu.json")))
+        http.enqueue("youtubei/v1/feedback", body: Data(#"{"error":{"code":400}}"#.utf8))
+        try await service.notInterested(videoID: "vidPLAIN001")
+        #expect(await service.diagnostics().lastCardAction?.accepted == false)
+        http.enqueue("youtubei/v1/get_panel", body: try data(try Fixture.json("tvsynthetic_panel_menu.json")))
+        http.enqueue("youtubei/v1/feedback", body: Data(#"{"error":{"code":400}}"#.utf8))
+        let sent = try await service.dontRecommendChannel(videoID: "vidPLAIN001", channelID: "UCabcdefghijklmnopqrstuv", channelName: "x")
+        #expect(!sent)
+    }
+
+    @Test func aClearDuringThePanelRequestSendsNoFeedbackAndLeavesNoReport() async throws {
+        let http = MockHTTPClient()
+        http.enqueue("youtubei/v1/browse", body: try data(try Fixture.json("tvsynthetic_home_mixed.json")))
+        let gate = GatedHTTP(http)
+        gate.release()
+        let service = RecommendationsService(client: TVClient(http: gate, tokens: FakeTVTokens()), language: "en", region: "US", defaults: defaults(freshSuite()))
+        _ = try await service.homePage(continuation: nil)
+        gate.close()
+        http.enqueue("youtubei/v1/get_panel", body: try data(try Fixture.json("tvsynthetic_panel_menu.json")))
+        http.enqueue("youtubei/v1/feedback", body: Data(#"{"feedbackResponses":[{"isProcessed":true}]}"#.utf8))
+        let action = Task { try await service.notInterested(videoID: "vidPLAIN001") }
+        await gate.started()
+        await service.clearAccountData()
+        gate.release()
+        await #expect(throws: NoSlopError.self) { try await action.value }
+        #expect(!http.requests.contains { $0.url?.path == "/youtubei/v1/feedback" })
+        #expect(await service.diagnostics().lastCardAction == nil)
+
+        // The same for a channel action whose menu does not match: no stale report either.
+        gate.close()
+        http.enqueue("youtubei/v1/browse", body: try data(try Fixture.json("tvsynthetic_home_mixed.json")))
+        gate.release()
+        _ = try await service.homePage(continuation: nil)
+        gate.close()
+        http.enqueue("youtubei/v1/get_panel", body: try data(try Fixture.json("tvsynthetic_panel_menu.json")))
+        let channel = Task { try await service.dontRecommendChannel(videoID: "vidPLAIN001", channelID: "UCzzzzzzzzzzzzzzzzzzzzzz", channelName: "x") }
+        await gate.started()
+        await service.clearAccountData()
+        gate.release()
+        await #expect(throws: NoSlopError.self) { _ = try await channel.value }
+        #expect(await service.diagnostics().lastCardAction == nil)
     }
 }

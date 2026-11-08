@@ -199,17 +199,18 @@ public actor RecommendationsService: RecommendationsProviding {
     // MARK: Card actions
 
     public func notInterested(videoID: String) async throws {
-        let (token, findings, status) = try await panelToken(videoID: videoID, kind: "notInterested") { $0.notInterested }
+        let started = epoch
+        let (token, _, status) = try await panelToken(videoID: videoID, kind: "notInterested", started: started) { $0.notInterested }
         guard let token else {
-            record("notInterested", status: status, accepted: false, started: epoch)
-            _ = findings
+            record("notInterested", status: status, accepted: false, started: started)
             throw NoSlopError.unavailable(reason: Self.notOffered)
         }
-        try await sendFeedback(token, kind: "notInterested")
+        _ = try await sendFeedback(token, kind: "notInterested", started: started)
     }
 
     public func dontRecommendChannel(videoID: String, channelID: String?, channelName: String) async throws -> Bool {
-        let (token, findings, status) = try await panelToken(videoID: videoID, kind: "dontRecommendChannel") { $0.dontRecommend }
+        let started = epoch
+        let (token, findings, status) = try await panelToken(videoID: videoID, kind: "dontRecommendChannel", started: started) { $0.dontRecommend }
         let sameChannel: Bool
         if let channelID, !channelID.isEmpty {
             sameChannel = findings.channelID == channelID
@@ -220,21 +221,19 @@ public actor RecommendationsService: RecommendationsProviding {
             sameChannel = false
         }
         guard let token, sameChannel else {
-            record("dontRecommendChannel", status: status, accepted: false, started: epoch)
+            record("dontRecommendChannel", status: status, accepted: false, started: started)
             return false
         }
-        try await sendFeedback(token, kind: "dontRecommendChannel")
-        return lastCardAction?.accepted ?? false
+        return try await sendFeedback(token, kind: "dontRecommendChannel", started: started)
     }
 
     private static let notOffered = "YouTube didn't offer this for that video."
 
     /// Asks YouTube for the card's menu and picks the token of one action. Nothing is sent for an ambiguous menu.
     private func panelToken(
-        videoID: String, kind: String, pick: (TVPanelFindings) -> String?
+        videoID: String, kind: String, started: Int, pick: (TVPanelFindings) -> String?
     ) async throws -> (token: String?, findings: TVPanelFindings, status: Int?) {
         guard let handle = handles[videoID] else { throw NoSlopError.unavailable(reason: Self.notOffered) }
-        let started = epoch
         let reply: JSON?
         do {
             reply = try await client.post(
@@ -249,6 +248,8 @@ public actor RecommendationsService: RecommendationsProviding {
             record(kind, status: Self.status(of: error), accepted: false, started: started)
             throw error
         }
+        // The account may have been disconnected (or replaced) while the menu was out.
+        guard epoch == started else { throw NoSlopError.recommendationsNotConnected }
         guard let reply else {
             record(kind, status: 200, accepted: false, started: started)
             throw NoSlopError.unavailable(reason: Self.notOffered)
@@ -261,8 +262,8 @@ public actor RecommendationsService: RecommendationsProviding {
         return (pick(findings), findings, 200)
     }
 
-    private func sendFeedback(_ token: String, kind: String) async throws {
-        let started = epoch
+    private func sendFeedback(_ token: String, kind: String, started: Int) async throws -> Bool {
+        guard epoch == started else { throw NoSlopError.recommendationsNotConnected }
         do {
             let reply = try await client.post(
                 "feedback",
@@ -271,12 +272,14 @@ public actor RecommendationsService: RecommendationsProviding {
                     "feedbackTokens": [.string(token)],
                 ]
             )
-            // YouTube may say a feedback was not processed; no flags at all counts as accepted.
+            // Accepted needs a JSON reply without an error and no feedback marked unprocessed (as the probe judges it).
             var flags: [Bool] = []
             if let responses = reply?["feedbackResponses"]?.array {
                 flags = responses.compactMap { $0["isProcessed"]?.bool }
             }
-            record(kind, status: 200, accepted: flags.allSatisfy { $0 }, started: started)
+            let accepted = reply != nil && reply?["error"] == nil && flags.allSatisfy { $0 }
+            record(kind, status: 200, accepted: accepted, started: started)
+            return accepted
         } catch {
             record(kind, status: Self.status(of: error), accepted: false, started: started)
             throw error
