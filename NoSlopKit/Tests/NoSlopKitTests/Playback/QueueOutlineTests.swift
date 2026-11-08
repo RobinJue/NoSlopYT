@@ -15,6 +15,36 @@ private func videos(_ range: Range<Int>) -> [VideoSummary] {
 }
 
 @Suite struct QueueOutlineTests {
+    // MARK: Announced size
+
+    @Test func aPlaylistThatStatesItsSizeShowsItWhilePagesAreStillComing() throws {
+        // "Play all" on a playlist of 51 whose first page has 42: not "1 of 42+".
+        let outline = try #require(QueueOutline(name: "Mix", position: 1, queued: videos(1..<42), hasMore: true, expectedTotal: 51))
+
+        #expect(outline.positionText == "1 of 51")
+        #expect(outline.spokenPositionText == "Video 1 of 51")
+    }
+
+    @Test func theStatedSizeIsIgnoredOnceNoPageIsLeft() throws {
+        // The source is over and the filters hid nine videos: the loaded 42 are the queue, with no "+".
+        let outline = try #require(QueueOutline(name: "Mix", position: 1, queued: videos(1..<42), hasMore: false, expectedTotal: 51))
+
+        #expect(outline.positionText == "1 of 42")
+        #expect(outline.spokenPositionText == "Video 1 of 42")
+    }
+
+    @Test func aStatedSizeBelowWhatIsLoadedFallsBackToThePlus() throws {
+        let outline = try #require(QueueOutline(name: "Mix", position: 1, queued: videos(1..<60), hasMore: true, expectedTotal: 51))
+
+        #expect(outline.positionText == "1 of 60+")
+    }
+
+    @Test func withoutAStatedSizeThePlusStaysWhilePagesCome() throws {
+        let outline = try #require(QueueOutline(name: nil, position: 3, queued: videos(0..<97), hasMore: true))
+
+        #expect(outline.positionText == "3 of 100+")
+    }
+
     // MARK: Position
 
     @Test func aListLoadedToItsEndHasAKnownTotal() throws {

@@ -76,6 +76,8 @@ public struct SearchFilter: Codable, Hashable, Sendable {
 /// What a URL (or pasted link) points at.
 public enum ResolvedURL: Hashable, Sendable {
     case video(id: String, startSeconds: Int?)
+    /// A video that a link names together with a playlist (`watch?v=…&list=…`): it plays as part of that playlist.
+    case videoInPlaylist(id: String, startSeconds: Int?, playlistID: String)
     case channel(id: String)
     case playlist(id: String)
     case search(query: String)

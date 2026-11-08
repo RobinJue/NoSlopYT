@@ -20,20 +20,25 @@ public struct QueueOutline: Equatable, Sendable {
     public let hasMore: Bool
     /// The next videos of the queue, at most `upcomingLimit`.
     public let upcoming: [VideoSummary]
+    /// How many videos the list says it has ("51 videos" in a playlist's header), while pages are still to come. The
+    /// first page of a playlist is shorter than the list, so "1 of 42+" would undersell a playlist of 51.
+    public let expectedTotal: Int?
 
     /// - Parameters:
     ///   - name: where the queue came from; blank means no name.
     ///   - position: 1-based position of the video that plays.
     ///   - queued: the videos behind it.
     ///   - hasMore: the list the queue came from has pages that are not loaded yet.
+    ///   - expectedTotal: the size the list gives for itself, if it does; used only while `hasMore`.
     /// - Returns: nil when no queue plays (`position` is below 1).
-    public init?(name: String?, position: Int, queued: [VideoSummary], hasMore: Bool) {
+    public init?(name: String?, position: Int, queued: [VideoSummary], hasMore: Bool, expectedTotal: Int? = nil) {
         guard position >= 1 else { return nil }
         let trimmed = name?.trimmingCharacters(in: .whitespacesAndNewlines)
         self.name = trimmed.flatMap { $0.isEmpty ? nil : $0 }
         self.position = position
         self.queuedCount = queued.count
         self.hasMore = hasMore
+        self.expectedTotal = expectedTotal
         self.upcoming = Array(queued.prefix(Self.upcomingLimit))
     }
 
@@ -48,13 +53,22 @@ public struct QueueOutline: Equatable, Sendable {
         return "Playing from \(name)"
     }
 
-    /// "3 of 14", or "3 of 100+" while more pages may come.
+    /// The size the list gives for itself, when more pages are to come and it is not smaller than what is loaded.
+    private var announcedTotal: Int? {
+        guard hasMore, let expectedTotal, expectedTotal >= total else { return nil }
+        return expectedTotal
+    }
+
+    /// "3 of 14", "3 of 51" while the pages of a list that states its size are still coming, or "3 of 100+" while more
+    /// pages may come and the size is not known. The "+" shows only while the source has pages left.
     public var positionText: String {
-        "\(position) of \(total)\(hasMore ? "+" : "")"
+        if let announcedTotal { return "\(position) of \(announcedTotal)" }
+        return "\(position) of \(total)\(hasMore ? "+" : "")"
     }
 
     /// `positionText` as it is read out: "Video 3 of 14", "Video 3 of at least 100".
     public var spokenPositionText: String {
-        hasMore ? "Video \(position) of at least \(total)" : "Video \(position) of \(total)"
+        if let announcedTotal { return "Video \(position) of \(announcedTotal)" }
+        return hasMore ? "Video \(position) of at least \(total)" : "Video \(position) of \(total)"
     }
 }

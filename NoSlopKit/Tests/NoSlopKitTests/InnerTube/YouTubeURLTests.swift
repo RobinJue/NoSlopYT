@@ -152,8 +152,47 @@ private func resolve(_ text: String) -> ResolvedURL? {
         #expect(resolve("https://www.youtube.com/watch?list=PLsGl9GczcgBumq6fLmmR1ZYYn4EDkIg5B") == .playlist(id: "PLsGl9GczcgBumq6fLmmR1ZYYn4EDkIg5B"))
     }
 
-    @Test func theVideoWinsWhenALinkNamesBothAVideoAndAList() {
-        #expect(resolve("https://www.youtube.com/watch?v=dQw4w9WgXcQ&list=PLsGl9GczcgBumq6fLmmR1ZYYn4EDkIg5B&index=3") == .video(id: "dQw4w9WgXcQ", startSeconds: nil))
+    @Test func theVideoPlaysInTheListWhenALinkNamesBoth() {
+        #expect(resolve("https://www.youtube.com/watch?v=dQw4w9WgXcQ&list=PLsGl9GczcgBumq6fLmmR1ZYYn4EDkIg5B&index=3")
+            == .videoInPlaylist(id: "dQw4w9WgXcQ", startSeconds: nil, playlistID: "PLsGl9GczcgBumq6fLmmR1ZYYn4EDkIg5B"))
+    }
+
+    @Test(arguments: [
+        ("https://www.youtube.com/watch?v=lTWhtg9HXmA&list=PL4RCBjQfVXzbU8qcJC30Q6N7390CTxfDB", nil as Int?),
+        ("https://www.youtube.com/watch?v=lTWhtg9HXmA&list=PL4RCBjQfVXzbU8qcJC30Q6N7390CTxfDB&index=7", nil),
+        ("https://www.youtube.com/watch?list=PL4RCBjQfVXzbU8qcJC30Q6N7390CTxfDB&v=lTWhtg9HXmA&t=90s", 90),
+        ("https://youtu.be/lTWhtg9HXmA?list=PL4RCBjQfVXzbU8qcJC30Q6N7390CTxfDB", nil),
+        ("https://youtu.be/lTWhtg9HXmA?t=1m5s&list=PL4RCBjQfVXzbU8qcJC30Q6N7390CTxfDB", 65),
+        ("noslop://watch?v=lTWhtg9HXmA&list=PL4RCBjQfVXzbU8qcJC30Q6N7390CTxfDB", nil),
+        ("noslop://watch?v=lTWhtg9HXmA&t=42&list=PL4RCBjQfVXzbU8qcJC30Q6N7390CTxfDB", 42),
+    ])
+    func videoLinksWithAListKeepTheListAndTheStartTime(input: String, start: Int?) {
+        #expect(resolve(input) == .videoInPlaylist(id: "lTWhtg9HXmA", startSeconds: start, playlistID: "PL4RCBjQfVXzbU8qcJC30Q6N7390CTxfDB"))
+    }
+
+    @Test func aMalformedListLeavesAPlainVideo() {
+        #expect(resolve("https://www.youtube.com/watch?v=dQw4w9WgXcQ&list=") == .video(id: "dQw4w9WgXcQ", startSeconds: nil))
+        #expect(resolve("https://www.youtube.com/watch?v=dQw4w9WgXcQ&list=a%20b") == .video(id: "dQw4w9WgXcQ", startSeconds: nil))
+    }
+
+    @Test func aShortsLinkIsNeverPartOfAList() {
+        #expect(resolve("https://www.youtube.com/shorts/gIjBeEvDXew?list=PLsGl9GczcgBumq6fLmmR1ZYYn4EDkIg5B") == .video(id: "gIjBeEvDXew", startSeconds: nil))
+    }
+
+    // MARK: noslop://search
+
+    @Test func aPlusInAnAppSearchLinkIsASpace() {
+        #expect(resolve("noslop://search?q=blender+open+movie") == .search(query: "blender open movie"))
+    }
+
+    @Test func aPercentEncodedPlusInAnAppSearchLinkIsAPlus() {
+        #expect(resolve("noslop://search?q=c%2B%2B+tutorial") == .search(query: "c++ tutorial"))
+        #expect(resolve("noslop://search?q=blender%20donut") == .search(query: "blender donut"))
+    }
+
+    @Test func aBlankAppSearchIsNoLink() {
+        #expect(resolve("noslop://search?q=+++") == nil)
+        #expect(resolve("noslop://search?q=%20") == nil)
     }
 
     @Test func embeddedPlaylistsAreRecognised() {

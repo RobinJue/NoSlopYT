@@ -125,7 +125,7 @@ final class SearchViewModel {
             // A YouTube results link is just a search.
             text = query
             startSearch(query, using: env)
-        case .video, .channel, .playlist:
+        case .video, .videoInPlaylist, .channel, .playlist:
             guard let link = resolved.appLink else { return }
             openDirectly(link, using: env)
         }

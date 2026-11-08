@@ -35,6 +35,8 @@ public final class QueueSource {
     public private(set) var continuation: String?
     /// A call of `next()` is waiting for a page.
     public private(set) var isFetching = false
+    /// How many videos the whole list has, when the list says so (a playlist's "51 videos"); nil when unknown.
+    public let expectedTotal: Int?
 
     private var known: Set<String>
     private let fetch: Fetch
@@ -45,14 +47,17 @@ public final class QueueSource {
     ///   - knownIDs: the videos the queue already has, so that none is queued twice.
     ///   - fetch: loads the page behind a token.
     ///   - filter: the viewer's filters, applied to each page.
+    ///   - expectedTotal: the size the list states for itself, for the position text while pages are still to come.
     public init(
         continuation: String?,
         knownIDs: Set<String> = [],
+        expectedTotal: Int? = nil,
         fetch: @escaping Fetch,
         filter: @escaping Filter = { $0 }
     ) {
         self.continuation = continuation
         self.known = knownIDs
+        self.expectedTotal = expectedTotal
         self.fetch = fetch
         self.filter = filter
     }

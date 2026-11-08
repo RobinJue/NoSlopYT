@@ -75,6 +75,11 @@ extension ResolvedURL {
             components.host = "watch"
             components.queryItems = [URLQueryItem(name: "v", value: id)]
                 + (startSeconds.map { [URLQueryItem(name: "t", value: String($0))] } ?? [])
+        case .videoInPlaylist(let id, let startSeconds, let playlistID):
+            components.host = "watch"
+            components.queryItems = [URLQueryItem(name: "v", value: id)]
+                + (startSeconds.map { [URLQueryItem(name: "t", value: String($0))] } ?? [])
+                + [URLQueryItem(name: "list", value: playlistID)]
         case .channel(let id):
             components.host = "channel"
             components.path = "/" + id
