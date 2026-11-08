@@ -58,14 +58,14 @@ public enum YouTubeURL {
 
         if isShortLinkHost(host) {
             guard let id = videoID(from: segments.first) else { return nil }
-            return .video(id: id, startSeconds: startSeconds(in: components))
+            return video(id: id, in: components)
         }
         guard isYouTubeHost(host), let keyword = segments.first?.lowercased() else { return nil }
 
         switch keyword {
         case "watch":
             if let id = videoID(from: queryValue("v", in: components)) {
-                return .video(id: id, startSeconds: startSeconds(in: components))
+                return video(id: id, in: components)
             }
             return token(from: queryValue("list", in: components)).map { .playlist(id: $0) }
         case "embed" where segments.dropFirst().first?.lowercased() == "videoseries":
@@ -95,14 +95,14 @@ public enum YouTubeURL {
         switch host {
         case "watch":
             guard let id = videoID(from: queryValue("v", in: components) ?? segments.first) else { return nil }
-            return .video(id: id, startSeconds: startSeconds(in: components))
+            return video(id: id, in: components)
         case "channel":
             // Only what is a channel id on a web link is one here too: "noslop://channel/notachannel" is no link.
             return channelID(from: segments.first ?? queryValue("id", in: components)).map { .channel(id: $0) }
         case "playlist":
             return token(from: segments.first ?? queryValue("list", in: components)).map { .playlist(id: $0) }
         case "search":
-            guard let text = queryValue("q", in: components)?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty else { return nil }
+            guard let text = formValue("q", in: components) else { return nil }
             return .search(query: text)
         default:
             return nil
@@ -144,9 +144,24 @@ public enum YouTubeURL {
         components.queryItems?.first { $0.name == name }?.value
     }
 
+    /// A video link: with a playlist when the link names one (`list=`), which then is the queue the video plays in.
+    /// `index=` is not used: the position is found in the playlist itself.
+    private static func video(id: String, in components: URLComponents) -> ResolvedURL {
+        let start = startSeconds(in: components)
+        if let list = token(from: queryValue("list", in: components)) {
+            return .videoInPlaylist(id: id, startSeconds: start, playlistID: list)
+        }
+        return .video(id: id, startSeconds: start)
+    }
+
     /// The text of a YouTube results page: "+" is a space in this form-encoded value, "%2B" a plus sign.
     private static func searchText(in components: URLComponents) -> String? {
-        let raw = components.percentEncodedQueryItems?.first { $0.name == "search_query" }?.value
+        formValue("search_query", in: components)
+    }
+
+    /// A query value read as a form value: "+" is a space, "%2B" a plus sign. Blank is nil.
+    private static func formValue(_ name: String, in components: URLComponents) -> String? {
+        let raw = components.percentEncodedQueryItems?.first { $0.name == name }?.value
         let text = raw?.replacingOccurrences(of: "+", with: " ").removingPercentEncoding?
             .trimmingCharacters(in: .whitespacesAndNewlines)
         return text.flatMap { $0.isEmpty ? nil : $0 }

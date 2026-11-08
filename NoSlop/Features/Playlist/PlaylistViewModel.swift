@@ -144,6 +144,7 @@ final class PlaylistViewModel {
         return QueueSource(
             continuation: token,
             knownIDs: list.arrivedIDs,
+            expectedTotal: info?.videoCount,
             fetch: { [weak env] token in
                 guard let env else { return Page() }
                 return try await env.youTube.playlistMore(continuation: token)

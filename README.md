@@ -23,7 +23,7 @@ Design: [`docs/superpowers/specs/2026-11-03-noslop-design.md`](docs/superpowers/
   the same way. The whole list is queued, also a long one: the part that is not loaded yet is fetched while the queue
   runs low, and your feed filters apply to it.
 - While a queue plays, the watch page has a "Playing from Liked videos" section (the name of the list the queue came
-  from) above Up next. It shows where the video is in the queue ("3 of 14", or "3 of 100+" while more of the list is
+  from) above Up next. It shows where the video is in the queue ("3 of 14", "3 of 51" while the pages of a playlist that states its size are still coming, or "3 of 100+" while more of the list is
   still to be fetched) and up to three of the videos that come next; a tap on one skips ahead to it. A queue without a
   name (Watch Later, a playlist on the device) reads "Playing from your queue". The Next button in the player controls
   starts the next queued video. When nothing is queued but the list goes on, it waits for the next page (the button
@@ -268,16 +268,17 @@ apps (iOS asks to confirm), and the YouTube ones open when you paste them into t
 
 | Link | Opens |
 |---|---|
-| `noslop://watch?v=<id>[&t=<seconds>]` | a video, optionally from a time (`90`, `1m30s` and `1h2m3s` all work); a time that cannot be read is ignored, and the video opens from where you left off (or from the start) |
+| `noslop://watch?v=<id>[&t=<seconds>][&list=<playlist>]` | a video, optionally from a time (`90`, `1m30s` and `1h2m3s` all work); a time that cannot be read is ignored, and the video opens from where you left off (or from the start). With `list=` the video plays as part of that playlist ("Playing from <playlist>", the next videos of the playlist follow); a playlist that cannot be loaded, such as a generated Mix, leaves the video playing alone |
 | `noslop://channel/<id>`, `noslop://playlist/<id>` | a channel (`UC...`), a playlist |
-| `noslop://search?q=<text>` | search results |
+| `noslop://search?q=<text>` | search results (`+` is a space, `%2B` a plus sign) |
 | `noslop://tab/<home\|subscriptions\|library\|search>` | a tab |
 | `noslop://route/<settings\|downloads\|history\|watchLater\|likedVideos\|accountPlaylists\|subscriptionsManager>` | a screen on the selected tab |
-| `https://www.youtube.com/watch?v=<id>&t=42s`, `https://youtu.be/<id>?t=1m5s`, `/shorts/<id>`, `/live/<id>`, `/embed/<id>` | a video (a Short opens as a normal video) |
+| `https://www.youtube.com/watch?v=<id>&t=42s`, `https://youtu.be/<id>?t=1m5s`, `/shorts/<id>`, `/live/<id>`, `/embed/<id>` | a video (a Short opens as a normal video). A `/watch` or `youtu.be` link with `&list=<playlist>` plays the video in that playlist; `/shorts`, `/live` and `/embed` links ignore `list=` |
 | `https://www.youtube.com/@handle`, `/channel/<id>`, `/playlist?list=<id>`, `/results?search_query=<text>` | a channel (a handle is resolved by YouTube, so it needs the network; if you open another link or go elsewhere before the answer arrives, the channel does not open), a playlist, a search |
 
 A link the app cannot open (not a YouTube link, a video ID of the wrong length, a missing part) opens nothing and
-shows a plain "Can't open this link" message.
+shows a plain "Can't open this link" message. When the link was a web link, the message also offers "Open on YouTube",
+which opens that link in the browser or the YouTube app.
 
 ## Troubleshooting
 

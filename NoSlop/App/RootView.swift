@@ -4,6 +4,7 @@ import SwiftUI
 /// The four tabs, each with its own `NavigationStack` bound to the router, with the player on top of everything.
 struct RootView: View {
     @Environment(AppEnvironment.self) private var env
+    @Environment(\.openURL) private var openURL
 
     var body: some View {
         @Bindable var router = env.router
@@ -52,6 +53,10 @@ struct RootView: View {
             )
         ) {
             Button("OK", role: .cancel) {}
+            // A web link that No Slop cannot map still has a place to go: YouTube's own page for it.
+            if let address = env.linkErrorWebURL {
+                Button("Open on YouTube") { openURL(address) }
+            }
         } message: {
             Text(env.linkError ?? "")
         }

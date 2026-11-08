@@ -423,6 +423,7 @@ final class AppEnvironment {
     /// has moved on: another link was opened, or the viewer switched tab, pushed or popped a screen or opened a video.
     func handleOpenURL(_ url: URL) async {
         linkError = nil
+        linkAddress = Self.isYouTubeWebLink(url) ? url : nil
         linksHandled += 1
         switch url.scheme?.lowercased() {
         case AppLink.scheme:
@@ -441,6 +442,21 @@ final class AppEnvironment {
     /// The alert for `linkError` was dismissed.
     func dismissLinkError() {
         linkError = nil
+    }
+
+    /// The web link behind `linkError`, which the alert can offer to open on YouTube. Nil for a `noslop://` link and
+    /// while there is no error.
+    var linkErrorWebURL: URL? {
+        linkError == nil ? nil : linkAddress
+    }
+
+    /// The YouTube http(s) link `handleOpenURL` was given last; nil when the last link was another kind or another site.
+    @ObservationIgnored private var linkAddress: URL?
+
+    /// Only an http(s) link on a YouTube host may be offered as "Open on YouTube"; another site's link would open that
+    /// site under the wrong label.
+    private static func isYouTubeWebLink(_ url: URL) -> Bool {
+        SearchInput.isYouTubeHost(of: url)
     }
 
     private static let unopenableLinkMessage =
@@ -530,13 +546,9 @@ final class AppEnvironment {
     private func openResolved(_ resolved: ResolvedURL) {
         switch resolved {
         case .video(let id, let startSeconds):
-            // YouTube's resolver hands back whatever the link said (`watch?v=abc` resolves to the video "abc"), so a
-            // malformed id is caught here instead of opening a player that can only fail.
-            guard Self.isVideoID(id) else {
-                linkError = Self.unopenableLinkMessage
-                return
-            }
-            open(knownSummary(forID: id) ?? VideoSummary(id: id, title: ""), startAt: startSeconds.map(Double.init))
+            openVideoLink(id: id, startSeconds: startSeconds, playlistID: nil)
+        case .videoInPlaylist(let id, let startSeconds, let playlistID):
+            openVideoLink(id: id, startSeconds: startSeconds, playlistID: playlistID)
         case .channel(let id):
             show(.channel(id: id))
         case .playlist(let id):
@@ -544,6 +556,21 @@ final class AppEnvironment {
         case .search(let query):
             router.showRoot(of: .search)
             show(.searchResults(query: query))
+        }
+    }
+
+    /// Opens the video of a link at once. With a playlist (`list=`), the video starts alone and the playlist joins in as
+    /// its queue when it has loaded (`queuePlaylist`).
+    private func openVideoLink(id: String, startSeconds: Int?, playlistID: String?) {
+        // YouTube's resolver hands back whatever the link said (`watch?v=abc` resolves to the video "abc"), so a
+        // malformed id is caught here instead of opening a player that can only fail.
+        guard Self.isVideoID(id) else {
+            linkError = Self.unopenableLinkMessage
+            return
+        }
+        open(knownSummary(forID: id) ?? VideoSummary(id: id, title: ""), startAt: startSeconds.map(Double.init))
+        if let playlistID {
+            queuePlaylist(playlistID, behind: id)
         }
     }
 

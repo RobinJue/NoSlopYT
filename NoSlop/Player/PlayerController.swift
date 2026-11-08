@@ -290,7 +290,13 @@ final class PlayerController {
     /// The queue that plays, as the watch page describes it ("Playing from Liked videos", "3 of 100+" and the next few
     /// videos); nil while no queue plays.
     var queueOutline: QueueOutline? {
-        QueueOutline(name: queueName, position: queuePosition, queued: queue, hasMore: queueSource?.hasMore == true)
+        QueueOutline(
+            name: queueName,
+            position: queuePosition,
+            queued: queue,
+            hasMore: queueSource?.hasMore == true,
+            expectedTotal: queueSource?.expectedTotal
+        )
     }
 
     /// The thumbnail shows where the picture is not (yet): nothing has played yet, or the file has no picture. The video
@@ -342,6 +348,27 @@ final class PlayerController {
             return
         }
         start(video, startAt: startAt, queue: queue, more: more, expand: true)
+    }
+
+    /// Makes the video that a playlist link opened (`watch?v=…&list=…`) part of that playlist once the playlist has
+    /// loaded: it is called after `open`, which started the video alone and at once. `position` is the video's place
+    /// in the playlist, `queue` the videos behind it and `more` the pages not loaded yet.
+    ///
+    /// Does nothing when the answer comes too late: another video plays by now, the player was closed, or the viewer
+    /// started a queue of their own meanwhile.
+    func joinPlaylist(
+        ofVideo videoID: String,
+        position: Int,
+        queue videos: [VideoSummary],
+        more: QueueSource?,
+        named name: String?
+    ) {
+        guard currentVideo?.id == videoID, queueName == nil, queue.isEmpty, queueSource == nil else { return }
+        queueName = name
+        queuePosition = max(position, 1)
+        adoptQueue(videos, more: more)
+        // The lock screen's Next button follows `canPlayNext`, which the new queue may have turned on.
+        updateNowPlaying()
     }
 
     private var canReuseCurrentPlayback: Bool {

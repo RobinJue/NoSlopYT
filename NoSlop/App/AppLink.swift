@@ -6,7 +6,8 @@ import NoSlopKit
 /// - `noslop://tab/<home|subscriptions|library|search>`
 /// - `noslop://route/<settings|downloads|history|watchLater|likedVideos|accountPlaylists|subscriptionsManager>`
 ///   ("watchLater", "watch-later" and "watch_later" are the same name)
-/// - `noslop://watch?v=<id>[&t=<seconds>]`, `noslop://channel/<id>`, `noslop://playlist/<id>` and
+/// - `noslop://watch?v=<id>[&t=<seconds>][&list=<playlist>]` (with `list=` the video plays in that playlist),
+///   `noslop://channel/<id>`, `noslop://playlist/<id>` and
 ///   `noslop://search?q=<text>` mean what the same YouTube link means, and are read by the same parser
 ///   (`YouTubeURL`), so a start time is read the same way in both.
 ///
