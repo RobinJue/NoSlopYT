@@ -95,4 +95,79 @@ import Testing
         #expect(!page.videos.map(\.id).contains("vidHIDDEN01"))
         #expect(page.videos.count == 3)
     }
+
+    // MARK: Paid, upsell and Short rules (Task 4 review)
+
+    private func page(shelfExtra: String = "", items: String) throws -> TVHomeParse {
+        let text = "{\"contents\":{\"sectionListRenderer\":{\"contents\":[{\"shelfRenderer\":{\(shelfExtra)"
+            + "\"content\":{\"horizontalListRenderer\":{\"items\":[\(items)]}}}}]}}}"
+        return TVHomeParser.parse(try JSON(data: Data(text.utf8)))
+    }
+
+    private func tile(id: String, extra: String = "") -> String {
+        let time = "\"thumbnailOverlays\":[{\"thumbnailOverlayTimeStatusRenderer\":{\"text\":{\"simpleText\":\"4:00\"},\"style\":\"DEFAULT\"}}]"
+        return "{\"tileRenderer\":{\"contentId\":\"\(id)\",\"contentType\":\"TILE_CONTENT_TYPE_VIDEO\",\(extra)"
+            + "\"header\":{\"tileHeaderRenderer\":{\(time)}},"
+            + "\"metadata\":{\"tileMetadataRenderer\":{\"title\":{\"simpleText\":\"T\"}}}}}"
+    }
+
+    @Test func aPlainSyntheticTileCountsAsAVideo() throws {
+        let parsed = try page(items: tile(id: "vidOK000001"))
+        #expect(parsed.videos.map(\.id) == ["vidOK000001"])
+        #expect(parsed.shorts == 0)
+    }
+
+    @Test func aTileWithAYPCBadgeIsSkippedAsPaid() throws {
+        let paid = tile(id: "vidPAID0001").replacingOccurrences(
+            of: "\"metadata\":{", with: "\"metadata\":{\"badges\":[{\"metadataBadgeRenderer\":{\"style\":\"BADGE_STYLE_TYPE_YPC\"}}],")
+        let parsed = try page(items: paid + "," + tile(id: "vidOK000001"))
+        #expect(parsed.videos.map(\.id) == ["vidOK000001"])
+        #expect(parsed.skipped["paid"] == 1)
+        let byKey = tile(id: "vidPAID0002").replacingOccurrences(of: "\"metadata\":{", with: "\"metadata\":{\"ypcBadge\":{},")
+        let keyed = try page(items: byKey)
+        #expect(keyed.videos.isEmpty)
+        #expect(keyed.skipped["paid"] == 1)
+    }
+
+    @Test func aLockupWithAYPCMarkerIsSkippedAsPaid() throws {
+        let lockup = "{\"lockupViewModel\":{\"contentId\":\"vidLPAID001\",\"contentType\":\"LOCKUP_CONTENT_TYPE_VIDEO\","
+            + "\"metadata\":{\"lockupMetadataViewModel\":{\"badges\":[{\"style\":\"BADGE_YPC\"}]}}}}"
+        let plain = "{\"lockupViewModel\":{\"contentId\":\"vidLOCK0002\",\"contentType\":\"LOCKUP_CONTENT_TYPE_VIDEO\"}}"
+        let parsed = try page(items: lockup + "," + plain)
+        #expect(parsed.videos.map(\.id) == ["vidLOCK0002"])
+        #expect(parsed.skipped["paid"] == 1)
+    }
+
+    @Test func aShelfWithAHideLogoIsSkippedAsAnUpsell() throws {
+        let parsed = try page(shelfExtra: "\"tvhtml5Metadata\":{\"hideLogo\":true},", items: tile(id: "vidUPSELL01"))
+        #expect(parsed.videos.isEmpty)
+        #expect(parsed.skipped["upsellShelf"] == 1)
+    }
+
+    @Test func onlyATruthyHideLogoMarksAnUpsell() throws {
+        for value in ["false", "null", "0", "\"\"", "{}", "[]"] {
+            let parsed = try page(shelfExtra: "\"tvhtml5Metadata\":{\"hideLogo\":\(value)},", items: tile(id: "vidKEEP0001"))
+            #expect(parsed.videos.map(\.id) == ["vidKEEP0001"], "hideLogo \(value)")
+            #expect(parsed.skipped["upsellShelf"] == nil)
+        }
+        for value in ["1", "\"x\"", "{\"a\":1}", "[1]"] {
+            let parsed = try page(shelfExtra: "\"tvhtml5Metadata\":{\"hideLogo\":\(value)},", items: tile(id: "vidDROP0001"))
+            #expect(parsed.videos.isEmpty, "hideLogo \(value)")
+            #expect(parsed.skipped["upsellShelf"] == 1)
+        }
+    }
+
+    @Test func aReelEndpointAloneMakesAShort() throws {
+        let reel = tile(id: "vidREEL0001", extra: "\"onSelectCommand\":{\"reelWatchEndpoint\":{\"videoId\":\"vidREEL0001\"}},")
+        let parsed = try page(items: reel)
+        #expect(parsed.videos.isEmpty)
+        #expect(parsed.shorts == 1)
+    }
+
+    @Test func aShortStyleAloneMakesAShort() throws {
+        let styled = tile(id: "vidSTYLE001", extra: "\"style\":\"TILE_STYLE_YTLR_SHORTS\",")
+        let parsed = try page(items: styled)
+        #expect(parsed.videos.isEmpty)
+        #expect(parsed.shorts == 1)
+    }
 }

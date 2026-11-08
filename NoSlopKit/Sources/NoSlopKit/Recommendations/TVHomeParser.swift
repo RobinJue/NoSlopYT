@@ -146,7 +146,7 @@ private struct Walker {
     private mutating func shelf(_ shelf: JSON) {
         guard shelf.object != nil else { return }
         let kind = shelf["tvhtml5ShelfRendererType"]?.string ?? ""
-        if let hide = shelf["tvhtml5Metadata"]?["hideLogo"], hide != .null, hide != .bool(false) {
+        if let hide = shelf["tvhtml5Metadata"]?["hideLogo"], Self.truthy(hide) {
             result.skipped["upsellShelf", default: 0] += 1
             return
         }
@@ -279,6 +279,18 @@ private struct Walker {
 
     private static func firstString(_ values: String?...) -> String? {
         values.first { ($0 ?? "").isEmpty == false } ?? nil
+    }
+
+    /// Python truthiness, as the probe reads `hideLogo`: false, null, 0, "", {} and [] are not set.
+    private static func truthy(_ value: JSON) -> Bool {
+        switch value {
+        case .null: false
+        case .bool(let flag): flag
+        case .number(let number): number != 0
+        case .string(let text): !text.isEmpty
+        case .array(let list): !list.isEmpty
+        case .object(let map): !map.isEmpty
+        }
     }
 
     private static func nonEmpty(_ list: [JSON]?) -> [JSON]? {
