@@ -1,0 +1,8 @@
+{
+  "playabilityStatus": {"status": "OK"},
+  "videoDetails": {"videoId": "tvsyntheticV1", "lengthSeconds": "60"},
+  "playbackTracking": {
+    "videostatsPlaybackUrl": {"baseUrl": "https://s.youtube.com/api/stats/playback?cl=1&docid=tvsyntheticV1&ei=tvsynthetic_ei&el=leanback&of=tvsynthetic_of&plid=tvsynthetic_plid&vm=tvsynthetic_vm&len=60"},
+    "videostatsWatchtimeUrl": {"baseUrl": "https://s.youtube.com/api/stats/watchtime?cl=1&docid=tvsyntheticV1&ei=tvsynthetic_ei&el=leanback&of=tvsynthetic_of&plid=tvsynthetic_plid&vm=tvsynthetic_vm&len=60"}
+  }
+}

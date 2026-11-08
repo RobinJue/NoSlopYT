@@ -117,6 +117,7 @@ final class AppEnvironment {
         // With the player minimized (or the app in the background) no watch page is on screen to hand the player the
         // chapters and the up-next list of the video that plays: they are loaded here instead.
         player.detailsNeeded = { [weak self] video in self?.loadDetailsForPlayer(video) }
+        installWatchReportHooks()
     }
 
     // MARK: Construction
@@ -193,7 +194,11 @@ final class AppEnvironment {
             recommendationsAuth: recommendationsAuth,
             recommendations: RecommendationsService(client: TVClient(http: URLSessionHTTPClient.isolated(), tokens: recommendationsAuth), language: config.hl, region: config.gl),
             // Part B replaces the line above, Part C the line below.
-            watchReporter: NoWatchReporter(),
+            watchReporter: TVWatchReporter.live(
+                tokens: recommendationsAuth,
+                fileURL: directory(.applicationSupportDirectory, appending: "NoSlop").appendingPathComponent("pending-watch-reports.json"),
+                isEnabled: { guard await MainActor.run(body: { settingsStore.settings.sendWatchesToYouTube }) else { return false }; return await recommendationsAuth.currentAccount() != nil }
+            ),
             library: library,
             settingsStore: settingsStore,
             downloads: downloads
