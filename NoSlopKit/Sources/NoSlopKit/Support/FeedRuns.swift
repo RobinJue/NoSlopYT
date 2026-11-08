@@ -6,6 +6,10 @@ public struct FeedRun<Element: Sendable>: Sendable {
     /// True for a run of cards that flow into the grid's columns; false for one full-width row.
     public let isGrid: Bool
     public let items: [Element]
+
+    /// True for a grid run of one card. Alone in a row of several columns it would leave the other columns empty, so
+    /// it is shown as a full-width row instead.
+    public var isLoneCard: Bool { isGrid && items.count == 1 }
 }
 
 extension FeedRun: Equatable where Element: Equatable {}

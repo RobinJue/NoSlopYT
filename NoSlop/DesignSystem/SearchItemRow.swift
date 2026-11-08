@@ -7,6 +7,8 @@ import SwiftUI
 /// in the player, a channel or playlist is shown on the current tab. Videos get the context menu.
 struct SearchItemRow: View {
     let item: SearchItem
+    /// Show a video as a full-width list row instead of a card, for a lone video between full-width rows in a grid.
+    var videoAsRow = false
 
     @Environment(AppEnvironment.self) private var env
     @Environment(\.videoCardLayout) private var layout
@@ -17,7 +19,20 @@ struct SearchItemRow: View {
             Button {
                 env.open(video)
             } label: {
-                VideoCardView(video: video)
+                if videoAsRow {
+                    VideoRowView(video: video)
+                        .padding(.horizontal, inset)
+                        .padding(.vertical, 4)
+                        .accessibilityActions {
+                            if let channel = video.channel {
+                                Button("Open channel \(channel.name)") {
+                                    env.show(.channel(id: channel.id))
+                                }
+                            }
+                        }
+                } else {
+                    VideoCardView(video: video)
+                }
             }
             .buttonStyle(.pressableCard)
             .videoContextMenu(video)
