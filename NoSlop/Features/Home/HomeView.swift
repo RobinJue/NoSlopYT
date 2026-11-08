@@ -128,7 +128,7 @@ struct HomeView: View {
                     VideoCardView(video: video)
                 }
                 .buttonStyle(.pressableCard)
-                .videoContextMenu(video)
+                .videoContextMenu(video, homeCard: model.showsYouTube)
                 .onAppear { model.rowAppeared(video, using: env) }
             }
         }

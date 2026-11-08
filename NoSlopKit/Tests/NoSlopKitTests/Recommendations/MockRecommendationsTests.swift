@@ -25,7 +25,7 @@ import Testing
     @Test func theMockCanStartConnectedAndDisconnects() async {
         let auth = MockRecommendationsAuth(connected: true)
         #expect(await auth.currentAccount()?.name == "Mock Account")
-        #expect(await auth.disconnect())
+        #expect(await auth.disconnect().revoked)
         #expect(await auth.currentAccount() == nil)
     }
 

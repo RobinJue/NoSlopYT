@@ -9,6 +9,10 @@ public actor TVWatchReporter: WatchReporting {
     /// Refusals in a row (not OK, missing values or a refused ping) after which reporting pauses until the next launch.
     static let refusalsBeforePause = 3
     static let stsLifetime: TimeInterval = 3600
+    /// Replays that failed for a server reason after which a queued report is given up.
+    static let attemptsBeforeDrop = 5
+    /// Server-side failures in one replay pass after which the pass stops.
+    static let transientsPerPass = 3
     /// The probe fetches the page as Safari does; the signature timestamp is the same for every browser.
     static let homepageUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15"
 
@@ -28,12 +32,15 @@ public actor TVWatchReporter: WatchReporting {
         case refused(playerStatus: String?, ei: Bool, vm: Bool, of: Bool, statuses: [Int])
         /// No answer (offline, timeout) or not connected: try again later.
         case unreachable
+        /// YouTube answered with a server-side failure (429, 5xx, a reply that could not be read, a renewal that failed):
+        /// the report is kept, and does not count towards the pause.
+        case transient
     }
 
     private struct Session {
         let entryID: UUID
         var tracking: Tracking?
-        var pendingEnd: (position: Double, finished: Bool)?
+        var pendingEnd: (position: Double, finished: Bool, from: Double?)?
         /// The first report is on its way; false once it failed or is held back by a pause (the queue entry is the record).
         var reportInFlight = true
     }
@@ -86,7 +93,7 @@ public actor TVWatchReporter: WatchReporting {
         case .progress(let position):
             guard var tracking = sessions[viewing.id]?.tracking else { return }
             let generation = generation
-            if await sendRange(&tracking, to: position, final: false, generation: generation) {
+            if await sendRange(&tracking, from: viewing.rangeStart ?? tracking.lastEnd, to: position, final: false, generation: generation) {
                 sessions[viewing.id]?.tracking = tracking
             }
         case .ended(let position, let finished):
@@ -98,29 +105,43 @@ public actor TVWatchReporter: WatchReporting {
         guard !replaying, !paused, await isEnabled() else { return }
         replaying = true
         defer { replaying = false }
+        // A queue that could not be read at launch (before the first unlock) is read again now.
+        queue.reloadIfNeeded()
         let generation = generation
         let active = Set(sessions.values.filter(\.reportInFlight).map(\.entryID))
+        var transients = 0
         for entry in queue.all() where !active.contains(entry.id) {
             guard !paused, generation == self.generation, await isEnabled() else { return }
-            switch await mint(videoID: entry.videoID, length: entry.lengthSeconds, position: entry.position, generation: generation) {
+            switch await mint(
+                videoID: entry.videoID, length: entry.lengthSeconds, position: entry.position,
+                from: entry.rangeStart ?? 0, generation: generation
+            ) {
             case .ready(var tracking, let statuses):
                 guard generation == self.generation else { return }
                 var all = statuses
                 if entry.finished {
-                    _ = await sendFinal(&tracking, at: entry.position, statuses: &all, generation: generation)
+                    _ = await sendFinal(&tracking, from: tracking.lastEnd, at: entry.position, statuses: &all, generation: generation)
                 }
                 guard generation == self.generation else { return }
-                if all.allSatisfy({ (200..<300).contains($0) }) {
-                    queue.remove(id: entry.id)
-                    succeeded(statuses: all)
-                } else {
-                    queue.remove(id: entry.id)
-                    refused(playerStatus: "OK", ei: true, vm: true, of: true, statuses: all)
+                queue.remove(id: entry.id)
+                // A viewing that is still going on (its first report had failed) goes on with these values.
+                for (key, session) in sessions where session.entryID == entry.id && session.tracking == nil {
+                    sessions[key]?.tracking = tracking
+                    sessions[key]?.reportInFlight = false
                 }
+                noteStatuses(all)
             case .refused(let playerStatus, let ei, let vm, let of, let statuses):
                 guard generation == self.generation else { return }
                 queue.remove(id: entry.id)
                 refused(playerStatus: playerStatus, ei: ei, vm: vm, of: of, statuses: statuses)
+            case .transient:
+                guard generation == self.generation else { return }
+                lastOutcome = WatchReportOutcome(status: "waiting", at: now())
+                var updated = entry
+                updated.attempts = (entry.attempts ?? 0) + 1
+                if (updated.attempts ?? 0) >= Self.attemptsBeforeDrop { queue.remove(id: entry.id) } else { queue.add(updated) }
+                transients += 1
+                if transients >= Self.transientsPerPass { return }
             case .unreachable:
                 lastOutcome = WatchReportOutcome(status: "waiting", at: now())
                 return
@@ -131,6 +152,14 @@ public actor TVWatchReporter: WatchReporting {
     public func outcome() async -> WatchReportOutcome? { lastOutcome }
 
     public func isPaused() async -> Bool { paused }
+
+    /// The owner turned "Send what I watch to YouTube" off: nothing about the watches is kept or sent later. The pause and
+    /// the refusal count are not touched.
+    public func sharingTurnedOff() async {
+        generation += 1
+        sessions = [:]
+        queue.removeAll()
+    }
 
     public func clearAccountData() async {
         generation += 1
@@ -147,13 +176,18 @@ public actor TVWatchReporter: WatchReporting {
     private func qualified(position: Double, viewing: WatchViewing) async {
         guard sessions[viewing.id] == nil else { return }
         // Written first, so a crash or a lost connection still leaves the report to replay.
-        let entry = PendingWatchReport(videoID: viewing.videoID, lengthSeconds: viewing.lengthSeconds, position: position, createdAt: now())
+        let entry = PendingWatchReport(
+            videoID: viewing.videoID, lengthSeconds: viewing.lengthSeconds, position: position, createdAt: now(),
+            rangeStart: viewing.rangeStart
+        )
         queue.add(entry)
         sessions[viewing.id] = Session(entryID: entry.id, tracking: nil, pendingEnd: nil)
         guard !paused else { sessions[viewing.id]?.reportInFlight = false; return }
         let generation = generation
 
-        let result = await mint(videoID: viewing.videoID, length: viewing.lengthSeconds, position: position, generation: generation)
+        let result = await mint(
+            videoID: viewing.videoID, length: viewing.lengthSeconds, position: position, from: viewing.rangeStart ?? 0, generation: generation
+        )
         guard generation == self.generation else { return }
         switch result {
         case .ready(var tracking, var statuses):
@@ -163,26 +197,38 @@ public actor TVWatchReporter: WatchReporting {
             // The viewing ended while the first report was on its way.
             if let end = sessions[viewing.id]?.pendingEnd {
                 statuses = []
-                let ok = await finish(&tracking, position: end.position, finished: end.finished, statuses: &statuses, generation: generation)
+                let from = end.from ?? tracking.lastEnd
+                let ok = await finish(&tracking, from: from, position: end.position, finished: end.finished, statuses: &statuses, generation: generation)
                 guard generation == self.generation else { return }
                 sessions[viewing.id] = nil
-                if !ok && statuses.isEmpty { requeue(viewing, position: end.position, finished: end.finished) }
+                if !ok && lost(statuses) { requeue(viewing, from: max(from, tracking.lastEnd), position: end.position, finished: end.finished) }
             }
         case .refused(let playerStatus, let ei, let vm, let of, let statuses):
             queue.remove(id: entry.id)
             sessions[viewing.id] = nil
             refused(playerStatus: playerStatus, ei: ei, vm: vm, of: of, statuses: statuses)
-        case .unreachable:
+        case .unreachable, .transient:
             // The entry stays for `replayPending`; later events of this viewing update it.
             sessions[viewing.id]?.reportInFlight = false
             lastOutcome = WatchReportOutcome(status: "waiting", at: now())
         }
     }
 
+    /// A closing report that did not get through: nothing was answered, or the answer was a server-side failure.
+    private func lost(_ statuses: [Int]) -> Bool {
+        statuses.isEmpty || statuses.contains(where: Self.isTransient)
+    }
+
+    /// A status that says "try again later" (a hiccup on YouTube's side), not "no".
+    static func isTransient(_ status: Int) -> Bool {
+        [408, 425, 429].contains(status) || (500..<600).contains(status)
+    }
+
     /// Puts a closing report that a lost connection cut off back into the queue, so a replay sends it.
-    private func requeue(_ viewing: WatchViewing, position: Double, finished: Bool) {
+    private func requeue(_ viewing: WatchViewing, from: Double, position: Double, finished: Bool) {
         queue.add(PendingWatchReport(
-            videoID: viewing.videoID, lengthSeconds: viewing.lengthSeconds, position: position, finished: finished, createdAt: now()
+            videoID: viewing.videoID, lengthSeconds: viewing.lengthSeconds, position: position, finished: finished,
+            createdAt: now(), rangeStart: min(from, position)
         ))
     }
 
@@ -190,7 +236,7 @@ public actor TVWatchReporter: WatchReporting {
         guard let session = sessions[viewing.id] else { return }
         guard var tracking = session.tracking else {
             // No tracking values (the first report is in flight, failed, or waits for a launch): the queued entry says it.
-            if session.reportInFlight { sessions[viewing.id]?.pendingEnd = (position, finished) } else { sessions[viewing.id] = nil }
+            if session.reportInFlight { sessions[viewing.id]?.pendingEnd = (position, finished, viewing.rangeStart) } else { sessions[viewing.id] = nil }
             if let entry = queue.all().first(where: { $0.id == session.entryID }) {
                 var updated = entry
                 updated.position = max(position, entry.position)
@@ -201,51 +247,57 @@ public actor TVWatchReporter: WatchReporting {
         }
         let generation = generation
         var statuses: [Int] = []
-        let ok = await finish(&tracking, position: position, finished: finished, statuses: &statuses, generation: generation)
+        let from = viewing.rangeStart ?? tracking.lastEnd
+        let ok = await finish(&tracking, from: from, position: position, finished: finished, statuses: &statuses, generation: generation)
         guard generation == self.generation else { return }
         sessions[viewing.id] = nil
-        if !ok && statuses.isEmpty { requeue(viewing, position: position, finished: finished) }
-        if !statuses.isEmpty {
-            if statuses.allSatisfy({ (200..<300).contains($0) }) { succeeded(statuses: statuses) } else {
-                refused(playerStatus: "OK", ei: true, vm: true, of: true, statuses: statuses)
-            }
-        }
+        if !ok && lost(statuses) { requeue(viewing, from: max(from, tracking.lastEnd), position: position, finished: finished) }
+        noteStatuses(statuses)
     }
 
     // MARK: Pings
 
-    /// The closing report: the range played since the last one, then (when the video was watched to its end) the final ping.
-    private func finish(_ tracking: inout Tracking, position: Double, finished: Bool, statuses: inout [Int], generation: Int) async -> Bool {
+    /// The closing report: the range played since the last one (from `from`), then (when the video was watched to its
+    /// end) the final ping.
+    private func finish(_ tracking: inout Tracking, from: Double, position: Double, finished: Bool, statuses: inout [Int], generation: Int) async -> Bool {
         var ok = true
-        if position > tracking.lastEnd {
-            ok = await watchtime(&tracking, from: tracking.lastEnd, to: position, final: false, statuses: &statuses, generation: generation)
+        if position > from {
+            ok = await watchtime(&tracking, from: from, to: position, final: false, statuses: &statuses, generation: generation)
         }
         if ok && finished {
-            ok = await sendFinal(&tracking, at: position, statuses: &statuses, generation: generation)
+            ok = await sendFinal(&tracking, from: max(position, tracking.lastEnd), at: position, statuses: &statuses, generation: generation)
         }
         return ok
     }
 
-    private func sendFinal(_ tracking: inout Tracking, at position: Double, statuses: inout [Int], generation: Int) async -> Bool {
-        if position > tracking.lastEnd {
-            guard await watchtime(&tracking, from: tracking.lastEnd, to: position, final: false, statuses: &statuses, generation: generation) else { return false }
+    private func sendFinal(_ tracking: inout Tracking, from: Double, at position: Double, statuses: inout [Int], generation: Int) async -> Bool {
+        if position > from {
+            guard await watchtime(&tracking, from: from, to: position, final: false, statuses: &statuses, generation: generation) else { return false }
         }
         let end = max(position, tracking.lastEnd)
         return await watchtime(&tracking, from: end, to: end, final: true, statuses: &statuses, generation: generation)
     }
 
     /// A progress report: only when the position moved forward. Returns whether the ping was accepted.
-    private func sendRange(_ tracking: inout Tracking, to position: Double, final: Bool, generation: Int) async -> Bool {
-        guard position > tracking.lastEnd else { return false }
+    private func sendRange(_ tracking: inout Tracking, from: Double, to position: Double, final: Bool, generation: Int) async -> Bool {
+        guard position > from else { return false }
         var statuses: [Int] = []
-        let ok = await watchtime(&tracking, from: tracking.lastEnd, to: position, final: final, statuses: &statuses, generation: generation)
+        let ok = await watchtime(&tracking, from: from, to: position, final: final, statuses: &statuses, generation: generation)
         guard generation == self.generation else { return false }
-        if !statuses.isEmpty {
-            if statuses.allSatisfy({ (200..<300).contains($0) }) { succeeded(statuses: statuses) } else {
-                refused(playerStatus: "OK", ei: true, vm: true, of: true, statuses: statuses)
-            }
-        }
+        noteStatuses(statuses)
         return ok
+    }
+
+    /// Records what the pings answered: reported, a refusal (counts towards the pause) or a server-side failure (does not).
+    private func noteStatuses(_ statuses: [Int]) {
+        guard !statuses.isEmpty else { return }
+        if statuses.allSatisfy({ (200..<300).contains($0) }) {
+            succeeded(statuses: statuses)
+        } else if statuses.contains(where: Self.isTransient) {
+            lastOutcome = WatchReportOutcome(status: "waiting", pingStatuses: statuses, at: now())
+        } else {
+            refused(playerStatus: "OK", ei: true, vm: true, of: true, statuses: statuses)
+        }
     }
 
     @discardableResult
@@ -266,8 +318,9 @@ public actor TVWatchReporter: WatchReporting {
 
     // MARK: Minting
 
-    /// A signed `player` request, then the playback ping and the first watchtime ping (0 to `position`).
-    private func mint(videoID: String, length: Double, position: Double, generation: Int) async -> Mint {
+    /// A signed `player` request, then the playback ping and the first watchtime ping (`from` to `position`: the range
+    /// that was played, not the whole video up to there).
+    private func mint(videoID: String, length: Double, position: Double, from: Double, generation: Int) async -> Mint {
         let signature: Int?
         do {
             signature = try await signatureTimestamp()
@@ -289,6 +342,9 @@ public actor TVWatchReporter: WatchReporting {
         } catch let error as NoSlopError {
             switch error {
             case .network, .cancelled, .recommendationsNotConnected: return .unreachable
+            case .http(let status) where Self.isTransient(status): return .transient
+            // A renewal that failed for another reason than an ended grant, or a reply that could not be read.
+            case .oauth, .decoding: return .transient
             default: return .refused(playerStatus: nil, ei: false, vm: false, of: false, statuses: [])
             }
         } catch {
@@ -318,13 +374,15 @@ public actor TVWatchReporter: WatchReporting {
         }
         guard generation == self.generation else { return .unreachable }
         guard statuses.allSatisfy({ (200..<300).contains($0) }) else {
+            if statuses.contains(where: Self.isTransient) { return .transient }
             return .refused(playerStatus: values.status, ei: true, vm: true, of: true, statuses: statuses)
         }
         let before = statuses.count
-        await watchtime(&tracking, from: 0, to: position, final: false, statuses: &statuses, generation: generation)
+        await watchtime(&tracking, from: max(0, min(from, position)), to: position, final: false, statuses: &statuses, generation: generation)
         guard generation == self.generation else { return .unreachable }
         if statuses.count == before { return .unreachable }
         guard statuses.allSatisfy({ (200..<300).contains($0) }) else {
+            if statuses.contains(where: Self.isTransient) { return .transient }
             return .refused(playerStatus: values.status, ei: true, vm: true, of: true, statuses: statuses)
         }
         return .ready(tracking, statuses: statuses)

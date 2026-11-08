@@ -385,7 +385,9 @@ final class HomeViewModel {
                 let next = token
                 pages.append(try await Self.within(remaining) { try await service.homePage(continuation: next) })
             } catch {
-                // Any failure ends the attempt; the pages that did arrive are still judged.
+                // An ended connection is noticed (Settings stops saying "Connected"); any failure ends the attempt, and
+                // the pages that did arrive are still judged.
+                if case NoSlopError.recommendationsNotConnected = error { await env.reconcileRecommendationsAccount() }
                 break
             }
             decision = HomeSourceDecision.decide(pages: pages, filter: { filter.allows($0) }, excluded: excluded)
@@ -419,8 +421,12 @@ final class HomeViewModel {
             youTubeFellBack = true
         }
         await env.refreshRecommendationsDiagnostics()
-        // The service reports whether it accepted the reply; whether Home used it is decided here.
-        env.recommendationsDiagnostics.lastHome?.usedYouTube = decision.useYouTube
+        // The service reports whether it accepted the reply; whether Home used it is decided here, and kept in the
+        // environment so the Diagnostics screen, which reads the service again, says the same.
+        if let report = env.recommendationsDiagnostics.lastHome {
+            env.homeDecision = (decision.useYouTube, report.at)
+            env.recommendationsDiagnostics.lastHome?.usedYouTube = decision.useYouTube
+        }
         // YouTube's Home really was the source: the watch reports that were kept are sent now.
         if decision.useYouTube { env.replayWatchReports() }
         #if DEBUG

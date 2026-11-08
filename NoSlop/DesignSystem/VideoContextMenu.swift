@@ -3,14 +3,16 @@ import SwiftUI
 
 extension View {
     /// The long-press menu for a video: Watch Later, Add to playlist, Download, Don't show this channel (Show this
-    /// channel again, once it is blocked), Share.
-    func videoContextMenu(_ video: VideoSummary) -> some View {
-        modifier(VideoContextMenuModifier(video: video))
+    /// channel again, once it is blocked), Share. `homeCard` is true only for a card of YouTube's Home, the one place
+    /// where Not interested and the account-wide effect of Don't show this channel are offered.
+    func videoContextMenu(_ video: VideoSummary, homeCard: Bool = false) -> some View {
+        modifier(VideoContextMenuModifier(video: video, homeCard: homeCard))
     }
 }
 
 private struct VideoContextMenuModifier: ViewModifier {
     let video: VideoSummary
+    let homeCard: Bool
 
     @Environment(AppEnvironment.self) private var env
     @State private var isPickingPlaylist = false
@@ -23,9 +25,10 @@ private struct VideoContextMenuModifier: ViewModifier {
             }
     }
 
-    /// Only a card of YouTube's Home (it has a menu there), while the connection and its switches are on.
+    /// Only a card shown on YouTube's Home (it has a menu there), while the connection and its switches are on. The
+    /// same video in a search, a channel, the library or the queue does not get it: the surface decides, not the id.
     private var offersNotInterested: Bool {
-        env.recommendationsAccount != nil && env.settings.showYouTubeHome && env.settings.tellYouTubeAboutHiding
+        homeCard && env.recommendationsAccount != nil && env.settings.showYouTubeHome && env.settings.tellYouTubeAboutHiding
             && env.recommendationCardIDs.contains(video.id)
     }
 
@@ -35,7 +38,11 @@ private struct VideoContextMenuModifier: ViewModifier {
         HomeCardDismissals.shared.dismiss(id)
         let env = env
         Task(priority: .utility) {
-            try? await env.recommendations.notInterested(videoID: id)
+            do {
+                try await env.recommendations.notInterested(videoID: id)
+            } catch NoSlopError.recommendationsNotConnected {
+                await env.reconcileRecommendationsAccount()
+            } catch {}
             await env.refreshRecommendationsDiagnostics()
         }
     }
@@ -48,7 +55,11 @@ private struct VideoContextMenuModifier: ViewModifier {
         let name = channel.name
         let env = env
         Task(priority: .utility) {
-            _ = try? await env.recommendations.dontRecommendChannel(videoID: id, channelID: channelID, channelName: name)
+            do {
+                _ = try await env.recommendations.dontRecommendChannel(videoID: id, channelID: channelID, channelName: name)
+            } catch NoSlopError.recommendationsNotConnected {
+                await env.reconcileRecommendationsAccount()
+            } catch {}
             await env.refreshRecommendationsDiagnostics()
         }
     }

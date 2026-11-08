@@ -34,9 +34,9 @@ public actor MockRecommendationsAuth: RecommendationsAuthProviding {
 
     public func secondsLeft() async -> Int? { account == nil ? nil : 3000 }
 
-    public func disconnect() async -> Bool {
+    public func disconnect() async -> TVDisconnectResult {
         account = nil
-        return true
+        return TVDisconnectResult(revoked: true)
     }
 
     public func accessToken() async throws -> String {
@@ -190,4 +190,5 @@ public actor MockWatchReporter: WatchReporting {
         recordedEvents = []
         lastOutcome = nil
     }
+    public func sharingTurnedOff() async {}
 }

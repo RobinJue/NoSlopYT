@@ -448,21 +448,28 @@ final class PlayerController {
         watchTracker = tracker
         if let event, let viewing = watchViewing {
             if case .qualified = event { watchQualified = true }
-            watchReport?(event, viewing)
+            watchReport?(event, viewing.starting(at: tracker.reportedFrom))
         }
     }
 
-    /// Sends the closing event of the viewing, if it qualified. `forget` ends the viewing (another video starts, close,
-    /// the end of the item); the background keeps it, since audio may play on.
-    private func closeWatchViewing(position: Double, forget: Bool) {
+    /// Sends the closing event of the viewing, if it qualified, and ends the viewing (another video starts, close, the end
+    /// of the item).
+    private func closeWatchViewing(position: Double) {
         if !watchedStreamIsLive, let tracker = watchTracker, let viewing = watchViewing,
            let event = tracker.closing(position: position) {
-            watchReport?(event, viewing)
+            watchReport?(event, viewing.starting(at: tracker.closingFrom(position: position)))
         }
-        if forget {
-            watchViewing = nil
-            watchTracker = nil
-        }
+        watchViewing = nil
+        watchTracker = nil
+    }
+
+    /// The app goes to the background, where audio may play on: the range played so far is reported, and the viewing
+    /// stays open, so the rest of it (and its end) is reported too.
+    private func flushWatchViewing(position: Double) {
+        guard !watchedStreamIsLive, var tracker = watchTracker, let viewing = watchViewing,
+              let event = tracker.flush(position: position) else { return }
+        watchTracker = tracker
+        watchReport?(event, viewing.starting(at: tracker.reportedFrom))
     }
 
     /// The watch page loads and hands over the details of the video when the player is expanded and the app is on
@@ -499,7 +506,7 @@ final class PlayerController {
         byAdvance: Bool = false
     ) {
         saveProgress(force: true)
-        closeWatchViewing(position: currentTime, forget: true)
+        closeWatchViewing(position: currentTime)
         beginWatchViewing(of: video)
         tearDownItem()
         cancelWork()
@@ -889,7 +896,7 @@ final class PlayerController {
         if duration > 0, !isLive {
             currentTime = duration
         }
-        closeWatchViewing(position: currentTime, forget: true)
+        closeWatchViewing(position: currentTime)
         if hasStartedPlayback, !isLive {
             let length = duration > 0 ? duration : Double(video.durationSeconds ?? 0)
             library.recordProgress(video: video, seconds: length, duration: length > 0 ? length : nil)
@@ -1376,7 +1383,7 @@ final class PlayerController {
     /// Stops playback and hides the player.
     func close() {
         saveProgress(force: true)
-        closeWatchViewing(position: currentTime, forget: true)
+        closeWatchViewing(position: currentTime)
         Task { await library.flush() }
         generation += 1
         cancelWork()
@@ -2093,7 +2100,7 @@ final class PlayerController {
 
     private func appDidEnterBackground() {
         saveProgress(force: true)
-        closeWatchViewing(position: currentTime, forget: false)
+        flushWatchViewing(position: currentTime)
         Task { await library.flush() }
         guard currentVideo != nil else { return }
 
