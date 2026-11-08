@@ -106,9 +106,7 @@ enum ChannelBlocking {
         guard let video else { return }
         Task {
             guard let details = try? await env.youTube.videoDetails(id: video.id), !details.channel.id.isEmpty else { return }
-            var resolved = details.channel
-            if resolved.name.isEmpty { resolved.name = channel.name }
-            add(resolved, using: env)
+            add(ChannelRef.resolvedForBlocking(details: details.channel, tile: channel), using: env)
         }
     }
 

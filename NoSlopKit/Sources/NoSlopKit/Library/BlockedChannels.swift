@@ -37,3 +37,25 @@ extension AppSettings {
         return true
     }
 }
+
+extension ChannelRef {
+    /// The channel to save when a tile that came without an id is blocked and its id was found on the watch page.
+    /// The id and the handle come from the watch page; the name stays the one the tile shows, because an id-less tile is
+    /// recognised by that name. When the watch page spells the name differently and gives no handle, its name is kept in
+    /// the handle slot, so both spellings are recognised.
+    public static func resolvedForBlocking(details: ChannelRef, tile: ChannelRef) -> ChannelRef {
+        var resolved = details
+        let tileName = tile.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        if tileName.isEmpty { return resolved }
+        resolved.name = tile.name
+        let detailsHandle = details.handle ?? tile.handle
+        if let detailsHandle, !detailsHandle.isEmpty {
+            resolved.handle = detailsHandle
+        } else if ContentFilter.foldName(details.name) != ContentFilter.foldName(tile.name), !ContentFilter.foldName(details.name).isEmpty {
+            resolved.handle = details.name
+        } else {
+            resolved.handle = nil
+        }
+        return resolved
+    }
+}
