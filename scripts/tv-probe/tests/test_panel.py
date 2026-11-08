@@ -41,9 +41,24 @@ class ParseTests(unittest.TestCase):
         f = parse_panel({})
         self.assertEqual((f.not_interested, f.dont_recommend, f.channel_id, f.handle), (None, None, None, None))
 
+    def test_a_hide_enclosing_follow_up_counts_as_a_dismissal(self):
+        reply = {"a": {"feedbackEndpoint": {"feedbackToken": "NI", "uiActions": {"hideEnclosingContainer": True}}}}
+        self.assertEqual(parse_panel(reply).not_interested, "NI")
+
+    def test_two_different_channel_ids_leave_the_channel_unknown(self):
+        reply = {"a": {"browseEndpoint": {"browseId": "UCabcdefghijklmnopqrstuv"}},
+                 "b": {"browseEndpoint": {"browseId": "UCzzzzzzzzzzzzzzzzzzzzzz"}},
+                 "c": {"browseEndpoint": {"browseId": "UCabcdefghijklmnopqrstuv"}}}
+        self.assertIsNone(parse_panel(reply).channel_id)
+        same = {"a": reply["a"], "c": reply["c"]}
+        self.assertEqual(parse_panel(same).channel_id, "UCabcdefghijklmnopqrstuv")
+
     def test_repr_hides_the_tokens(self):
-        self.assertNotIn("NI", repr(parse_panel(load("panel_menu.json"))).replace("not_interested", ""))
-        self.assertNotIn("'DR'", repr(PanelFindings("NI", "DR", None, None, False)))
+        text = repr(PanelFindings("SECRETNI", "SECRETDR", None, None, False))
+        self.assertIn("not_interested=yes", text)
+        self.assertIn("dont_recommend=yes", text)
+        self.assertNotIn("SECRETNI", text)
+        self.assertNotIn("SECRETDR", text)
 
 
 class CommandTests(unittest.TestCase):

@@ -32,7 +32,8 @@ def _has_dismissal(node) -> bool:
     if isinstance(node, dict):
         for key, val in node.items():
             low = key.lower()
-            if "dismiss" in low or "replaceenclosing" in low or "removefeedback" in low or "removecomponent" in low:
+            if "dismiss" in low or "replaceenclosing" in low or "removefeedback" in low or "removecomponent" in low \
+                    or "hideenclosing" in low or "uiactions" in low:
                 return True
             if _has_dismissal(val):
                 return True
@@ -78,7 +79,8 @@ def parse_panel(reply: dict) -> PanelFindings:
         if m:
             handle = m.group(1)
             break
-    channel = ids[0] if ids else None
+    distinct = list(dict.fromkeys(ids))
+    channel = distinct[0] if len(distinct) == 1 else None  # several channels: unknown, so Don't recommend fails closed
     if len(ni) > 1 or len(dr) > 1:
         return PanelFindings(None, None, channel, handle, True)
     return PanelFindings(ni[0] if ni else None, dr[0] if dr else None, channel, handle, False)
