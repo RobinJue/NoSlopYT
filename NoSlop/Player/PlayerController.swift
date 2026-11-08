@@ -414,6 +414,53 @@ final class PlayerController {
     /// answers with `setChapters` and `setUpNext`.
     @ObservationIgnored var detailsNeeded: ((VideoSummary) -> Void)?
 
+    /// Hands a watch report event to the owner (`AppEnvironment+WatchReports`), which sends it on a utility task and
+    /// returns at once. Nothing here awaits it.
+    @ObservationIgnored var watchReport: ((WatchEvent, WatchViewing) -> Void)?
+    /// The network came back: the owner replays the reports that were kept.
+    @ObservationIgnored var networkCameBack: (() -> Void)?
+    /// The viewing of the current video and the counter that decides when it is reported. A new `start` makes new
+    /// ones; quality changes and recoveries keep them.
+    private var watchViewing: WatchViewing?
+    private var watchTracker: WatchReportTracker?
+    private var watchQualified = false
+
+    private func beginWatchViewing(of video: VideoSummary) {
+        let length = Double(video.durationSeconds ?? 0)
+        let viewing = WatchViewing(id: UUID(), videoID: video.id, lengthSeconds: length)
+        watchViewing = viewing
+        watchTracker = WatchReportTracker(lengthSeconds: length, isLive: video.isLive, isShort: video.isShort)
+        watchQualified = false
+    }
+
+    /// Feeds the counter; a video whose length was unknown at the start gets it as soon as the player knows it.
+    private func feedWatchTracker(position: Double) {
+        guard var tracker = watchTracker, let viewing = watchViewing, position.isFinite else { return }
+        if viewing.lengthSeconds <= 0, duration > 0, !isLive, let video = currentVideo, !watchQualified {
+            let known = WatchViewing(id: viewing.id, videoID: viewing.videoID, lengthSeconds: duration)
+            watchViewing = known
+            tracker = WatchReportTracker(lengthSeconds: duration, isLive: video.isLive, isShort: video.isShort)
+        }
+        let event = tracker.tick(position: position, isPlaying: state == .playing && !isSeeking)
+        watchTracker = tracker
+        if let event, let viewing = watchViewing {
+            if case .qualified = event { watchQualified = true }
+            watchReport?(event, viewing)
+        }
+    }
+
+    /// Sends the closing event of the viewing, if it qualified. `forget` ends the viewing (another video starts, close,
+    /// the end of the item); the background keeps it, since audio may play on.
+    private func closeWatchViewing(position: Double, forget: Bool) {
+        if let tracker = watchTracker, let viewing = watchViewing, let event = tracker.closing(position: position) {
+            watchReport?(event, viewing)
+        }
+        if forget {
+            watchViewing = nil
+            watchTracker = nil
+        }
+    }
+
     /// The watch page loads and hands over the details of the video when the player is expanded and the app is on
     /// screen. In every other case (the player is minimized, so there is no page, or the app is in the background,
     /// where a page for a video that autoplay just started may not be built) the owner of the player is asked to load
@@ -448,6 +495,8 @@ final class PlayerController {
         byAdvance: Bool = false
     ) {
         saveProgress(force: true)
+        closeWatchViewing(position: currentTime, forget: true)
+        beginWatchViewing(of: video)
         tearDownItem()
         cancelWork()
         startedThisRun.insert(video.id)
@@ -836,6 +885,7 @@ final class PlayerController {
         if duration > 0, !isLive {
             currentTime = duration
         }
+        closeWatchViewing(position: currentTime, forget: true)
         if hasStartedPlayback, !isLive {
             let length = duration > 0 ? duration : Double(video.durationSeconds ?? 0)
             library.recordProgress(video: video, seconds: length, duration: length > 0 ? length : nil)
@@ -1322,6 +1372,7 @@ final class PlayerController {
     /// Stops playback and hides the player.
     func close() {
         saveProgress(force: true)
+        closeWatchViewing(position: currentTime, forget: true)
         Task { await library.flush() }
         generation += 1
         cancelWork()
@@ -1554,6 +1605,7 @@ final class PlayerController {
         }
         resetRecoveryCounterWhenHealthy()
         applyAutomaticPictureInPicture()
+        if time.isValid, time.isNumeric { feedWatchTracker(position: max(0, time.seconds)) }
     }
 
     private func setCurrentTime(_ seconds: Double) {
@@ -1989,6 +2041,7 @@ final class PlayerController {
             applyDefaultQuality()
         }
         guard network.isOnline else { return }
+        networkCameBack?()
         // The titles that could not be looked up while there was no connection (on the lists and for the video that
         // plays) are asked about again now. Nothing happens unless one failed.
         DeArrowTitleCache.shared.retryFailedLookups()
@@ -2036,6 +2089,7 @@ final class PlayerController {
 
     private func appDidEnterBackground() {
         saveProgress(force: true)
+        closeWatchViewing(position: currentTime, forget: false)
         Task { await library.flush() }
         guard currentVideo != nil else { return }
 

@@ -14,6 +14,7 @@ struct NoSlopApp: App {
         let environment = env
         Task { await environment.refreshAccount() }
         Task { await environment.refreshRecommendationsAccount() }
+        environment.replayWatchReports()
         // A launch before the first unlock (iOS starts the app in the background for a finished download) read nothing
         // that is protected. This is observed here, not in a view: a background launch has no scene.
         NotificationCenter.default.addObserver(
@@ -35,6 +36,7 @@ struct NoSlopApp: App {
             // Coming back (background, inactive, active) has nothing new to save.
             if newPhase == .active {
                 Task { await env.reloadAfterUnlock() }
+                env.replayWatchReports()
             }
             if oldPhase == .active || newPhase == .background {
                 BackgroundPersistence.persist(env.library)

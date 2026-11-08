@@ -117,6 +117,7 @@ final class AppEnvironment {
         // With the player minimized (or the app in the background) no watch page is on screen to hand the player the
         // chapters and the up-next list of the video that plays: they are loaded here instead.
         player.detailsNeeded = { [weak self] video in self?.loadDetailsForPlayer(video) }
+        installWatchReportHooks()
     }
 
     // MARK: Construction
