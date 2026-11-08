@@ -79,7 +79,11 @@ struct SearchResultsContent: View {
                 // Several columns: a channel or playlist row spans the whole width between runs of video cards. In a
                 // grid cell it would be a short row next to a tall card, with blank space under it.
                 ForEach(FeedRuns.split(model.list.items) { $0.video != nil }, id: \.items[0].id) { run in
-                    if run.isGrid {
+                    if run.isLoneCard {
+                        // A single video between full-width rows: a card would leave the other columns empty.
+                        ForEach(run.items) { item in row(item, videoAsRow: true) }
+                            .padding(.bottom, 8)
+                    } else if run.isGrid {
                         FeedGrid(initialWidth: availableWidth) {
                             ForEach(run.items) { item in row(item) }
                         }
@@ -106,8 +110,8 @@ struct SearchResultsContent: View {
         }
     }
 
-    private func row(_ item: SearchItem) -> some View {
-        SearchItemRow(item: item)
+    private func row(_ item: SearchItem, videoAsRow: Bool = false) -> some View {
+        SearchItemRow(item: item, videoAsRow: videoAsRow)
             .onAppear { model.rowAppeared(item, using: env) }
     }
 
