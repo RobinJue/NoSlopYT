@@ -516,6 +516,13 @@ import Testing
         #expect(NoSlopError.dataAPINotEnabled != .http(status: 403))
     }
 
+    @Test func theTVConnectionSpeaksInPlainSentencesNotGoogleSignInWording() {
+        #expect(NoSlopError.recommendationsNotConnected.errorDescription == "YouTube recommendations aren't connected.")
+        for message in ["The code expired. Start again.", "The sign-in was declined.", "The sign-in couldn't start. Try again later.", "The sign-in didn't work. Try again."] {
+            #expect(NoSlopError.oauth(message).errorDescription == message)
+        }
+    }
+
     @Test func onlyFailuresTheViewerCanActOnAreShownAfterSignIn() {
         // Shown: nothing else will tell the viewer why the import keeps failing.
         for error: NoSlopError in [.dataAPINotEnabled, .quotaExceeded, .http(status: 403), .http(status: 500), .decoding("x"), .oauth("Keychain: x")] {
