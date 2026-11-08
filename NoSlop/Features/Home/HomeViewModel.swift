@@ -421,6 +421,8 @@ final class HomeViewModel {
         await env.refreshRecommendationsDiagnostics()
         // The service reports whether it accepted the reply; whether Home used it is decided here.
         env.recommendationsDiagnostics.lastHome?.usedYouTube = decision.useYouTube
+        // YouTube's Home really was the source: the watch reports that were kept are sent now.
+        if decision.useYouTube { env.replayWatchReports() }
         #if DEBUG
         FeedLog.info("home youtube used=\(decision.useYouTube) pages=\(pages.count) videos=\(decision.videos.count)")
         #endif
