@@ -1,4 +1,5 @@
 import Foundation
+import OSLog
 
 // Mocks of the YouTube recommendations connection, for previews and `-mockServices YES` launches.
 
@@ -150,7 +151,9 @@ public actor MockRecommendations: RecommendationsProviding {
     }
 }
 
-/// A watch reporter that only remembers what it was told.
+/// A watch reporter that only remembers what it was told. It also writes each event to the log (category
+/// `watchReport`, lines that start with "[watchReport]") and keeps the last one as the outcome the Diagnostics screen
+/// shows, so a mock run can be checked.
 public actor MockWatchReporter: WatchReporting {
     public struct Recorded: Sendable {
         public let event: WatchEvent
@@ -158,15 +161,33 @@ public actor MockWatchReporter: WatchReporting {
     }
 
     public private(set) var recordedEvents: [Recorded] = []
+    private var lastOutcome: WatchReportOutcome?
+    private var replays = 0
+    private static let log = Logger(subsystem: "com.robinjungerich.noslopyt", category: "watchReport")
 
     public init() {}
 
     public func record(_ event: WatchEvent, for viewing: WatchViewing) async {
         recordedEvents.append(Recorded(event: event, viewing: viewing))
+        let kind: String
+        switch event {
+        case .qualified(let position): kind = "qualified at \(Int(position)) s"
+        case .progress(let position): kind = "progress at \(Int(position)) s"
+        case .ended(let position, let finished): kind = "ended at \(Int(position)) s finished=\(finished)"
+        }
+        Self.log.info("[watchReport] video=\(viewing.videoID, privacy: .public) \(kind, privacy: .public)")
+        lastOutcome = WatchReportOutcome(status: "mock: \(kind)", playerStatus: "OK", hasEI: true, hasVM: true, hasOF: true, pingStatuses: [204], at: Date())
     }
 
-    public func replayPending() async {}
-    public func outcome() async -> WatchReportOutcome? { nil }
+    public func replayPending() async {
+        replays += 1
+        Self.log.info("[watchReport] replay \(self.replays, privacy: .public)")
+    }
+
+    public func outcome() async -> WatchReportOutcome? { lastOutcome }
     public func isPaused() async -> Bool { false }
-    public func clearAccountData() async { recordedEvents = [] }
+    public func clearAccountData() async {
+        recordedEvents = []
+        lastOutcome = nil
+    }
 }

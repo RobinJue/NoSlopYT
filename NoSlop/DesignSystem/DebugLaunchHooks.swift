@@ -69,6 +69,12 @@ import SwiftUI
 ///   start, as "Mock Account".
 /// - `-recommendationsDelay <seconds>`: the mock TV sign-in takes that long to be approved (2 s by default), so the code
 ///   sheet stays long enough to look at.
+///   The rest of the mock connection needs no flag: with `-mockServices YES`, Home shows a mock YouTube Home (8 sample
+///   videos, a Short, a members-only video, a live stream and a video of the channel "Blocked Example", then a second page)
+///   once connected; Not interested and Don't recommend channel are accepted; the mock reporter writes a line "[watchReport]"
+///   (category `watchReport`) for every report event (a played video qualifies after 30 s) and every replay, and its last
+///   event is the "Last watch report" of Settings > YouTube recommendations > Diagnostics. Save diagnostics writes
+///   `Documents/Diagnostics/recommendations-<time>.json`; Home logs "home youtube used=..." (category `feed`).
 /// - `-uiScript '<steps>'`: taps, pulls and the like at given moments (see `DebugUIScript`).
 /// - `-playerScript '<steps>'`: steps for the player, separated by `;`, run in order once the first video plays (see
 ///   `PlayerDebugScript`). The main kinds: waiting (`wait=<seconds>`, `waitPlaying`, `waitVideo`), moving through the queue
@@ -351,6 +357,23 @@ enum DebugLaunchHooks {
         }
         windows.forEach(visit)
         best?.setContentOffset(CGPoint(x: 0, y: offset), animated: false)
+    }
+
+    /// Scrolls the biggest scroll view on screen to `points` below its top.
+    static func scrollBiggestScrollView(by points: Double) {
+        let windows = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.flatMap(\.windows)
+        var best: UIScrollView?
+        func visit(_ view: UIView) {
+            if view.isHidden || view.alpha < 0.01 { return }
+            if let scrollView = view as? UIScrollView, scrollView.isScrollEnabled,
+               scrollView.bounds.width * scrollView.bounds.height > (best.map { $0.bounds.width * $0.bounds.height } ?? 0) {
+                best = scrollView
+            }
+            view.subviews.forEach(visit)
+        }
+        windows.forEach(visit)
+        guard let scrollView = best else { return }
+        scrollView.setContentOffset(CGPoint(x: scrollView.contentOffset.x, y: -scrollView.adjustedContentInset.top + points), animated: false)
     }
 
     /// Scrolls the biggest scroll view on screen to its very end, room for the content margins included.

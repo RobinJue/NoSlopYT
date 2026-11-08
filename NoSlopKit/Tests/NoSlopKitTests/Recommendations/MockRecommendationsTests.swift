@@ -85,8 +85,10 @@ import Testing
         await reporter.record(.ended(position: 120, finished: true), for: viewing)
         #expect(await reporter.recordedEvents.count == 2)
         #expect(await reporter.isPaused() == false)
+        #expect(await reporter.outcome()?.status.contains("ended") == true)
         await reporter.clearAccountData()
         #expect(await reporter.recordedEvents.isEmpty)
+        #expect(await reporter.outcome() == nil)
     }
 
     @Test func thePlaceholdersAreInertOrNotConnected() async {
