@@ -43,6 +43,11 @@ private final class Pages {
     }
 }
 
+@MainActor
+private final class Counter {
+    var value = 0
+}
+
 /// Holds an answer until the test opens it.
 @MainActor
 private final class Gate {
@@ -392,6 +397,77 @@ private func ids(_ model: AccountVideosModel) -> [String] {
         #expect(ids(model) == ["fresh"])
         #expect(!model.isLoadingMore)
         #expect(!model.hasMore)
+    }
+
+    /// A source for concurrency-2: the first call for the first page answers at once, the next ones wait for
+    /// `reloadGate`; the page "3" waits for `moreGate` and then answers with `stale` (or throws).
+    private func racingSource(reloadGate: Gate, moreGate: Gate, staleFails: Bool = false) -> AccountVideosModel.PageSource {
+        let firstCalls = Counter()
+        return { token in
+            if token == nil {
+                firstCalls.value += 1
+                if firstCalls.value == 1 { return page(["a0", "a1", "a2", "a3"], next: "3") }
+                await reloadGate.wait()
+                return page(["n1", "n2"], next: "n2tok")
+            }
+            if token == "3" {
+                await moreGate.wait()
+                if staleFails { throw URLError(.notConnectedToInternet) }
+                return page(["stale"], next: "4")
+            }
+            return page(["more"])
+        }
+    }
+
+    @Test func aNextPageAskedForWhileAReloadIsInFlightIsDroppedWhenTheReloadLands() async {
+        let reloadGate = Gate()
+        let moreGate = Gate()
+        let loader = AccountVideosModel.Loader(source: racingSource(reloadGate: reloadGate, moreGate: moreGate))
+        let model = AccountVideosModel()
+        await model.reload(using: loader)
+        #expect(ids(model) == ["a0", "a1", "a2", "a3"])
+
+        let reloading = Task { await model.reload(using: loader) }
+        await reloadGate.untilWaiting()
+        let more = Task { await model.loadMoreIfNeeded(at: 3, using: loader) }
+        await moreGate.untilWaiting()
+        #expect(moreGate.isWaiting)
+
+        reloadGate.open()
+        await reloading.value
+        moreGate.open()
+        await more.value
+
+        #expect(ids(model) == ["n1", "n2"], "the old list's next page must not land on the fresh first page")
+        #expect(model.hasMore, "the fresh list's own second page is still ahead")
+        #expect(!model.isLoadingMore)
+        #expect(!model.loadMoreFailed)
+        await model.loadMore(using: loader)
+        #expect(ids(model) == ["n1", "n2", "more"], "the next page asked for is the fresh list's, not the old one's")
+    }
+
+    @Test func aNextPageThatFailsAfterTheReloadLandedDoesNotMarkTheFreshList() async {
+        let reloadGate = Gate()
+        let moreGate = Gate()
+        let loader = AccountVideosModel.Loader(
+            source: racingSource(reloadGate: reloadGate, moreGate: moreGate, staleFails: true)
+        )
+        let model = AccountVideosModel()
+        await model.reload(using: loader)
+
+        let reloading = Task { await model.reload(using: loader) }
+        await reloadGate.untilWaiting()
+        let more = Task { await model.loadMoreIfNeeded(at: 3, using: loader) }
+        await moreGate.untilWaiting()
+        reloadGate.open()
+        await reloading.value
+        moreGate.open()
+        await more.value
+
+        #expect(ids(model) == ["n1", "n2"])
+        #expect(model.loadMoreError == nil)
+        #expect(!model.isPaused)
+        #expect(!model.isLoadingMore)
     }
 
     // MARK: Coming back to the screen

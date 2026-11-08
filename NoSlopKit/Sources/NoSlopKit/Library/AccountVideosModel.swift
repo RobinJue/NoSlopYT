@@ -13,7 +13,8 @@ import Observation
 /// - A page that adds no row (the filter hid all of it, or it held nothing but private and deleted videos) does not end
 ///   the list: loading goes on with the next page, up to `maxEmptyPages` in a row. Then the list `isPaused` and waits
 ///   for a nudge: `loadMore` ("Keep looking", "Show more", or the viewer scrolling to the end of the list).
-/// - Every reload starts a new generation, and an answer that arrives for an older one is dropped.
+/// - Every reload starts a new generation, and an answer that arrives for an older one is dropped. The list that a
+///   reload replaces also invalidates the pages that were asked for the old one, whenever they were asked.
 @MainActor
 @Observable
 public final class AccountVideosModel {
@@ -60,7 +61,8 @@ public final class AccountVideosModel {
     private var continuation: String?
     /// Every video that arrived, in order, filtered or not.
     @ObservationIgnored private var arrived: [VideoSummary] = []
-    /// Bumped on every reload, so a slow answer for an older request is dropped.
+    /// Bumped when a reload starts and again when it replaces the list, so a slow answer for an older request (an older
+    /// reload, or a page of the list that was replaced) is dropped.
     @ObservationIgnored private var generation = 0
 
     public init() {}
@@ -101,6 +103,13 @@ public final class AccountVideosModel {
         }
         guard current == generation, !Task.isCancelled else { return }
 
+        // The list is replaced now: a page that was asked for the old list, including one asked for while this reload was
+        // pending, must not land on the new one. Bumping at the moment of replacement makes every load in flight drop
+        // its answer; the flag is reset so the fresh list can ask for its own second page straight away. (The bump at
+        // the start stays, so a newer reload still beats an older one; a reload that fails replaces nothing and bumps
+        // nothing, so a page asked for meanwhile is still good for the list that is there.)
+        generation += 1
+        isLoadingMore = false
         arrived = page.items
         continuation = page.continuation
         loadMoreError = nil
