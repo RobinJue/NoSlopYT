@@ -64,7 +64,7 @@ class CliSecretTests(unittest.TestCase):
         self.assertNotIn("SECRET", err)
 
     def test_later_subcommands_exist_and_are_not_implemented_yet(self):
-        for sub in ("report", "history", "next", "fixture", "results"):
+        for sub in ("next", "fixture", "results"):
             code, out, err = run_cli(sub.split(), send=fake_500)
             self.assertEqual(code, 2, sub)
             self.assertIn("not implemented", out + err)

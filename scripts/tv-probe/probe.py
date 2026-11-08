@@ -11,7 +11,7 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # -I does not add the script folder
 
-from tvprobe import home, http, oauth, panel  # noqa: E402
+from tvprobe import home, http, oauth, panel, report  # noqa: E402
 from tvprobe.state import State, default_root  # noqa: E402
 
 COMMANDS = ("signin", "refresh", "home", "menu", "feedback", "report", "history", "next", "fixture", "results",
@@ -96,7 +96,8 @@ def _only(send, url):
 # Later tasks replace entries: handler(args, state, send) -> int
 HANDLERS = {name: _not_implemented for name in COMMANDS}
 HANDLERS.update({"signin": _signin, "refresh": _refresh, "revoke": _revoke, "home": home.run_home,
-                 "menu": panel.run_menu, "feedback": panel.run_feedback})
+                 "menu": panel.run_menu, "feedback": panel.run_feedback,
+                 "report": report.run_report, "history": report.run_history})
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -116,6 +117,13 @@ def build_parser() -> argparse.ArgumentParser:
             p.add_argument("--capture", metavar="NAME")
         if name in ("menu", "feedback"):
             p.add_argument("--video", required=True)
+        if name in ("report", "history"):
+            p.add_argument("--video", required=True)
+        if name == "report":
+            p.add_argument("--sts", choices=("on", "off"), default="on")
+            p.add_argument("--auth-on-pings", choices=("on", "off"), default="on")
+            p.add_argument("--delay", type=float, default=30)
+            p.add_argument("--force", action="store_true")
         if name == "feedback":
             p.add_argument("--kind", choices=("not-interested", "dont-recommend"), required=True)
             p.add_argument("--confirm-channel", metavar="ID")
