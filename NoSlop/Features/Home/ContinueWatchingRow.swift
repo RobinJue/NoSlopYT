@@ -39,6 +39,8 @@ struct ContinueWatchingRow: View {
 private struct ContinueWatchingCard: View {
     let entry: HistoryEntry
 
+    @Environment(AppEnvironment.self) private var env
+
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             // "12 min left" under the title says how much is watched; the thumbnail need not say it a second time.
@@ -66,8 +68,10 @@ private struct ContinueWatchingCard: View {
         if let name = entry.video.channel?.name, !name.isEmpty {
             parts.append(name)
         }
-        let length = entry.durationSeconds ?? entry.video.durationSeconds.map(Double.init) ?? 0
-        if let left = Formatting.timeLeft(seconds: length - entry.progressSeconds) {
+        // The live progress, like the thumbnail's bar: a video that keeps playing in the mini player counts down here too.
+        let current = env.library.progress(for: entry.id) ?? entry
+        let length = current.durationSeconds ?? entry.video.durationSeconds.map(Double.init) ?? 0
+        if let left = Formatting.timeLeft(seconds: length - current.progressSeconds) {
             parts.append(left)
         }
         return parts.joined(separator: " · ")
