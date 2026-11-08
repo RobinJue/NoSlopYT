@@ -3,7 +3,7 @@ import SwiftUI
 
 /// The Library tab: the account at the top, then history, Watch Later, downloads, the playlists on this device
 /// (create, rename, delete), the account's liked videos and playlists when signed in, the subscriptions manager
-/// and Settings.
+/// and Settings, then the link to the source code and the legal notice.
 struct LibraryView: View {
     @Environment(AppEnvironment.self) private var env
 
@@ -42,6 +42,8 @@ struct LibraryView: View {
                 )
                 row("Settings", systemImage: "gearshape", route: .settings)
             }
+
+            projectSection
         }
         .miniPlayerClearance()
         .navigationTitle("Library")
@@ -143,6 +145,27 @@ struct LibraryView: View {
     private func beginRename(_ playlist: LocalPlaylist) {
         renameTitle = playlist.title
         renamingPlaylistID = playlist.id
+    }
+
+    // MARK: Project
+
+    /// The way out to the source code, and the legal notice.
+    private var projectSection: some View {
+        Section {
+            Link(destination: ProjectLinks.repository) {
+                HStack(spacing: 8) {
+                    LibraryRowLabel(title: "Source code", systemImage: "chevron.left.forwardslash.chevron.right", detail: nil)
+                    ExternalLinkArrow()
+                }
+            }
+            .foregroundStyle(.primary)
+
+            NavigationLink {
+                LegalNoticeView()
+            } label: {
+                LibraryRowLabel(title: "Legal notice", systemImage: "doc.text", detail: nil)
+            }
+        }
     }
 
     // MARK: Rows

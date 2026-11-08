@@ -441,3 +441,7 @@ at any time. If you use it, you do so at your own risk and you are responsible f
 you. Only the optional Google sign-in uses an official API (the YouTube Data API, with your own Google project). The
 optional YouTube recommendations connection is not official: it presents itself to YouTube as YouTube's TV app, which
 is also against YouTube's terms, and may get the account restricted.
+
+The app says the same in **Library > Legal notice** (with the data it keeps and where it sends requests), and
+**Library > Source code** opens the repository, <https://github.com/RobinJue/NoSlopYT>. That address is one constant,
+`ProjectLinks.repository` in `NoSlop/App/ProjectLinks.swift`.

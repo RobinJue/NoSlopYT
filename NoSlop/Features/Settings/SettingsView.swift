@@ -115,15 +115,7 @@ private struct AboutSettingsSection: View {
     @ViewBuilder
     private func creditLink(_ title: String, _ address: String) -> some View {
         if let url = URL(string: address) {
-            Link(destination: url) {
-                HStack {
-                    Text(title)
-                    Spacer(minLength: 8)
-                    Image(systemName: "arrow.up.right")
-                        .font(.footnote.weight(.semibold))
-                        .foregroundStyle(.tertiary)
-                }
-            }
+            ExternalLinkRow(title: title, destination: url)
         }
     }
 }
