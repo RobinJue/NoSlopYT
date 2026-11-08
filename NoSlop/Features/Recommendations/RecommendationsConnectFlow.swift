@@ -21,7 +21,7 @@ final class RecommendationsConnectFlow {
     var errorMessage: String?
 
     @ObservationIgnored private var poll: Task<TVAccount, any Error>?
-    @ObservationIgnored private var restartRequested = false
+    @ObservationIgnored private var auth: (any RecommendationsAuthProviding)?
     @ObservationIgnored private var cancelRequested = false
 
     func connect(using env: AppEnvironment) async {
@@ -38,6 +38,7 @@ final class RecommendationsConnectFlow {
                 prompt = nil
             }
             poll = nil
+            auth = nil
         }
         do {
             let issued = try await env.recommendationsAuth.beginSignIn()
@@ -46,25 +47,22 @@ final class RecommendationsConnectFlow {
             // A new code replaces the sheet's failure (on "Try again" the failure stays up until this point).
             failure = nil
             prompt = issued
-            while true {
-                let auth = env.recommendationsAuth
-                let task = Task { try await auth.completeSignIn(issued) }
-                poll = task
-                TVTrace.log("flow: waiting for the approval")
-                do {
-                    let account = try await task.value
-                    TVTrace.log("flow: approved, connecting the app")
-                    await env.recommendationsConnected(account)
-                    TVTrace.log("flow: app connected")
-                    return
-                } catch {
-                    TVTrace.log("flow: the wait ended, \(TVTrace.describe(error)), restartRequested \(restartRequested), cancelRequested \(cancelRequested)")
-                    if isCancellation(error), restartRequested, !cancelRequested {
-                        restartRequested = false
-                        continue
-                    }
-                    throw error
-                }
+            let service = env.recommendationsAuth
+            auth = service
+            // One sign-in call that nothing restarts: a poll that is on its way when the app comes back from Google's page
+            // may carry the approval, and cancelling it loses the approval for good.
+            let task = Task { try await service.completeSignIn(issued) }
+            poll = task
+            TVTrace.log("flow: waiting for the approval")
+            do {
+                let account = try await task.value
+                TVTrace.log("flow: approved, connecting the app")
+                await env.recommendationsConnected(account)
+                TVTrace.log("flow: app connected")
+                return
+            } catch {
+                TVTrace.log("flow: the wait ended, \(TVTrace.describe(error)), cancelRequested \(cancelRequested)")
+                throw error
             }
         } catch {
             if isCancellation(error) || cancelRequested {
@@ -82,7 +80,6 @@ final class RecommendationsConnectFlow {
     func cancel(_ source: String = "unknown") {
         TVTrace.log("flow: cancel from \(source)")
         cancelRequested = true
-        restartRequested = false
         poll?.cancel()
         // A sheet that only says why it failed has nothing running to end: closing it clears it.
         if !isWorking {
@@ -91,15 +88,15 @@ final class RecommendationsConnectFlow {
         }
     }
 
-    /// The app is active again: asks for the approval right away instead of waiting out the polling interval.
+    /// The app is active again: asks for the approval right away instead of waiting out the polling interval. This only
+    /// cuts the wait between two polls short; a request that is on its way is left alone.
     func pollNow() {
-        guard prompt != nil, let poll else {
+        guard prompt != nil, failure == nil, poll != nil, let auth else {
             TVTrace.log("flow: pollNow ignored (prompt \(prompt != nil))")
             return
         }
-        TVTrace.log("flow: pollNow, restarting the wait")
-        restartRequested = true
-        poll.cancel()
+        TVTrace.log("flow: pollNow, asking Google now")
+        Task { await auth.pollSoon() }
     }
 
     private func isCancellation(_ error: any Error) -> Bool {

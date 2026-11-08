@@ -38,6 +38,9 @@ public protocol RecommendationsAuthProviding: TVTokenProviding {
     func beginSignIn() async throws -> TVSignInPrompt
     /// Waits until the viewer has approved the code (polling), then stores the tokens. Honours cancellation.
     func completeSignIn(_ prompt: TVSignInPrompt) async throws -> TVAccount
+    /// The app is back from Google's page: asks for the approval now if the sign-in is only waiting for its next poll. Never
+    /// cancels a request that is already on its way (its answer can be the one-time approval).
+    func pollSoon() async
     /// Seconds until the access token expires; nil when not connected.
     func secondsLeft() async -> Int?
     /// Clears the stored credentials first, then revokes the grant (best effort).
@@ -49,6 +52,7 @@ public protocol RecommendationsAuthProviding: TVTokenProviding {
 
 public extension RecommendationsAuthProviding {
     func onGrantEnded(_ handler: @escaping @Sendable () async -> Void) async {}
+    func pollSoon() async {}
 }
 
 /// What a disconnect achieved.

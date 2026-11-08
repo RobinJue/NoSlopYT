@@ -14,6 +14,8 @@ public enum TVAuth {
     static let clientPattern = #"clientId:"([^"]+)",[^"]*?:"([^"]+)""#
     static let minimumWait = 5
     static let slowDownExtra = 5
+    /// `pollSoon` is ignored when the last poll was less than this many seconds ago (Google answers "slow down" to more).
+    static let minimumGap: TimeInterval = 1
     static let refreshMargin: TimeInterval = 300
     static let deviceIDKey = "noslop.tvDeviceID"
 }
@@ -43,6 +45,10 @@ public actor TVAuthService: RecommendationsAuthProviding {
 
     private var clientPair: ClientPair?
     private var pending: PendingSignIn?
+    /// Ends the wait between two polls early; set while `completeSignIn` runs.
+    private var wakeUp: AsyncStream<Void>.Continuation?
+    private var isWaiting = false
+    private var lastPollAt: Date?
     private var refreshTask: Task<TVCredentials, any Error>?
     private var grantEnded: (@Sendable () async -> Void)?
     private lazy var tvClient = TVClient(http: http, tokens: self)
@@ -99,6 +105,22 @@ public actor TVAuthService: RecommendationsAuthProviding {
         return TVSignInPrompt(userCode: userCode, verificationURL: url, expiresAt: expiresAt)
     }
 
+    /// Asks Google for the approval now, if the sign-in is only waiting for its next poll (the app is back from Google's
+    /// page). A request that is already on its way is never cancelled: the answer to it can be the one-time approval, and a
+    /// cancelled request loses it. Ignored when no wait is running or the last poll was just now.
+    public func pollSoon() async {
+        guard isWaiting, let wakeUp else {
+            TVTrace.log("pollSoon: nothing is waiting")
+            return
+        }
+        if let last = lastPollAt, now().timeIntervalSince(last) < TVAuth.minimumGap {
+            TVTrace.log("pollSoon: just asked")
+            return
+        }
+        TVTrace.log("pollSoon: waking the wait")
+        wakeUp.yield()
+    }
+
     public func completeSignIn(_ prompt: TVSignInPrompt) async throws -> TVAccount {
         guard let sign = pending, sign.userCode == prompt.userCode else {
             TVTrace.log("completeSignIn: no pending sign-in for this prompt (pending=\(pending != nil))")
@@ -112,6 +134,14 @@ public actor TVAuthService: RecommendationsAuthProviding {
             "grant_type": .string(TVAuth.deviceGrant),
         ] as JSON).data()
 
+        let (wakes, wake) = AsyncStream.makeStream(of: Void.self, bufferingPolicy: .bufferingNewest(1))
+        wakeUp = wake
+        defer {
+            wake.finish()
+            wakeUp = nil
+            isWaiting = false
+        }
+
         var slowDowns = 0
         while true {
             try Self.checkCancelled()
@@ -123,12 +153,14 @@ public actor TVAuthService: RecommendationsAuthProviding {
             let answer: Data?
             do {
                 let (data, status) = try await send("POST", TVAuth.tokenURL, headers: Self.jsonHeaders, body: request)
+                lastPollAt = now()
                 answer = data
                 let shown = Self.object(data)
                 TVTrace.log("poll: status \(status), error \(TVTrace.oauthName(shown["error"]?.string)), access_token \(shown["access_token"]?.string != nil), refresh_token \(shown["refresh_token"]?.string != nil)")
             } catch let error as NoSlopError {
                 // A dropped connection while waiting is not the end of the sign-in; the expiry time bounds the wait.
                 // A cancel keeps the device code too: the sign-in is restarted on the same prompt when the app comes back.
+                lastPollAt = now()
                 TVTrace.log("poll: request failed, \(TVTrace.describe(error))")
                 if case .cancelled = error { throw error }
                 guard case .network = error else { pending = nil; throw error }
@@ -163,12 +195,32 @@ public actor TVAuthService: RecommendationsAuthProviding {
                 }
             }
             do {
-                try await sleep(.seconds(max(TVAuth.minimumWait, sign.interval) + TVAuth.slowDownExtra * slowDowns))
+                isWaiting = true
+                try await Self.wait(max(TVAuth.minimumWait, sign.interval) + TVAuth.slowDownExtra * slowDowns, sleep: sleep, wakes: wakes)
+                isWaiting = false
             } catch is CancellationError {
+                isWaiting = false
                 TVTrace.log("poll: cancelled while waiting")
                 throw NoSlopError.cancelled
             }
         }
+    }
+
+    /// Waits `seconds`, or less if `wakes` delivers a nudge (`pollSoon`). Throws `CancellationError` when cancelled.
+    private static func wait(
+        _ seconds: Int, sleep: @escaping @Sendable (Duration) async throws -> Void, wakes: AsyncStream<Void>
+    ) async throws {
+        try await withThrowingTaskGroup(of: Void.self) { group in
+            group.addTask { try await sleep(.seconds(seconds)) }
+            group.addTask {
+                // The stream ends only when the sign-in is over or this task is cancelled.
+                var nudges = wakes.makeAsyncIterator()
+                _ = await nudges.next()
+            }
+            _ = try await group.next()
+            group.cancelAll()
+        }
+        try Task.checkCancellation()
     }
 
     private func finishSignIn(_ reply: [String: JSON], client: ClientPair) async throws -> TVAccount {

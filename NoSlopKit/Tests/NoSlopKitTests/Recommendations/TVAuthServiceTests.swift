@@ -102,6 +102,94 @@ private struct UnclearableStore: TVTokenStoring {
     func clear() throws { throw NoSlopError.oauth("Keychain error") }
 }
 
+/// A sleep that really waits (an hour) until it is cancelled, and counts how many waits have started.
+private final class HeldSleep: @unchecked Sendable {
+    private let lock = NSLock()
+    private var started = 0
+    var count: Int { lock.withLock { started } }
+
+    func sleep(_ duration: Duration) async throws {
+        lock.withLock { started += 1 }
+        try await Task.sleep(for: .seconds(3600))
+    }
+
+    /// Returns once `number` waits have started (or after two seconds, so a broken service fails the test, not hangs it).
+    func waitForSleep(_ number: Int) async throws {
+        for _ in 0..<400 {
+            if count >= number { return }
+            try await Task.sleep(for: .milliseconds(5))
+        }
+    }
+}
+
+/// Answers the sign-in's requests; holds the first token reply until `release()`, so a test can nudge the sign-in while
+/// that request is on its way. The first reply is "pending", the later ones the tokens. A request that was cancelled
+/// while held throws `cancelled`, as a real session does.
+private final class HeldTokenHTTP: HTTPClient, @unchecked Sendable {
+    private let lock = NSLock()
+    private var requests = 0
+    private var gate: CheckedContinuation<Void, Never>?
+    private var released = false
+    private var reachedWaiter: CheckedContinuation<Void, Never>?
+
+    var tokenRequestCount: Int { lock.withLock { requests } }
+
+    func send(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
+        let url = request.url!
+        let text = url.absoluteString
+        func reply(_ body: String, status: Int = 200) -> (Data, HTTPURLResponse) {
+            (Data(body.utf8), HTTPURLResponse(url: url, statusCode: status, httpVersion: "HTTP/1.1", headerFields: [:])!)
+        }
+        if text.hasSuffix("youtube.com/tv") {
+            return reply(#"<html><script nonce="n" id="base-js" src="/s/tv/m=base"></script></html>"#)
+        }
+        if text.contains("/s/tv/m=base") {
+            return reply(#"var a={clientId:"tvsynthetic_client_1",secret:"tvsynthetic_secret_1"};"#)
+        }
+        if text.contains("oauth2/device/code") {
+            return reply(#"{"device_code":"tvsynthetic_device_code","user_code":"ABC-DEF-GHI","verification_url":"https://www.google.com/device","expires_in":1800,"interval":5}"#)
+        }
+        guard text.contains("oauth2/token") else { return reply("{}") }
+        let number: Int = lock.withLock { requests += 1; return requests }
+        if number == 1 {
+            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                let resumeNow: Bool = lock.withLock {
+                    if released { return true }
+                    gate = continuation
+                    reachedWaiter?.resume()
+                    reachedWaiter = nil
+                    return false
+                }
+                if resumeNow { continuation.resume() }
+            }
+            if Task.isCancelled { throw NoSlopError.cancelled }
+            return reply(#"{"error":"authorization_pending"}"#, status: 428)
+        }
+        return reply(success)
+    }
+
+    func waitUntilHeld() async {
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            let now: Bool = lock.withLock {
+                if gate != nil { return true }
+                reachedWaiter = continuation
+                return false
+            }
+            if now { continuation.resume() }
+        }
+    }
+
+    func release() {
+        let waiting: CheckedContinuation<Void, Never>? = lock.withLock {
+            released = true
+            let g = gate
+            gate = nil
+            return g
+        }
+        waiting?.resume()
+    }
+}
+
 private struct Rig {
     let http = MockHTTPClient()
     let store = InMemoryTVTokenStore()
@@ -111,7 +199,7 @@ private struct Rig {
     let clock = TestClock()
     let service: TVAuthService
 
-    init(credentials: TVCredentials? = nil) {
+    init(credentials: TVCredentials? = nil, sleep: (@Sendable (Duration) async throws -> Void)? = nil) {
         if let credentials { try? store.save(credentials) }
         let clock = self.clock
         service = TVAuthService(
@@ -119,7 +207,7 @@ private struct Rig {
             store: store,
             defaults: UserDefaults(suiteName: suite)!,
             now: { clock.now },
-            sleep: { clock.sleep($0) }
+            sleep: sleep ?? { clock.sleep($0) }
         )
     }
 
@@ -300,6 +388,62 @@ private func stored(expiresIn: Double, clock: Date = Date(timeIntervalSince1970:
         // The restarted poll on the same prompt still has its device code and finishes the sign-in.
         _ = try await rig.service.completeSignIn(prompt)
         #expect(try rig.store.load()?.refreshToken == "tvsynthetic_refresh_1")
+    }
+
+    @Test(.timeLimit(.minutes(1))) func pollSoonCutsTheWaitShortAndIsIgnoredWhenTheLastPollWasJustNow() async throws {
+        let held = HeldSleep()
+        let rig = Rig(sleep: { try await held.sleep($0) })
+        rig.queueClientValues()
+        rig.queueDeviceCode()
+        rig.queueToken(#"{"error":"authorization_pending"}"#, status: 428)
+        rig.queueToken(success)
+        let prompt = try await rig.service.beginSignIn()
+        let service = rig.service
+        let task = Task { try await service.completeSignIn(prompt) }
+        try await held.waitForSleep(1)
+        #expect(rig.tokenRequests.count == 1)
+
+        // Asked for again right after the poll: ignored, the wait goes on.
+        await service.pollSoon()
+        for _ in 0..<20 { await Task.yield() }
+        #expect(rig.tokenRequests.count == 1)
+
+        // A moment later it asks at once instead of after the five seconds.
+        rig.clock.advance(2)
+        await service.pollSoon()
+        _ = try await task.value
+        #expect(rig.tokenRequests.count == 2)
+        #expect(try rig.store.load()?.refreshToken == "tvsynthetic_refresh_1")
+    }
+
+    @Test(.timeLimit(.minutes(1))) func pollSoonNeverCancelsARequestThatIsOnItsWay() async throws {
+        let held = HeldSleep()
+        let http = HeldTokenHTTP()
+        let clock = TestClock()
+        let store = InMemoryTVTokenStore()
+        let suite = "tvsynthetic.\(UUID().uuidString)"
+        let service = TVAuthService(
+            http: http, store: store, defaults: UserDefaults(suiteName: suite)!,
+            now: { clock.now }, sleep: { try await held.sleep($0) }
+        )
+        let prompt = try await service.beginSignIn()
+        let task = Task { try await service.completeSignIn(prompt) }
+        await http.waitUntilHeld()
+
+        // The app comes back while the first request is still on its way: nothing is cancelled, nothing is queued up.
+        clock.advance(2)
+        await service.pollSoon()
+        http.release()
+        try await held.waitForSleep(1)
+        for _ in 0..<20 { await Task.yield() }
+        #expect(http.tokenRequestCount == 1, "the nudge made during the request must not shorten the next wait")
+
+        // A nudge during the wait that follows asks again at once.
+        clock.advance(2)
+        await service.pollSoon()
+        _ = try await task.value
+        #expect(http.tokenRequestCount == 2)
+        #expect(try store.load()?.refreshToken == "tvsynthetic_refresh_1")
     }
 
     @Test func aRefreshKeepsANewRefreshToken() async throws {
