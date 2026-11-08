@@ -34,6 +34,8 @@ public actor TVWatchReporter: WatchReporting {
         let entryID: UUID
         var tracking: Tracking?
         var pendingEnd: (position: Double, finished: Bool)?
+        /// The first report is on its way; false once it failed or is held back by a pause (the queue entry is the record).
+        var reportInFlight = true
     }
 
     private let client: TVClient
@@ -97,7 +99,7 @@ public actor TVWatchReporter: WatchReporting {
         replaying = true
         defer { replaying = false }
         let generation = generation
-        let active = Set(sessions.values.map(\.entryID))
+        let active = Set(sessions.values.filter(\.reportInFlight).map(\.entryID))
         for entry in queue.all() where !active.contains(entry.id) {
             guard !paused, generation == self.generation, await isEnabled() else { return }
             switch await mint(videoID: entry.videoID, length: entry.lengthSeconds, position: entry.position, generation: generation) {
@@ -148,7 +150,7 @@ public actor TVWatchReporter: WatchReporting {
         let entry = PendingWatchReport(videoID: viewing.videoID, lengthSeconds: viewing.lengthSeconds, position: position, createdAt: now())
         queue.add(entry)
         sessions[viewing.id] = Session(entryID: entry.id, tracking: nil, pendingEnd: nil)
-        guard !paused else { return }
+        guard !paused else { sessions[viewing.id]?.reportInFlight = false; return }
         let generation = generation
 
         let result = await mint(videoID: viewing.videoID, length: viewing.lengthSeconds, position: position, generation: generation)
@@ -161,8 +163,10 @@ public actor TVWatchReporter: WatchReporting {
             // The viewing ended while the first report was on its way.
             if let end = sessions[viewing.id]?.pendingEnd {
                 statuses = []
-                _ = await finish(&tracking, position: end.position, finished: end.finished, statuses: &statuses, generation: generation)
-                if generation == self.generation { sessions[viewing.id] = nil }
+                let ok = await finish(&tracking, position: end.position, finished: end.finished, statuses: &statuses, generation: generation)
+                guard generation == self.generation else { return }
+                sessions[viewing.id] = nil
+                if !ok && statuses.isEmpty { requeue(viewing, position: end.position, finished: end.finished) }
             }
         case .refused(let playerStatus, let ei, let vm, let of, let statuses):
             queue.remove(id: entry.id)
@@ -170,15 +174,23 @@ public actor TVWatchReporter: WatchReporting {
             refused(playerStatus: playerStatus, ei: ei, vm: vm, of: of, statuses: statuses)
         case .unreachable:
             // The entry stays for `replayPending`; later events of this viewing update it.
+            sessions[viewing.id]?.reportInFlight = false
             lastOutcome = WatchReportOutcome(status: "waiting", at: now())
         }
+    }
+
+    /// Puts a closing report that a lost connection cut off back into the queue, so a replay sends it.
+    private func requeue(_ viewing: WatchViewing, position: Double, finished: Bool) {
+        queue.add(PendingWatchReport(
+            videoID: viewing.videoID, lengthSeconds: viewing.lengthSeconds, position: position, finished: finished, createdAt: now()
+        ))
     }
 
     private func ended(position: Double, finished: Bool, viewing: WatchViewing) async {
         guard let session = sessions[viewing.id] else { return }
         guard var tracking = session.tracking else {
             // No tracking values (the first report is in flight, failed, or waits for a launch): the queued entry says it.
-            sessions[viewing.id]?.pendingEnd = (position, finished)
+            if session.reportInFlight { sessions[viewing.id]?.pendingEnd = (position, finished) } else { sessions[viewing.id] = nil }
             if let entry = queue.all().first(where: { $0.id == session.entryID }) {
                 var updated = entry
                 updated.position = max(position, entry.position)
@@ -189,9 +201,10 @@ public actor TVWatchReporter: WatchReporting {
         }
         let generation = generation
         var statuses: [Int] = []
-        _ = await finish(&tracking, position: position, finished: finished, statuses: &statuses, generation: generation)
+        let ok = await finish(&tracking, position: position, finished: finished, statuses: &statuses, generation: generation)
         guard generation == self.generation else { return }
         sessions[viewing.id] = nil
+        if !ok && statuses.isEmpty { requeue(viewing, position: position, finished: finished) }
         if !statuses.isEmpty {
             if statuses.allSatisfy({ (200..<300).contains($0) }) { succeeded(statuses: statuses) } else {
                 refused(playerStatus: "OK", ei: true, vm: true, of: true, statuses: statuses)

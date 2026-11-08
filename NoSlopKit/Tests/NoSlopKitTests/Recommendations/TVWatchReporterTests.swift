@@ -294,4 +294,40 @@ private func prepare(_ rig: Rig, player: Data? = nil) throws {
         #expect(entry.position == 58)
         #expect(entry.finished)
     }
+
+    @Test func aViewingWhoseFirstReportFailedIsReplayedAfterItEnds() async throws {
+        let rig = Rig()
+        rig.http.enqueueError("youtubei/v1/player", NoSlopError.network("offline"))
+        rig.http.enqueue("youtubei/v1/player", body: try Fixture.data("tvsynthetic_player_signed.json"))
+        rig.http.enqueue("api/stats/", body: Data())
+        rig.http.enqueue("https://www.youtube.com/", body: homepageBody())
+        let v = viewing()
+        await rig.reporter.record(.qualified(position: 31), for: v)
+        await rig.reporter.record(.ended(position: 58, finished: true), for: v)
+        #expect(rig.queue.all().count == 1)
+        #expect(rig.pings.isEmpty)
+
+        await rig.reporter.replayPending()
+        let kinds = rig.pings.map { $0.url!.path }
+        #expect(kinds == ["/api/stats/playback", "/api/stats/watchtime", "/api/stats/watchtime"])
+        #expect(query(rig.pings[2])["final"] == "1")
+        #expect(rig.queue.all().isEmpty)
+    }
+
+    @Test func aClosingPingLostToTheNetworkIsQueuedForReplay() async throws {
+        let rig = Rig()
+        rig.http.enqueue("youtubei/v1/player", body: try Fixture.data("tvsynthetic_player_signed.json"))
+        rig.http.enqueue("api/stats/", body: Data())
+        rig.http.enqueue("api/stats/", body: Data())
+        rig.http.enqueueError("api/stats/", NoSlopError.network("offline"))
+        rig.http.enqueue("https://www.youtube.com/", body: homepageBody())
+        let v = viewing()
+        await rig.reporter.record(.qualified(position: 31), for: v)
+        #expect(rig.queue.all().isEmpty)
+        await rig.reporter.record(.ended(position: 58, finished: true), for: v)
+        let entry = try #require(rig.queue.all().first)
+        #expect(entry.videoID == "tvsyntheticV1")
+        #expect(entry.position == 58)
+        #expect(entry.finished)
+    }
 }
