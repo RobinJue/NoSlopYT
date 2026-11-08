@@ -1,6 +1,7 @@
 import Foundation
 import NoSlopKit
 import Observation
+import UIKit
 
 /// The app's composition root: every service, store and controller, created once and handed to the view tree with
 /// `.environment(env)`. Views read it with `@Environment(AppEnvironment.self)`.
@@ -21,6 +22,8 @@ final class AppEnvironment {
     let account: any YouTubeAccountService
     let library: LibraryStore
     let settingsStore: SettingsStore
+    /// The last `refreshAccount` ran while protected data was unavailable, so what it read is not to be trusted.
+    private var accountReadWhileLocked = false
     let downloads: DownloadManager
     let player: PlayerController
     let router: Router
@@ -106,7 +109,9 @@ final class AppEnvironment {
     static func live() -> AppEnvironment {
         // No session is passed in: which `URLSession` the kit talks through is `URLSessionHTTPClient`'s decision.
         let http = URLSessionHTTPClient()
-        let settingsStore = SettingsStore()
+        // An app that iOS starts in the background before the first unlock cannot read its settings yet: the store then
+        // saves nothing until `reloadAfterUnlock` has read them again.
+        let settingsStore = SettingsStore(protectedDataAvailable: UIApplication.shared.isProtectedDataAvailable)
 
         let deviceConfig = InnerTubeConfig.fromLocale()
         let config = InnerTubeConfig(
@@ -303,10 +308,32 @@ final class AppEnvironment {
 
     /// Reads the signed-in account and, when there is one, syncs the Google subscriptions into the library. A sync that
     /// fails is not reported here: at launch and on pull to refresh the library just keeps what it had.
+    ///
+    /// When there is no account, the subscriptions that came from the account become local ones, as after a sign-out:
+    /// the session may have ended while the app was not looking (Google refused to renew it, or the app's data was
+    /// restored onto a device without its Keychain item), and an Unsubscribe made on a `.google` entry then would be
+    /// undone by the next sign-in. This is done only while protected data is available: a Keychain that cannot be read
+    /// before the first unlock says nothing about the session. `reloadAfterUnlock` reads the account again then.
     func refreshAccount() async {
+        let protectedDataAvailable = UIApplication.shared.isProtectedDataAvailable
+        accountReadWhileLocked = !protectedDataAvailable
         googleAccount = await auth.currentAccount()
         if googleAccount != nil {
             await syncGoogleSubscriptions()
+        } else if protectedDataAvailable {
+            library.convertGoogleSubscriptionsToLocal()
+        }
+    }
+
+    /// Reads again what could not be read because the app was started before the first unlock after a restart (iOS
+    /// does that for a finished background download): the library files, the settings and, if the account was read
+    /// then, the account. In this order. The app calls it when protected data becomes available and when the app
+    /// becomes active; it is cheap when nothing was missed.
+    func reloadAfterUnlock() async {
+        library.reloadIfUnreadable()
+        settingsStore.reloadIfNeeded(protectedDataAvailable: UIApplication.shared.isProtectedDataAvailable)
+        if accountReadWhileLocked, UIApplication.shared.isProtectedDataAvailable {
+            await refreshAccount()
         }
     }
 

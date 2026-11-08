@@ -220,8 +220,10 @@ and by running it with the mock services (next section).
   is force-quit): the player saves the position first, so the video resumes where it stopped, and the write waits at
   most two seconds for a write that is still running; settings are in `UserDefaults`; the Google tokens are in the
   Keychain; downloads are in Documents. A file that is damaged is moved aside as `<name>.corrupt` instead of being
-  deleted, a file that exists but cannot be read (the phone was restarted and not unlocked yet) is left untouched and
-  nothing is saved over it until it can be read, and a setting that an older save does not have yet takes its default.
+  deleted, a file that exists but cannot be read (the phone was restarted and not unlocked yet, and iOS started the app in the
+  background for a finished download) is left untouched and nothing is saved over it until it can be read: once the
+  phone is unlocked the app reads the library files, the settings and the Google account again and merges what changed
+  meanwhile, and a write that fails (the disk is full) is tried again, and a setting that an older save does not have yet takes its default.
 
 ## Debug launch arguments and app links
 
