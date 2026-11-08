@@ -42,6 +42,12 @@ public struct URLSessionHTTPClient: HTTPClient {
         self.session = Self.defaultSession
     }
 
+    /// A client with a session of its own, made from the same cookie-free, cache-free configuration as the default one.
+    /// The TV connection uses it, so nothing it does shares connections, cookies or cache with anonymous traffic.
+    public static func isolated() -> URLSessionHTTPClient {
+        URLSessionHTTPClient(session: URLSession(configuration: makeDefaultConfiguration()))
+    }
+
     /// For tests, which pass a session with a stub protocol.
     public init(session: URLSession) {
         self.session = session

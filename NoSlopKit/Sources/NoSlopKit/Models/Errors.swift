@@ -31,6 +31,8 @@ public enum NoSlopError: Error, Equatable, Sendable, LocalizedError {
     /// this case says what to do about it.
     case dataAPINotEnabled
     case cancelled
+    /// The optional YouTube recommendations connection (the TV sign-in) is not there or has ended.
+    case recommendationsNotConnected
 
     public var errorDescription: String? {
         switch self {
@@ -58,6 +60,8 @@ public enum NoSlopError: Error, Equatable, Sendable, LocalizedError {
             return "The YouTube Data API isn't turned on for your Google project. In Google Cloud, open APIs & Services \u{2192} Library, enable \u{201C}YouTube Data API v3\u{201D}, wait a minute, then try again."
         case .cancelled:
             return "Cancelled."
+        case .recommendationsNotConnected:
+            return "YouTube recommendations aren't connected."
         }
     }
 
