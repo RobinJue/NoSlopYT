@@ -193,7 +193,11 @@ final class AppEnvironment {
             recommendationsAuth: recommendationsAuth,
             recommendations: UnavailableRecommendations(),
             // Part B replaces the line above, Part C the line below.
-            watchReporter: NoWatchReporter(),
+            watchReporter: TVWatchReporter.live(
+                tokens: recommendationsAuth,
+                fileURL: directory(.applicationSupportDirectory, appending: "NoSlop").appendingPathComponent("pending-watch-reports.json"),
+                isEnabled: { guard await MainActor.run(body: { settingsStore.settings.sendWatchesToYouTube }) else { return false }; return await recommendationsAuth.currentAccount() != nil }
+            ),
             library: library,
             settingsStore: settingsStore,
             downloads: downloads
