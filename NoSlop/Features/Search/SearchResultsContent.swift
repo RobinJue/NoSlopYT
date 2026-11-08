@@ -80,7 +80,7 @@ struct SearchResultsContent: View {
                 // grid cell it would be a short row next to a tall card, with blank space under it.
                 ForEach(FeedRuns.split(model.list.items) { $0.video != nil }, id: \.items[0].id) { run in
                     if run.isGrid {
-                        FeedGrid {
+                        FeedGrid(initialWidth: availableWidth) {
                             ForEach(run.items) { item in row(item) }
                         }
                         .padding(.bottom, Theme.feedSpacing)

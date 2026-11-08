@@ -19,11 +19,14 @@ extension EnvironmentValues {
 struct FeedGrid<Content: View>: View {
     private let content: Content
 
-    /// nil until the first layout pass has measured the width; one column until then.
+    /// nil until the first layout pass has measured the width (or the caller passed one); one column until then.
     @State private var availableWidth: CGFloat?
 
-    init(@ViewBuilder content: () -> Content) {
+    /// `initialWidth` is a width the caller has already measured (the same scroll width): the grid starts with the
+    /// right number of columns instead of one column for a frame. The grid's own measurement takes over at once.
+    init(initialWidth: CGFloat? = nil, @ViewBuilder content: () -> Content) {
         self.content = content()
+        _availableWidth = State(initialValue: initialWidth)
     }
 
     var body: some View {
