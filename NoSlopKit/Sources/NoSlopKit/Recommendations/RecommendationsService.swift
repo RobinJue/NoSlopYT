@@ -24,6 +24,8 @@ public actor RecommendationsService: RecommendationsProviding {
     private var sessions: [String: Session] = [:]
     private var recentReplies: [JSON] = []
     private var lastHome: HomeLoadReport?
+    /// Bumped by `clearAccountData`; a load that started before a clear must not write its results afterwards.
+    private var epoch = 0
     /// Filled by the card actions (Task 7).
     var lastCardAction: CardActionReport?
 
@@ -50,6 +52,7 @@ public actor RecommendationsService: RecommendationsProviding {
     }
 
     private func firstPage() async throws -> TVHomePage {
+        let started = epoch
         var ladder = TVClientConfig.homeRecipes
         if let remembered, let index = ladder.firstIndex(of: remembered) {
             ladder.remove(at: index)
@@ -77,11 +80,13 @@ public actor RecommendationsService: RecommendationsProviding {
             }
             guard let reply else { lastError = NoSlopError.decoding("Empty reply."); lastStatus = 200; continue }
             lastError = nil
-            keep(reply)
             let parse = TVHomeParser.parse(reply)
             let visitor = reply["responseContext"]?["visitorData"]?.string
             let accepted = parse.loggedIn == true && !parse.videos.isEmpty
             let page = makePage(parse, recipe: recipe, usedYouTube: accepted)
+            // Disconnected while the request was out: hand the answer back, store nothing.
+            if epoch != started { return page }
+            keep(reply)
             if accepted {
                 remember(recipe)
                 adopt(parse, recipe: recipe, visitor: visitor, replacing: true)
@@ -89,6 +94,10 @@ public actor RecommendationsService: RecommendationsProviding {
                 return page
             }
             if fallback == nil { fallback = (page, parse, recipe, visitor) }
+        }
+        if epoch != started {
+            if let fallback { return fallback.page }
+            throw lastError ?? NoSlopError.network("YouTube's Home didn't load.")
         }
         if let fallback {
             // Signed out, empty or thin everywhere: hand the first answer back so the app can fall back.
@@ -101,6 +110,7 @@ public actor RecommendationsService: RecommendationsProviding {
     }
 
     private func continuationPage(_ token: String) async throws -> TVHomePage {
+        let started = epoch
         let session = sessions[token] ?? Session(recipe: remembered ?? TVClientConfig.homeRecipes[0], visitorData: nil)
         let reply: JSON?
         do {
@@ -113,13 +123,15 @@ public actor RecommendationsService: RecommendationsProviding {
         } catch {
             var status: Int?
             if case NoSlopError.http(let code) = error { status = code }
+            if epoch != started { throw error }
             lastHome = HomeLoadReport(recipe: Self.name(session.recipe) + " (more)", status: status, at: now())
             throw error
         }
         guard let reply else { throw NoSlopError.decoding("Empty reply.") }
-        keep(reply)
         let parse = TVHomeParser.parse(reply)
         let page = makePage(parse, recipe: session.recipe, usedYouTube: !parse.videos.isEmpty, suffix: " (more)")
+        if epoch != started { return page }
+        keep(reply)
         adopt(parse, recipe: session.recipe, visitor: session.visitorData, replacing: false)
         lastHome = page.report
         return page
@@ -211,6 +223,7 @@ public actor RecommendationsService: RecommendationsProviding {
     }
 
     public func clearAccountData() async {
+        epoch += 1
         handles.removeAll()
         sessions.removeAll()
         recentReplies.removeAll()

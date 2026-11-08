@@ -25,6 +25,40 @@ private func makeService(_ http: MockHTTPClient, suite: String) -> Recommendatio
     RecommendationsService(client: TVClient(http: http, tokens: FakeTVTokens()), language: "en", region: "US", defaults: defaults(suite))
 }
 
+/// Holds every reply until `release()`; `started()` returns once a request is waiting.
+private final class GatedHTTP: HTTPClient, @unchecked Sendable {
+    private let inner: MockHTTPClient
+    private let lock = NSLock()
+    private var waiting: [CheckedContinuation<Void, Never>] = []
+    private var open = false
+    init(_ inner: MockHTTPClient) { self.inner = inner }
+
+    func send(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            let resume = lock.withLock { () -> Bool in
+                if open { return true }
+                waiting.append(continuation)
+                return false
+            }
+            if resume { continuation.resume() }
+        }
+        return try await inner.send(request)
+    }
+
+    func started() async {
+        while lock.withLock({ waiting.isEmpty }) { try? await Task.sleep(nanoseconds: 2_000_000) }
+    }
+
+    func release() {
+        let all = lock.withLock { () -> [CheckedContinuation<Void, Never>] in
+            open = true
+            defer { waiting = [] }
+            return waiting
+        }
+        all.forEach { $0.resume() }
+    }
+}
+
 @Suite struct RecommendationsServiceTests {
     @Test func theLadderMovesOnFromASignedOutReply() async throws {
         let http = MockHTTPClient()
@@ -184,6 +218,23 @@ private func makeService(_ http: MockHTTPClient, suite: String) -> Recommendatio
         http.enqueue("youtubei/v1/browse", body: try data(try Fixture.json("tvsynthetic_home_section_cont.json")))
         _ = try await service.homePage(continuation: "SECTIONCONT-1")
         #expect(http.requests[before].value(forHTTPHeaderField: "X-Goog-Visitor-Id") == nil)
+    }
+
+    @Test func aClearDuringAPendingLoadLeavesNothingBehind() async throws {
+        let http = MockHTTPClient()
+        http.enqueue("youtubei/v1/browse", body: try data(try Fixture.json("tvsynthetic_home_mixed.json")))
+        let gate = GatedHTTP(http)
+        let service = RecommendationsService(client: TVClient(http: gate, tokens: FakeTVTokens()), language: "en", region: "US", defaults: defaults(freshSuite()))
+        let load = Task { try await service.homePage(continuation: nil) }
+        await gate.started()
+        await service.clearAccountData()
+        gate.release()
+        let page = try await load.value
+        #expect(!page.videos.isEmpty)
+        let id = try #require(page.cardIDs.first)
+        #expect(await !service.hasHandle(for: id))
+        #expect(await service.diagnostics().lastHome == nil)
+        #expect(await service.diagnosticsSample()["recentHomeReplies"]?.array?.isEmpty == true)
     }
 
     @Test func nothingSecretReachesTheReport() async throws {
