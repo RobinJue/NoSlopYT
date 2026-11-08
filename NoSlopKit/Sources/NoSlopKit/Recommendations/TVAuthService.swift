@@ -119,6 +119,8 @@ public actor TVAuthService: RecommendationsAuthProviding {
                 answer = try await send("POST", TVAuth.tokenURL, headers: Self.jsonHeaders, body: request).0
             } catch let error as NoSlopError {
                 // A dropped connection while waiting is not the end of the sign-in; the expiry time bounds the wait.
+                // A cancel keeps the device code too: the sign-in is restarted on the same prompt when the app comes back.
+                if case .cancelled = error { throw error }
                 guard case .network = error else { pending = nil; throw error }
                 answer = nil
             }

@@ -260,6 +260,19 @@ private func stored(expiresIn: Double, clock: Date = Date(timeIntervalSince1970:
         await #expect(throws: NoSlopError.cancelled) { _ = try await task.value }
     }
 
+    @Test func aCancelDuringTheTokenRequestKeepsTheCodeForARestart() async throws {
+        let rig = Rig()
+        rig.queueClientValues()
+        rig.queueDeviceCode()
+        rig.http.enqueueError("oauth2/token", NoSlopError.cancelled)
+        rig.queueToken(success)
+        let prompt = try await rig.service.beginSignIn()
+        await #expect(throws: NoSlopError.cancelled) { _ = try await rig.service.completeSignIn(prompt) }
+        // The restarted poll on the same prompt still has its device code and finishes the sign-in.
+        _ = try await rig.service.completeSignIn(prompt)
+        #expect(try rig.store.load()?.refreshToken == "tvsynthetic_refresh_1")
+    }
+
     @Test func aRefreshKeepsANewRefreshToken() async throws {
         let rig = Rig(credentials: stored(expiresIn: 100))
         rig.queueToken("""

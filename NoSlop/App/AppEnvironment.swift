@@ -28,6 +28,8 @@ final class AppEnvironment {
     let settingsStore: SettingsStore
     /// The last `refreshAccount` ran while protected data was unavailable, so what it read is not to be trusted.
     private var accountReadWhileLocked = false
+    /// The same for the YouTube recommendations account (its Keychain item is also readable only after the first unlock).
+    private var recommendationsReadWhileLocked = false
     let downloads: DownloadManager
     let player: PlayerController
     let router: Router
@@ -374,6 +376,9 @@ final class AppEnvironment {
         if accountReadWhileLocked, UIApplication.shared.isProtectedDataAvailable {
             await refreshAccount()
         }
+        if recommendationsReadWhileLocked, UIApplication.shared.isProtectedDataAvailable {
+            await refreshRecommendationsAccount()
+        }
     }
 
     /// Runs the Google sign-in with the Client ID from Settings, then imports the account's subscriptions.
@@ -452,6 +457,7 @@ final class AppEnvironment {
 
     /// Reads the connected account from the Keychain; no network traffic. Called at launch.
     func refreshRecommendationsAccount() async {
+        recommendationsReadWhileLocked = !UIApplication.shared.isProtectedDataAvailable
         recommendationsAccount = await recommendationsAuth.currentAccount()
     }
 

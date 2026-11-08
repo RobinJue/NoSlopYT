@@ -26,18 +26,10 @@ struct RecommendationsCodeSheet: View {
                         .textSelection(.enabled)
                         .accessibilityLabel("Code \(prompt.userCode)")
 
-                    HStack(spacing: 12) {
-                        Button(copied ? "Copied" : "Copy Code") {
-                            UIPasteboard.general.string = prompt.userCode
-                            copied = true
-                        }
-                        .buttonStyle(.bordered)
-                        Button("Open Google's page") {
-                            openURL(prompt.verificationURL)
-                        }
-                        .buttonStyle(.borderedProminent)
+                    ViewThatFits(in: .horizontal) {
+                        HStack(spacing: 12) { copyButton; openButton }
+                        VStack(spacing: 12) { copyButton; openButton }
                     }
-                    .fixedSize(horizontal: false, vertical: true)
 
                     TimelineView(.periodic(from: .now, by: 1)) { context in
                         countdown(at: context.date)
@@ -64,6 +56,21 @@ struct RecommendationsCodeSheet: View {
             if phase == .active { flow.pollNow() }
         }
         .onDisappear { flow.cancel() }
+    }
+
+    private var copyButton: some View {
+        Button(copied ? "Copied" : "Copy Code") {
+            UIPasteboard.general.string = prompt.userCode
+            copied = true
+        }
+        .buttonStyle(.bordered)
+    }
+
+    private var openButton: some View {
+        Button("Open Google's page") {
+            openURL(prompt.verificationURL)
+        }
+        .buttonStyle(.borderedProminent)
     }
 
     @ViewBuilder
