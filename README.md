@@ -201,8 +201,9 @@ or has too few videos left after the filters, Home shows the on-device mix inste
 used, the status, whether YouTube saw you as signed in, the counts of videos, Shorts and skipped items, and which source
 Home showed), the last card action, the last watch report (the status of each step and which of YouTube's tracking
 values were present, never the values) and how long the access token is valid. **Save diagnostics** writes a short
-JSON file with the same flags and counts, and no token, account name, video or channel, to `Documents/Diagnostics/` in
-the app's folder. It shows in the Files app under On My iPhone > No Slop > Diagnostics, so you can send it over when
+JSON file with the same flags and counts and YouTube's recent Home replies, scrubbed: no token or account details, and
+video titles and channel names replaced by numbered labels, but the video and channel ids are kept so a problem can be
+traced. It goes to `Documents/Diagnostics/` in the app's folder (it is deleted when you disconnect). It shows in the Files app under On My iPhone > No Slop > Diagnostics, so you can send it over when
 something does not work.
 
 **Disconnect.** **Settings > YouTube recommendations > Disconnect** (it asks first). The app asks Google to revoke the
