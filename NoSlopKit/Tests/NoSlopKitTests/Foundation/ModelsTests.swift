@@ -354,6 +354,18 @@ import Testing
         #expect(s == expected)
     }
 
+    @Test func blockedChannelsWithoutAHandleStillDecode() throws {
+        let old = #"{"blockedChannels":[{"id":"UC1","name":"One"},{"id":"UC2","name":"Two","handle":"@two"},{"id":"UC3","name":"Three","handle":5}]}"#
+        let s = try JSONDecoder().decode(AppSettings.self, from: Data(old.utf8))
+        // A handle of the wrong type costs the handle, not the block.
+        #expect(s.blockedChannels.map(\.id) == ["UC1", "UC2", "UC3"])
+        #expect(s.blockedChannels[0].handle == nil && s.blockedChannels[2].handle == nil)
+        #expect(s.blockedChannels[1].handle == "@two")
+        // Written without a handle when there is none, so older builds read it as before.
+        let written = String(decoding: try JSONEncoder().encode(BlockedChannel(id: "UC1", name: "One")), as: UTF8.self)
+        #expect(!written.contains("handle"))
+    }
+
     @Test func everySettingFallsBackOnItsOwnWhenItsValueIsUnreadable() throws {
         // A missing key, a null, a wrong type and an unknown enum value, each in a different place.
         let json = #"""

@@ -110,9 +110,22 @@ public struct LocalPlaylist: Codable, Hashable, Sendable, Identifiable {
 public struct BlockedChannel: Codable, Hashable, Sendable, Identifiable {
     public var id: String
     public var name: String
+    /// The channel's @handle when it was known at the time of blocking; lets the filter recognise the channel's
+    /// videos where YouTube gives no channel id (its Home tiles). Absent in what older builds saved.
+    public var handle: String?
 
-    public init(id: String, name: String) {
+    public init(id: String, name: String, handle: String? = nil) {
         self.id = id
         self.name = name
+        self.handle = handle
+    }
+
+    private enum CodingKeys: String, CodingKey { case id, name, handle }
+
+    public init(from decoder: any Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        name = try c.decode(String.self, forKey: .name)
+        handle = (try? c.decodeIfPresent(String.self, forKey: .handle)) ?? nil
     }
 }

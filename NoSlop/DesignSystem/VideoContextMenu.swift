@@ -52,21 +52,22 @@ private struct VideoContextMenuModifier: ViewModifier {
             Label("Download", systemImage: "arrow.down.circle")
         }
 
-        // A channel without an id cannot be recognised later, so there is nothing to block.
-        if let channel = video.channel, !channel.id.isEmpty {
-            if ChannelBlocking.isBlocked(channel, using: env) {
+        // A channel without an id (a tile of YouTube's Home) is looked up when it is blocked; one without a name either
+        // has nothing to be recognised by.
+        if let channel = video.channel, !channel.id.isEmpty || !channel.name.isEmpty {
+            if let blocked = ChannelBlocking.blockedChannel(channel, using: env) {
                 // Library lists (also as the "Playing from ..." queue under the player, the list as it was when it was
                 // opened) and the channel's own page show a blocked channel's videos on purpose, so the menu is where the
                 // block is seen to have worked, and where it is undone. The player's Up next is not one of them: it
                 // follows the settings and drops the channel at once.
                 Button {
-                    ChannelBlocking.unblock(channelID: channel.id, using: env)
+                    ChannelBlocking.unblock(channelID: blocked.id, using: env)
                 } label: {
                     Label("Show this channel again", systemImage: "checkmark.circle")
                 }
             } else {
                 Button(role: .destructive) {
-                    ChannelBlocking.block(channel, using: env)
+                    ChannelBlocking.block(channel, of: video, using: env)
                 } label: {
                     Label("Don't show this channel", systemImage: "nosign")
                 }
@@ -88,12 +89,32 @@ private struct VideoContextMenuModifier: ViewModifier {
 /// seen to have worked.
 enum ChannelBlocking {
     static func isBlocked(_ channel: ChannelRef, using env: AppEnvironment) -> Bool {
-        env.settings.isBlocked(channelID: channel.id)
+        blockedChannel(channel, using: env) != nil
     }
 
-    static func block(_ channel: ChannelRef, using env: AppEnvironment) {
+    static func blockedChannel(_ channel: ChannelRef, using env: AppEnvironment) -> BlockedChannel? {
+        env.settings.blockedChannel(matching: channel)
+    }
+
+    /// Blocks the channel of `video`. A channel that came without an id (a tile of YouTube's Home) is first resolved
+    /// through the video's watch page, so the block holds by id; when that fails nothing is blocked.
+    static func block(_ channel: ChannelRef, of video: VideoSummary? = nil, using env: AppEnvironment) {
+        if !channel.id.isEmpty {
+            add(channel, using: env)
+            return
+        }
+        guard let video else { return }
+        Task {
+            guard let details = try? await env.youTube.videoDetails(id: video.id), !details.channel.id.isEmpty else { return }
+            var resolved = details.channel
+            if resolved.name.isEmpty { resolved.name = channel.name }
+            add(resolved, using: env)
+        }
+    }
+
+    private static func add(_ channel: ChannelRef, using env: AppEnvironment) {
         var settings = env.settingsStore.settings
-        guard settings.blockChannel(id: channel.id, name: channel.name) else { return }
+        guard settings.blockChannel(id: channel.id, name: channel.name, handle: channel.handle) else { return }
         env.settingsStore.settings = settings
     }
 

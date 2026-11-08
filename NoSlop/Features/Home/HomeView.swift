@@ -1,8 +1,9 @@
 import NoSlopKit
 import SwiftUI
 
-/// "For you": a "Continue watching" row and a feed of videos computed on the device from the watch history, related
-/// videos and fresh uploads of the subscriptions. Nothing to show yet → a welcome card with topic chips.
+/// "For you": a "Continue watching" row and a feed of videos: YouTube's own Home when the recommendations connection is
+/// on, else a mix computed on the device from the watch history, related videos and fresh uploads of the subscriptions.
+/// Nothing to show yet → a welcome card with topic chips.
 struct HomeView: View {
     @Environment(AppEnvironment.self) private var env
     @Environment(\.scenePhase) private var scenePhase
@@ -10,8 +11,19 @@ struct HomeView: View {
 
     var body: some View {
         ScrollView {
-            content
-                .padding(.vertical, Theme.padding)
+            VStack(alignment: .leading, spacing: 24) {
+                if model.youTubeFellBack {
+                    RefreshFailureBanner(
+                        title: "Showing the mix made on this device.",
+                        message: "YouTube's Home didn't load."
+                    ) {
+                        await model.refresh(using: env)
+                    }
+                    .padding(.horizontal, Theme.padding)
+                }
+                content
+            }
+            .padding(.vertical, Theme.padding)
         }
         .refreshable {
             // Titles whose De-clickbait lookup failed are asked again, also the ones that stay on screen.
@@ -56,6 +68,15 @@ struct HomeView: View {
         // "Don't show this channel" (or any other feed filter) takes effect on what is on screen, not after a reload.
         .onChange(of: env.settings) {
             model.applyFilter(using: env)
+            // The "Show YouTube's Home" switch is a setting too.
+            model.sourceMayHaveChanged(using: env)
+        }
+        // Connected, disconnected, or the account read at launch: Home loads from the right source.
+        .onChange(of: env.recommendationsRevision) {
+            model.sourceMayHaveChanged(using: env)
+        }
+        .onChange(of: env.recommendationsAccount) {
+            model.sourceMayHaveChanged(using: env)
         }
     }
 
@@ -94,6 +115,7 @@ struct HomeView: View {
         }
     }
 
+    @ViewBuilder
     private var feed: some View {
         FeedGrid {
             ForEach(model.forYou) { video in
@@ -104,7 +126,16 @@ struct HomeView: View {
                 }
                 .buttonStyle(.pressableCard)
                 .videoContextMenu(video)
+                .onAppear { model.rowAppeared(video, using: env) }
             }
+        }
+        if model.showsYouTube, model.youTubePages.hasMore || model.youTubePages.loadMoreError != nil {
+            FeedFooter(
+                error: model.youTubePages.loadMoreError,
+                retry: { model.retryLoadMore(using: env) },
+                onReachEnd: { model.loadMore(using: env) },
+                isPaused: model.youTubePages.isPaused
+            )
         }
     }
 

@@ -16,6 +16,8 @@ public struct ContentFilter: Sendable {
     private let hideMembersOnly: Bool
     private let hideLiveAndUpcoming: Bool
     private let blockedChannelIDs: Set<String>
+    /// The blocked channels' names and handles (folded, handles without "@"): for videos that come without a channel id.
+    private let blockedChannelNames: Set<String>
     /// Keywords with case, diacritics and width folded away, blanks removed.
     private let blockedKeywords: [BlockedKeyword]
     /// The watched videos to hide in the subscriptions context; empty when the setting is off.
@@ -27,6 +29,8 @@ public struct ContentFilter: Sendable {
         hideMembersOnly = settings.hideMembersOnly
         hideLiveAndUpcoming = settings.hideLiveAndUpcoming
         blockedChannelIDs = Set(settings.blockedChannels.map(\.id))
+        blockedChannelNames = Set(settings.blockedChannels.flatMap { [Self.foldName($0.name), Self.foldName($0.handle ?? "")] }
+            .filter { !$0.isEmpty })
         blockedKeywords = settings.blockedKeywords
             .map { Self.fold($0.trimmingCharacters(in: .whitespacesAndNewlines)) }
             .filter { !$0.isEmpty }
@@ -38,7 +42,14 @@ public struct ContentFilter: Sendable {
         if hideShorts && video.isShort { return false }
         if hideMembersOnly && video.isMembersOnly { return false }
         if hideLiveAndUpcoming && (video.isLive || video.isUpcoming) { return false }
-        if let channelID = video.channel?.id, blockedChannelIDs.contains(channelID) { return false }
+        if let channel = video.channel {
+            if !channel.id.isEmpty {
+                // A channel with an id is blocked by id only: another channel with the same name stays.
+                if blockedChannelIDs.contains(channel.id) { return false }
+            } else if isBlockedByName(channel) {
+                return false
+            }
+        }
         if context == .subscriptions && hiddenWatchedIDs.contains(video.id) { return false }
         if !blockedKeywords.isEmpty {
             let title = Self.fold(video.title)
@@ -64,6 +75,21 @@ public struct ContentFilter: Sendable {
                 return !blockedChannelIDs.contains(ownerID)
             }
         }
+    }
+
+    /// A video without a channel id (YouTube's Home tiles carry the name only) is recognised by name or handle.
+    private func isBlockedByName(_ channel: ChannelRef) -> Bool {
+        guard !blockedChannelNames.isEmpty else { return false }
+        if blockedChannelNames.contains(Self.foldName(channel.name)) { return true }
+        if let handle = channel.handle, blockedChannelNames.contains(Self.foldName(handle)) { return true }
+        return false
+    }
+
+    /// Folded, trimmed, without a leading "@"; empty for a blank name.
+    static func foldName(_ text: String) -> String {
+        var folded = fold(text.trimmingCharacters(in: .whitespacesAndNewlines))
+        if folded.hasPrefix("@") { folded.removeFirst() }
+        return folded
     }
 
     /// Lowercased, without accents and in half-width form, independent of the device locale.

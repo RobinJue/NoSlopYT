@@ -7,13 +7,24 @@ extension AppSettings {
         blockedChannels.contains { $0.id == channelID }
     }
 
+    /// The blocked channel that `channel` is: by id, or, for a channel that came without one (YouTube's Home tiles), by
+    /// the name or handle that was saved when it was blocked. The same rule `ContentFilter` hides videos by.
+    public func blockedChannel(matching channel: ChannelRef) -> BlockedChannel? {
+        if !channel.id.isEmpty { return blockedChannels.first { $0.id == channel.id } }
+        let names = Set([channel.name, channel.handle ?? ""].map(ContentFilter.foldName).filter { !$0.isEmpty })
+        guard !names.isEmpty else { return nil }
+        return blockedChannels.first { blocked in
+            !names.isDisjoint(with: [ContentFilter.foldName(blocked.name), ContentFilter.foldName(blocked.handle ?? "")].filter { !$0.isEmpty })
+        }
+    }
+
     /// Adds the channel to the blocked ones, at the end of the list.
     /// - Returns: false, and changes nothing, when the id is empty (there is nothing to recognise it by) or the channel
     ///   is blocked already.
     @discardableResult
-    public mutating func blockChannel(id: String, name: String) -> Bool {
+    public mutating func blockChannel(id: String, name: String, handle: String? = nil) -> Bool {
         guard !id.isEmpty, !isBlocked(channelID: id) else { return false }
-        blockedChannels.append(BlockedChannel(id: id, name: name))
+        blockedChannels.append(BlockedChannel(id: id, name: name, handle: handle))
         return true
     }
 
