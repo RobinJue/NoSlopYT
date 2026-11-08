@@ -423,7 +423,7 @@ final class AppEnvironment {
     /// has moved on: another link was opened, or the viewer switched tab, pushed or popped a screen or opened a video.
     func handleOpenURL(_ url: URL) async {
         linkError = nil
-        linkAddress = Self.isWebLink(url) ? url : nil
+        linkAddress = Self.isYouTubeWebLink(url) ? url : nil
         linksHandled += 1
         switch url.scheme?.lowercased() {
         case AppLink.scheme:
@@ -450,14 +450,13 @@ final class AppEnvironment {
         linkError == nil ? nil : linkAddress
     }
 
-    /// The http(s) link `handleOpenURL` was given last; nil when the last link was another kind.
+    /// The YouTube http(s) link `handleOpenURL` was given last; nil when the last link was another kind or another site.
     @ObservationIgnored private var linkAddress: URL?
 
-    private static func isWebLink(_ url: URL) -> Bool {
-        switch url.scheme?.lowercased() {
-        case "http", "https": true
-        default: false
-        }
+    /// Only an http(s) link on a YouTube host may be offered as "Open on YouTube"; another site's link would open that
+    /// site under the wrong label.
+    private static func isYouTubeWebLink(_ url: URL) -> Bool {
+        SearchInput.isYouTubeHost(of: url)
     }
 
     private static let unopenableLinkMessage =

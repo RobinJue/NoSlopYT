@@ -273,7 +273,7 @@ apps (iOS asks to confirm), and the YouTube ones open when you paste them into t
 | `noslop://search?q=<text>` | search results (`+` is a space, `%2B` a plus sign) |
 | `noslop://tab/<home\|subscriptions\|library\|search>` | a tab |
 | `noslop://route/<settings\|downloads\|history\|watchLater\|likedVideos\|accountPlaylists\|subscriptionsManager>` | a screen on the selected tab |
-| `https://www.youtube.com/watch?v=<id>&t=42s`, `https://youtu.be/<id>?t=1m5s`, `/shorts/<id>`, `/live/<id>`, `/embed/<id>`, and the same with `&list=<playlist>` | a video (a Short opens as a normal video; a link with a playlist plays it in that playlist) |
+| `https://www.youtube.com/watch?v=<id>&t=42s`, `https://youtu.be/<id>?t=1m5s`, `/shorts/<id>`, `/live/<id>`, `/embed/<id>` | a video (a Short opens as a normal video). A `/watch` or `youtu.be` link with `&list=<playlist>` plays the video in that playlist; `/shorts`, `/live` and `/embed` links ignore `list=` |
 | `https://www.youtube.com/@handle`, `/channel/<id>`, `/playlist?list=<id>`, `/results?search_query=<text>` | a channel (a handle is resolved by YouTube, so it needs the network; if you open another link or go elsewhere before the answer arrives, the channel does not open), a playlist, a search |
 
 A link the app cannot open (not a YouTube link, a video ID of the wrong length, a missing part) opens nothing and

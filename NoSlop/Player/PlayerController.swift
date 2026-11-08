@@ -367,6 +367,8 @@ final class PlayerController {
         queueName = name
         queuePosition = max(position, 1)
         adoptQueue(videos, more: more)
+        // The lock screen's Next button follows `canPlayNext`, which the new queue may have turned on.
+        updateNowPlaying()
     }
 
     private var canReuseCurrentPlayback: Bool {
