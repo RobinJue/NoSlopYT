@@ -1,0 +1,48 @@
+{
+ "responseContext": {
+  "serviceTrackingParams": [
+   {
+    "service": "CSI",
+    "params": [
+     {
+      "key": "c",
+      "value": "TVHTML5"
+     }
+    ]
+   },
+   {
+    "service": "GFEEDBACK",
+    "params": [
+     {
+      "key": "logged_in",
+      "value": "0"
+     }
+    ]
+   }
+  ]
+ },
+ "contents": {
+  "tvBrowseRenderer": {
+   "content": {
+    "tvSurfaceContentRenderer": {
+     "content": {
+      "sectionListRenderer": {
+       "contents": [
+        {
+         "searchBarRenderer": {}
+        },
+        {
+         "feedNudgeRenderer": {
+          "title": {
+           "simpleText": "Sign in"
+          }
+         }
+        }
+       ]
+      }
+     }
+    }
+   }
+  }
+ }
+}

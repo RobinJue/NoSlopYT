@@ -11,7 +11,7 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # -I does not add the script folder
 
-from tvprobe import http, oauth  # noqa: E402
+from tvprobe import home, http, oauth  # noqa: E402
 from tvprobe.state import State, default_root  # noqa: E402
 
 COMMANDS = ("signin", "refresh", "home", "menu", "feedback", "report", "history", "next", "fixture", "results",
@@ -95,7 +95,7 @@ def _only(send, url):
 
 # Later tasks replace entries: handler(args, state, send) -> int
 HANDLERS = {name: _not_implemented for name in COMMANDS}
-HANDLERS.update({"signin": _signin, "refresh": _refresh, "revoke": _revoke})
+HANDLERS.update({"signin": _signin, "refresh": _refresh, "revoke": _revoke, "home": home.run_home})
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -104,7 +104,15 @@ def build_parser() -> argparse.ArgumentParser:
     signin = sub.add_parser("signin", help="TV code sign-in")
     signin.add_argument("action", choices=("start", "wait"))
     for name in COMMANDS[1:]:
-        sub.add_parser(name)
+        p = sub.add_parser(name)
+        if name == "home":
+            p.add_argument("--browse-id", choices=("FEwhat_to_watch", "default"), default="FEwhat_to_watch")
+            p.add_argument("--host", choices=("www", "googleapis"), default="www")
+            p.add_argument("--context", choices=("full", "minimal"), default="full")
+            p.add_argument("--visitor", choices=("none", "first", "tv"), default="none")
+            p.add_argument("--pages", type=int, default=3)
+            p.add_argument("--shelf", action="store_true")
+            p.add_argument("--capture", metavar="NAME")
     return parser
 
 
