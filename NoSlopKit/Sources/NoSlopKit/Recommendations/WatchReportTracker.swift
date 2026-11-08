@@ -8,7 +8,7 @@ public struct WatchReportTracker: Sendable, Equatable {
     static let maxStep = 2.0
     static let finishedFraction = 0.95
 
-    private let lengthSeconds: Double
+    private var lengthSeconds: Double
     private let disabled: Bool
     private var lastPosition: Double?
     private var played = 0.0
@@ -18,6 +18,11 @@ public struct WatchReportTracker: Sendable, Equatable {
     public init(lengthSeconds: Double, isLive: Bool, isShort: Bool) {
         self.lengthSeconds = lengthSeconds
         self.disabled = isLive || isShort
+    }
+
+    /// Tells the tracker the length once the player knows it; the time already counted is kept.
+    public mutating func setLength(_ seconds: Double) {
+        if seconds.isFinite, seconds > 0 { lengthSeconds = seconds }
     }
 
     public mutating func tick(position: Double, isPlaying: Bool) -> WatchEvent? {

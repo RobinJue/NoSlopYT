@@ -425,6 +425,10 @@ final class PlayerController {
     private var watchTracker: WatchReportTracker?
     private var watchQualified = false
 
+    /// The stream is the truth about live: the card the player was opened with may be stale, and the tracker was built
+    /// from it. A live broadcast is never reported.
+    private var watchedStreamIsLive: Bool { isLive || currentVideo?.isLive == true }
+
     private func beginWatchViewing(of video: VideoSummary) {
         let length = Double(video.durationSeconds ?? 0)
         let viewing = WatchViewing(id: UUID(), videoID: video.id, lengthSeconds: length)
@@ -435,11 +439,10 @@ final class PlayerController {
 
     /// Feeds the counter; a video whose length was unknown at the start gets it as soon as the player knows it.
     private func feedWatchTracker(position: Double) {
-        guard var tracker = watchTracker, let viewing = watchViewing, position.isFinite else { return }
-        if viewing.lengthSeconds <= 0, duration > 0, !isLive, let video = currentVideo, !watchQualified {
-            let known = WatchViewing(id: viewing.id, videoID: viewing.videoID, lengthSeconds: duration)
-            watchViewing = known
-            tracker = WatchReportTracker(lengthSeconds: duration, isLive: video.isLive, isShort: video.isShort)
+        guard var tracker = watchTracker, let viewing = watchViewing, position.isFinite, !watchedStreamIsLive else { return }
+        if viewing.lengthSeconds <= 0, duration > 0, !watchQualified {
+            watchViewing = WatchViewing(id: viewing.id, videoID: viewing.videoID, lengthSeconds: duration)
+            tracker.setLength(duration)
         }
         let event = tracker.tick(position: position, isPlaying: state == .playing && !isSeeking)
         watchTracker = tracker
@@ -452,7 +455,8 @@ final class PlayerController {
     /// Sends the closing event of the viewing, if it qualified. `forget` ends the viewing (another video starts, close,
     /// the end of the item); the background keeps it, since audio may play on.
     private func closeWatchViewing(position: Double, forget: Bool) {
-        if let tracker = watchTracker, let viewing = watchViewing, let event = tracker.closing(position: position) {
+        if !watchedStreamIsLive, let tracker = watchTracker, let viewing = watchViewing,
+           let event = tracker.closing(position: position) {
             watchReport?(event, viewing)
         }
         if forget {

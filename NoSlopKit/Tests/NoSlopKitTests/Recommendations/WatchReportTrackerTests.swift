@@ -92,5 +92,21 @@ struct WatchReportTrackerTests {
         #expect(Seen(tracker.closing(position: 94.9)!) == .ended(94.9, false))
         #expect(Seen(tracker.closing(position: 95)!) == .ended(95, true))
     }
-}
 
+    @Test func lateKnownLengthKeepsTheCountedTime() {
+        var tracker = WatchReportTracker(lengthSeconds: 0, isLive: false, isShort: false)
+        _ = tracker.tick(position: 0, isPlaying: true)
+        #expect(play(&tracker, from: 0, seconds: 20).isEmpty)
+        tracker.setLength(600)
+        // 20 s were counted before the length arrived, so 10 s more qualify.
+        #expect(play(&tracker, from: 20, seconds: 10) == [.qualified(30)])
+    }
+
+    @Test func lateKnownLengthStillAllowsTheShortVideoEnd() {
+        var tracker = WatchReportTracker(lengthSeconds: 0, isLive: false, isShort: false)
+        _ = tracker.tick(position: 0, isPlaying: true)
+        #expect(play(&tracker, from: 0, seconds: 10).isEmpty)
+        tracker.setLength(12)
+        #expect(play(&tracker, from: 10, seconds: 2) == [.qualified(11.5)])
+    }
+}
