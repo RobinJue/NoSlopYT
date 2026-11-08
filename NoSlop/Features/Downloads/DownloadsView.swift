@@ -138,7 +138,8 @@ private struct RunningDownloadRow: View {
             }
             // Plain, not borderless: the borderless style would tint the symbol with the accent colour.
             .buttonStyle(.plain)
-            .accessibilityLabel(item.video.title.isEmpty ? "Cancel download" : "Cancel download of \(item.video.title)")
+            // No title in the label: the row's title, spoken just before, says the one on screen (it may be the De-clickbait one).
+            .accessibilityLabel("Cancel download")
         } detail: {
             ProgressView(value: min(1, max(0, item.progress)))
                 .tint(Theme.accent)
@@ -185,7 +186,8 @@ private struct StoppedDownloadRow: View {
             }
             .buttonStyle(.bordered)
             .controlSize(.small)
-            .accessibilityLabel(item.video.title.isEmpty ? "Retry download" : "Retry download of \(item.video.title)")
+            // No title in the label, as with Cancel: the row's title, spoken just before, says the one on screen.
+            .accessibilityLabel("Retry download")
         } detail: {
             Text(item.qualityLabel)
                 .font(.caption)

@@ -155,15 +155,16 @@ The logic lives in the local Swift package `NoSlopKit` and is tested on macOS, w
 ```sh
 ./scripts/test.sh                                # swift test --package-path NoSlopKit
 ./scripts/test.sh --filter ContentFilter         # extra arguments go to swift test
-NOSLOP_LIVE=1 ./scripts/test.sh --filter Live    # opt-in tests against the real YouTube
+NOSLOP_LIVE=1 ./scripts/test.sh --filter 'LiveSmokeTests|LiveDownloadTests'    # opt-in tests against the real YouTube
 ```
 
-The parsers are tested against real YouTube responses captured on 2026-11-03 (`NoSlopKit/Tests/NoSlopKitTests/Fixtures/`).
+The parsers are tested against real YouTube responses captured on 2026-11-03 and 2026-11-04 (`NoSlopKit/Tests/NoSlopKitTests/Fixtures/`).
 The suites `LiveSmokeTests` and `LiveDownloadTests` are skipped unless `NOSLOP_LIVE=1` is set: they make a handful of
 real requests (a stream, captions, an RSS feed, suggestions, a `@handle`, a visitor token, a small download) and may
-fail when YouTube rate-limits you or changes. `--filter Live` selects them, together with a few ordinary parser tests
-that have "Live" in their name and always run. The app target itself has no test target; it is checked by building it
-and by running it with the mock services (next section).
+fail when YouTube rate-limits you or changes. `--filter` is a substring match on the test names, so `--filter Live` would
+also run the ordinary unit tests that have "Live" in a suite or test name (live streams, live state; they use mocks and
+always run). The filter above selects only the two opt-in suites. The app target itself has no test target; it is checked
+by building it and by running it with the mock services ("Debug launch arguments and app links").
 
 ## How it works
 
@@ -297,7 +298,7 @@ shows a plain "Can't open this link" message.
   `NoSlopKit/Sources/NoSlopKit/InnerTube/ClientProfile.swift` (`ClientProfile.web` and `ClientProfile.visionOS`:
   the `clientVersion` and the user agent, and for visionOS the `osVersion` in `extraClientFields`). When YouTube
   starts refusing an old version, bump those values to current ones (open-source clients such as yt-dlp list them),
-  run `./scripts/test.sh` and `NOSLOP_LIVE=1 ./scripts/test.sh --filter Live`, and run the app again.
+  run `./scripts/test.sh` and `NOSLOP_LIVE=1 ./scripts/test.sh --filter 'LiveSmokeTests|LiveDownloadTests'`, and run the app again.
 - **Google sign-in is blocked, or you are signed out every week.** See "Sign in with Google": add yourself as a test
   user, or publish the consent screen to stop the 7-day sign-out.
 - **"The YouTube Data API isn't turned on for your Google project."** Signing in works without it; everything that
