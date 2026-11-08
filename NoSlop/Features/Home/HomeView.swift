@@ -72,6 +72,9 @@ struct HomeView: View {
             model.sourceMayHaveChanged(using: env)
         }
         // Connected, disconnected, or the account read at launch: Home loads from the right source.
+        .onChange(of: HomeCardDismissals.shared.ids) {
+            model.cardDismissed(using: env)
+        }
         .onChange(of: env.recommendationsRevision) {
             model.sourceMayHaveChanged(using: env)
         }

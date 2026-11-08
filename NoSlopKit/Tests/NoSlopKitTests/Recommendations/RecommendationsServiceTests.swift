@@ -248,3 +248,91 @@ private final class GatedHTTP: HTTPClient, @unchecked Sendable {
         #expect(report.status == 200 && report.loggedIn == true && report.videos == 3 && report.shorts == 3)
     }
 }
+
+@Suite struct RecommendationsCardActionTests {
+    private func connected(_ http: MockHTTPClient) async throws -> RecommendationsService {
+        http.enqueue("youtubei/v1/browse", body: try data(try Fixture.json("tvsynthetic_home_mixed.json")))
+        let service = makeService(http, suite: freshSuite())
+        _ = try await service.homePage(continuation: nil)
+        return service
+    }
+
+    @Test func notInterestedSendsThePanelsToken() async throws {
+        let http = MockHTTPClient()
+        let service = try await connected(http)
+        http.enqueue("youtubei/v1/get_panel", body: try data(try Fixture.json("tvsynthetic_panel_menu.json")))
+        http.enqueue("youtubei/v1/feedback", body: Data(#"{"feedbackResponses":[{"isProcessed":true}]}"#.utf8))
+        try await service.notInterested(videoID: "vidPLAIN001")
+
+        let calls = Array(http.requests.suffix(2))
+        #expect(calls[0].url?.path == "/youtubei/v1/get_panel")
+        let panel = try #require(http.bodyJSON(of: calls[0]))
+        #expect(panel["panelId"]?.string == "PAcontext_menu")
+        #expect(panel["params"]?.string == "FAKEPARAMS-vidPLAIN001")
+        #expect(panel["context"]?["client"]?["clientName"]?.string == "TVHTML5")
+        #expect(calls[1].url?.path == "/youtubei/v1/feedback")
+        let feedback = try #require(http.bodyJSON(of: calls[1]))
+        #expect(feedback["feedbackTokens"] == ["NI"])
+        #expect(feedback["context"]?["client"]?["clientName"]?.string == "TVHTML5")
+        #expect(Set(feedback.object?.keys.map { $0 } ?? []) == ["context", "feedbackTokens"])
+        let report = await service.diagnostics().lastCardAction
+        #expect(report?.kind == "notInterested" && report?.accepted == true && report?.status == 200)
+    }
+
+    @Test func dontRecommendSendsItsTokenForTheSameChannel() async throws {
+        let http = MockHTTPClient()
+        let service = try await connected(http)
+        http.enqueue("youtubei/v1/get_panel", body: try data(try Fixture.json("tvsynthetic_panel_menu.json")))
+        http.enqueue("youtubei/v1/feedback", body: Data("{}".utf8))
+        let sent = try await service.dontRecommendChannel(videoID: "vidPLAIN001", channelID: "UCabcdefghijklmnopqrstuv", channelName: "x")
+        #expect(sent)
+        #expect(http.bodyJSON(of: try #require(http.requests.last))?["feedbackTokens"] == ["DR"])
+        // Without an id the panel's channel name decides, folded.
+        http.enqueue("youtubei/v1/get_panel", body: try data(try Fixture.json("tvsynthetic_panel_menu.json")))
+        let byName = try await service.dontRecommendChannel(videoID: "vidPLAIN001", channelID: nil, channelName: " some channel ")
+        #expect(byName)
+    }
+
+    @Test func dontRecommendRefusesAnotherChannel() async throws {
+        let http = MockHTTPClient()
+        let service = try await connected(http)
+        http.enqueue("youtubei/v1/get_panel", body: try data(try Fixture.json("tvsynthetic_panel_menu.json")))
+        let before = http.requests.count
+        let sent = try await service.dontRecommendChannel(videoID: "vidPLAIN001", channelID: "UCzzzzzzzzzzzzzzzzzzzzzz", channelName: "Some Channel")
+        #expect(!sent)
+        #expect(http.requests.count == before + 1)
+        #expect(http.requests.last?.url?.path == "/youtubei/v1/get_panel")
+        let nameMismatch = try await service.dontRecommendChannel(videoID: "vidPLAIN001", channelID: nil, channelName: "Other")
+        #expect(!nameMismatch)
+        #expect(!http.requests.contains { $0.url?.path == "/youtubei/v1/feedback" })
+    }
+
+    @Test func aVideoWithoutAHandleIsUnavailableAndSendsNothing() async throws {
+        let http = MockHTTPClient()
+        let service = try await connected(http)
+        let before = http.requests.count
+        await #expect(throws: NoSlopError.self) { try await service.notInterested(videoID: "nope") }
+        await #expect(throws: NoSlopError.self) { _ = try await service.dontRecommendChannel(videoID: "nope", channelID: nil, channelName: "x") }
+        #expect(http.requests.count == before)
+    }
+
+    @Test func anAmbiguousPanelSendsNothing() async throws {
+        let http = MockHTTPClient()
+        let service = try await connected(http)
+        http.enqueue("youtubei/v1/get_panel", body: try data(try Fixture.json("tvsynthetic_panel_two_rows.json")))
+        await #expect(throws: NoSlopError.self) { try await service.notInterested(videoID: "vidPLAIN001") }
+        #expect(!http.requests.contains { $0.url?.path == "/youtubei/v1/feedback" })
+        let report = await service.diagnostics().lastCardAction
+        #expect(report?.accepted == false)
+    }
+
+    @Test func unprocessedFeedbackIsReportedAsNotAccepted() async throws {
+        let http = MockHTTPClient()
+        let service = try await connected(http)
+        http.enqueue("youtubei/v1/get_panel", body: try data(try Fixture.json("tvsynthetic_panel_menu.json")))
+        http.enqueue("youtubei/v1/feedback", body: Data(#"{"feedbackResponses":[{"isProcessed":false}]}"#.utf8))
+        try await service.notInterested(videoID: "vidPLAIN001")
+        let report = await service.diagnostics().lastCardAction
+        #expect(report?.accepted == false && report?.status == 200)
+    }
+}

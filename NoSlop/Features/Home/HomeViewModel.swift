@@ -142,6 +142,12 @@ final class HomeViewModel {
         }
     }
 
+    /// A card was sent "Not interested": takes it off the screen at once.
+    func cardDismissed(using env: AppEnvironment) {
+        guard showsYouTube else { return }
+        youTubePages.refilter(fetch: youTubeFetch(using: env), filter: youTubeFilter(using: env))
+    }
+
     /// Runs the user's filters on the feed already built (cheap; no network). Call it when they change: the user
     /// blocked a channel, or turned a setting on or off.
     func applyFilter(using env: AppEnvironment) {
@@ -203,7 +209,7 @@ final class HomeViewModel {
     /// The user's filters, and what Home already shows elsewhere (Continue watching) or the viewer has finished.
     private func youTubeFilter(using env: AppEnvironment) -> FeedPages<VideoSummary>.Filter {
         let filter = env.contentFilter
-        let excluded = Self.excludedIDs(env.library.history)
+        let excluded = Self.excludedIDs(env.library.history).union(HomeCardDismissals.shared.ids)
         return { videos in videos.filter { filter.allows($0) && !excluded.contains($0.id) } }
     }
 

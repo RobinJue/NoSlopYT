@@ -196,14 +196,102 @@ public actor RecommendationsService: RecommendationsProviding {
 
     static func name(_ recipe: TVHomeRecipe) -> String { "\(recipe.browseID)@\(recipe.host)" }
 
-    // MARK: Card actions (Task 7)
+    // MARK: Card actions
 
     public func notInterested(videoID: String) async throws {
-        throw NoSlopError.unavailable(reason: "YouTube didn't offer this for that video.")
+        let (token, findings, status) = try await panelToken(videoID: videoID, kind: "notInterested") { $0.notInterested }
+        guard let token else {
+            record("notInterested", status: status, accepted: false, started: epoch)
+            _ = findings
+            throw NoSlopError.unavailable(reason: Self.notOffered)
+        }
+        try await sendFeedback(token, kind: "notInterested")
     }
 
     public func dontRecommendChannel(videoID: String, channelID: String?, channelName: String) async throws -> Bool {
-        throw NoSlopError.unavailable(reason: "YouTube didn't offer this for that video.")
+        let (token, findings, status) = try await panelToken(videoID: videoID, kind: "dontRecommendChannel") { $0.dontRecommend }
+        let sameChannel: Bool
+        if let channelID, !channelID.isEmpty {
+            sameChannel = findings.channelID == channelID
+        } else if let panelName = findings.channelName {
+            let wanted = ContentFilter.foldName(channelName)
+            sameChannel = !wanted.isEmpty && ContentFilter.foldName(panelName) == wanted
+        } else {
+            sameChannel = false
+        }
+        guard let token, sameChannel else {
+            record("dontRecommendChannel", status: status, accepted: false, started: epoch)
+            return false
+        }
+        try await sendFeedback(token, kind: "dontRecommendChannel")
+        return lastCardAction?.accepted ?? false
+    }
+
+    private static let notOffered = "YouTube didn't offer this for that video."
+
+    /// Asks YouTube for the card's menu and picks the token of one action. Nothing is sent for an ambiguous menu.
+    private func panelToken(
+        videoID: String, kind: String, pick: (TVPanelFindings) -> String?
+    ) async throws -> (token: String?, findings: TVPanelFindings, status: Int?) {
+        guard let handle = handles[videoID] else { throw NoSlopError.unavailable(reason: Self.notOffered) }
+        let started = epoch
+        let reply: JSON?
+        do {
+            reply = try await client.post(
+                "get_panel",
+                body: [
+                    "context": TVClientConfig.context(.tv, visitorData: nil, language: language, region: region),
+                    "panelId": .string(handle.panelID),
+                    "params": .string(handle.params),
+                ]
+            )
+        } catch {
+            record(kind, status: Self.status(of: error), accepted: false, started: started)
+            throw error
+        }
+        guard let reply else {
+            record(kind, status: 200, accepted: false, started: started)
+            throw NoSlopError.unavailable(reason: Self.notOffered)
+        }
+        let findings = TVPanelParser.parse(reply)
+        if findings.ambiguous {
+            record(kind, status: 200, accepted: false, started: started)
+            throw NoSlopError.unavailable(reason: Self.notOffered)
+        }
+        return (pick(findings), findings, 200)
+    }
+
+    private func sendFeedback(_ token: String, kind: String) async throws {
+        let started = epoch
+        do {
+            let reply = try await client.post(
+                "feedback",
+                body: [
+                    "context": TVClientConfig.context(.tv, visitorData: nil, language: language, region: region),
+                    "feedbackTokens": [.string(token)],
+                ]
+            )
+            // YouTube may say a feedback was not processed; no flags at all counts as accepted.
+            var flags: [Bool] = []
+            if let responses = reply?["feedbackResponses"]?.array {
+                flags = responses.compactMap { $0["isProcessed"]?.bool }
+            }
+            record(kind, status: 200, accepted: flags.allSatisfy { $0 }, started: started)
+        } catch {
+            record(kind, status: Self.status(of: error), accepted: false, started: started)
+            throw error
+        }
+    }
+
+    private static func status(of error: any Error) -> Int? {
+        if case NoSlopError.http(let code) = error { return code }
+        return nil
+    }
+
+    /// Stores the report unless the account data was cleared while the request was out.
+    private func record(_ kind: String, status: Int?, accepted: Bool, started: Int) {
+        guard epoch == started else { return }
+        lastCardAction = CardActionReport(kind: kind, status: status, accepted: accepted, at: now())
     }
 
     func handle(for videoID: String) -> TVCardHandle? { handles[videoID] }

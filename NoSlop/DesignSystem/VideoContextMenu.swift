@@ -23,6 +23,36 @@ private struct VideoContextMenuModifier: ViewModifier {
             }
     }
 
+    /// Only a card of YouTube's Home (it has a menu there), while the connection and its switches are on.
+    private var offersNotInterested: Bool {
+        env.recommendationsAccount != nil && env.settings.showYouTubeHome && env.settings.tellYouTubeAboutHiding
+            && env.recommendationCardIDs.contains(video.id)
+    }
+
+    /// Hides the card at once and tells YouTube in the background. What YouTube answers goes to Diagnostics only.
+    private func notInterested() {
+        let id = video.id
+        HomeCardDismissals.shared.dismiss(id)
+        let env = env
+        Task(priority: .utility) {
+            try? await env.recommendations.notInterested(videoID: id)
+            await env.refreshRecommendationsDiagnostics()
+        }
+    }
+
+    /// Blocking the channel of a card of YouTube's Home also tells YouTube, in the background.
+    private func dontRecommend(_ channel: ChannelRef) {
+        guard offersNotInterested else { return }
+        let id = video.id
+        let channelID = channel.id.isEmpty ? nil : channel.id
+        let name = channel.name
+        let env = env
+        Task(priority: .utility) {
+            _ = try? await env.recommendations.dontRecommendChannel(videoID: id, channelID: channelID, channelName: name)
+            await env.refreshRecommendationsDiagnostics()
+        }
+    }
+
     @ViewBuilder
     private var menu: some View {
         let saved = env.library.isInWatchLater(video.id)
@@ -52,6 +82,14 @@ private struct VideoContextMenuModifier: ViewModifier {
             Label("Download", systemImage: "arrow.down.circle")
         }
 
+        if offersNotInterested {
+            Button {
+                notInterested()
+            } label: {
+                Label("Not interested", systemImage: "hand.thumbsdown")
+            }
+        }
+
         // A channel without an id (a tile of YouTube's Home) is looked up when it is blocked; one without a name either
         // has nothing to be recognised by.
         if let channel = video.channel, !channel.id.isEmpty || !channel.name.isEmpty {
@@ -68,6 +106,7 @@ private struct VideoContextMenuModifier: ViewModifier {
             } else {
                 Button(role: .destructive) {
                     ChannelBlocking.block(channel, of: video, using: env)
+                    dontRecommend(channel)
                 } label: {
                     Label("Don't show this channel", systemImage: "nosign")
                 }
