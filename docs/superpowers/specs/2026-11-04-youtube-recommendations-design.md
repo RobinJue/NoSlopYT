@@ -1,6 +1,6 @@
 # YouTube recommendations — Design
 
-Date: 2026-11-04, updated 2026-11-08 · Status: approved by the owner on 2026-11-08. Next: the Phase 0 plan, docs/superpowers/plans/2026-11-08-youtube-recommendations-phase0.md. Decisions the owner made are marked *owner*; everything else is the designer's call unless it says *builder*.
+Date: 2026-11-04, updated 2026-11-08 · Status: approved by the owner on 2026-11-08; Phase 0 replaced by a direct build the same day. Build plan: docs/superpowers/plans/2026-11-08-youtube-recommendations-build.md. Decisions the owner made are marked *owner*; everything else is the designer's call unless it says *builder*.
 
 Companion: [research notes](2026-11-04-youtube-recommendations-research.md) (what the open-source apps do today, with dates and sources). App spec: [2026-11-03-noslop-design.md](2026-11-03-noslop-design.md).
 
@@ -14,6 +14,8 @@ The picture agreed on 4 Nov still holds, but the research found four things that
 4. **Nobody has shown that the signed-in Up next is personal.** It stays a debug-only experiment.
 
 Nothing signed in has been tried yet: the research could only read other apps' code and make anonymous requests. So the work starts with a short test run with a real Google account (Phase 0), and each feature ships only if its test passes.
+
+*Owner* (8 Nov, later the same day): skip the throwaway test, build the whole feature now, and the owner tests it with their actual account. So the build has to learn on that first real run what Phase 0 would have learned: an automatic fallback ladder for the Home request and an in-app Diagnostics screen take Phase 0's place (see "Diagnostics"). The Mac probe in scripts/tv-probe stays as a diagnostics tool.
 
 ## Intent
 
@@ -107,11 +109,19 @@ The owner wants YouTube's real recommendations in No Slop, without ads (*owner*,
 - **Kill switch.** Three refusals in a row (bot check, unplayable, missing tracking values) pause reporting until the next launch and show it in Settings. Its own switch, "Send what I watch to YouTube", default on when connected.
 - **Checking it works.** A debug-only "check history" action reads the account's history list with the TV connection and looks for the video. It is for Phase 0 and QA, not for normal use.
 
-### Up next experiment (debug builds only)
+### Diagnostics (replaces Phase 0)
 
-For the playing video, also fetch YouTube's signed-in Up next and log it beside today's related list (account-type shelves, overlap). No change to the UI. The owner looks at five videos and decides; only if it is clearly theirs does a follow-up design replace the related list.
+- Home tries a short ladder of request recipes until one returns a signed-in page with video tiles, and remembers the one that worked: Home id FEwhat_to_watch on www.youtube.com, then "default" on www.youtube.com, then FEwhat_to_watch on youtubei.googleapis.com; on continuations, the visitorData of the first reply.
+- Settings > YouTube recommendations > Diagnostics shows the last Home load (recipe, HTTP status, signed in or not, counts of videos, Shorts, skipped and unknown renderers), the last card action, the last watch report (statuses and which tracking values were present, never the values), and how long the access token has left.
+- "Save diagnostics" writes a scrubbed JSON file of the last replies (no tokens, visitorData, params, tracking URLs or IP addresses) to the app's Documents/Diagnostics folder, visible in the Files app, so the owner can send it over when something does not work.
 
-## Phase 0: test with a real account before building
+### Up next experiment (later, debug builds only)
+
+Not part of the first build. Later: for the playing video, also fetch YouTube's signed-in Up next and log it beside today's related list (account-type shelves, overlap). No change to the UI. The owner looks at five videos and decides; only if it is clearly theirs does a follow-up design replace the related list.
+
+## Phase 0: test with a real account before building (replaced)
+
+Replaced by the owner's decision of 8 Nov: the feature is built and tested with the actual account; the diagnostics above take Phase 0's place. The text below stays as the record of the original plan and as the checklist for the probe if it is ever needed.
 
 Before any app code, a one-off probe (a small script on the Mac, not part of the app) runs once. The owner only approves the code in a browser, signed in to the throwaway Google account described below; the probe never sees a password.
 
