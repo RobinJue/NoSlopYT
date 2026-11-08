@@ -232,6 +232,10 @@ public actor TVAuthService: RecommendationsAuthProviding {
         )
         renewed.accountName = stored.accountName
         renewed.connectedAt = stored.connectedAt
+        // Disconnect (or an ended grant) may have run while the reply was on its way; never bring the credentials back.
+        guard let current = try store.load(), current.refreshToken == stored.refreshToken else {
+            throw NoSlopError.recommendationsNotConnected
+        }
         do {
             try store.save(renewed)
         } catch {
@@ -244,6 +248,8 @@ public actor TVAuthService: RecommendationsAuthProviding {
 
     public func disconnect() async -> Bool {
         pending = nil
+        refreshTask?.cancel()
+        refreshTask = nil
         var revoked = false
         if let refreshToken = (try? store.load())?.refreshToken {
             let form = "token=" + Self.formEncode(refreshToken)

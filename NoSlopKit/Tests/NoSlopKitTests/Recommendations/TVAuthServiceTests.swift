@@ -23,6 +23,56 @@ private final class TestClock: @unchecked Sendable {
     }
 }
 
+/// Holds the token reply until `release()`, so a test can disconnect while a refresh is in flight.
+private final class GatedHTTP: HTTPClient, @unchecked Sendable {
+    private let lock = NSLock()
+    private var reached: CheckedContinuation<Void, Never>?
+    private var gate: CheckedContinuation<Void, Never>?
+    private var tokenRequestSeen = false
+    private var released = false
+
+    func send(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
+        let url = request.url!
+        if url.absoluteString.contains("oauth2/token") {
+            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                let resume: [CheckedContinuation<Void, Never>] = lock.withLock {
+                    tokenRequestSeen = true
+                    var waiting: [CheckedContinuation<Void, Never>] = []
+                    if let reached { waiting.append(reached); self.reached = nil }
+                    if released { waiting.append(continuation) } else { gate = continuation }
+                    return waiting
+                }
+                resume.forEach { $0.resume() }
+            }
+            let body = Data(#"{"access_token":"tvsynthetic_access_late","refresh_token":"tvsynthetic_refresh_late","expires_in":3599}"#.utf8)
+            return (body, HTTPURLResponse(url: url, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: [:])!)
+        }
+        // Revoke calls: answer 200.
+        return (Data("{}".utf8), HTTPURLResponse(url: url, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: [:])!)
+    }
+
+    func waitForTokenRequest() async {
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            let now: Bool = lock.withLock {
+                if tokenRequestSeen { return true }
+                reached = continuation
+                return false
+            }
+            if now { continuation.resume() }
+        }
+    }
+
+    func release() {
+        let waiting: CheckedContinuation<Void, Never>? = lock.withLock {
+            released = true
+            let g = gate
+            gate = nil
+            return g
+        }
+        waiting?.resume()
+    }
+}
+
 private struct Rig {
     let http = MockHTTPClient()
     let store = InMemoryTVTokenStore()
@@ -334,6 +384,25 @@ private func stored(expiresIn: Double, clock: Date = Date(timeIntervalSince1970:
         let rig = Rig()
         rig.queueClientValues(script: "var nothing=1;")
         await #expect(throws: NoSlopError.oauth("The sign-in couldn't start. Try again later.")) { _ = try await rig.service.beginSignIn() }
+    }
+
+    @Test func aRefreshInFlightDuringDisconnectDoesNotBringTheCredentialsBack() async throws {
+        let http = GatedHTTP()
+        let store = InMemoryTVTokenStore()
+        try store.save(stored(expiresIn: 100))
+        let suite = "tvsynthetic.\(UUID().uuidString)"
+        let service = TVAuthService(
+            http: http, store: store, defaults: UserDefaults(suiteName: suite)!,
+            now: { Date(timeIntervalSince1970: 1_800_000_000) }, sleep: { _ in }
+        )
+        let refresh = Task { try await service.accessToken() }
+        await http.waitForTokenRequest()
+        _ = await service.disconnect()
+        #expect(try store.load() == nil)
+        http.release()
+        await #expect(throws: (any Error).self) { _ = try await refresh.value }
+        #expect(try store.load() == nil)
+        #expect(await service.currentAccount() == nil)
     }
 
     @Test func disconnectClearsTheStoreEvenWhenRevokeFails() async throws {
