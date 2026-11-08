@@ -75,7 +75,7 @@ struct RecommendationsDiagnosticsView: View {
                 }
                 .disabled(isSaving)
             } footer: {
-                Text(savedMessage ?? "Saves a short file with the same flags and counts, and nothing that identifies your account or your videos.")
+                Text(savedMessage ?? "Saves a short file with the same flags and counts. It has no tokens or account details, but it lists the video and channel ids of YouTube's recent Home. It is removed when you disconnect.")
             }
         }
         .miniPlayerClearance()
@@ -140,7 +140,13 @@ struct RecommendationsDiagnosticsView: View {
             let name = "recommendations-\(formatter.string(from: Date())).json"
             let folder = URL.documentsDirectory.appending(path: "Diagnostics", directoryHint: .isDirectory)
             try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-            try JSON.object(object).data().write(to: folder.appending(path: name), options: .atomic)
+            let data = try JSON.object(object).data()
+            // The last gate: nothing that looks like a token, a header or an address goes to disk.
+            guard TVScrubber.leaks(String(decoding: data, as: UTF8.self)).isEmpty else {
+                savedMessage = "The file was not saved: it held something that looks like a token or an address."
+                return
+            }
+            try data.write(to: folder.appending(path: name), options: .atomic)
             savedMessage = "Saved as Documents/Diagnostics/\(name) in this app's folder."
         } catch {
             savedMessage = "The file couldn't be saved."

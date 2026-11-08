@@ -8,6 +8,7 @@ struct RecommendationsSettingsSection: View {
     @State private var flow = RecommendationsConnectFlow()
     @State private var isConfirmingDisconnect = false
     @State private var isDisconnecting = false
+    @State private var disconnectNotice: String?
 
     var body: some View {
         @Bindable var store = env.settingsStore
@@ -40,8 +41,9 @@ struct RecommendationsSettingsSection: View {
                     Button("Disconnect", role: .destructive) {
                         isDisconnecting = true
                         Task {
-                            await env.disconnectRecommendations()
+                            let result = await env.disconnectRecommendations()
                             isDisconnecting = false
+                            disconnectNotice = Self.notice(for: result)
                         }
                     }
                 } message: {
@@ -52,6 +54,10 @@ struct RecommendationsSettingsSection: View {
             Toggle("Show YouTube's Home", isOn: $store.settings.showYouTubeHome)
             Toggle("Tell YouTube when I hide a video or a channel from Home", isOn: $store.settings.tellYouTubeAboutHiding)
             Toggle("Send what I watch to YouTube", isOn: $store.settings.sendWatchesToYouTube)
+                .onChange(of: store.settings.sendWatchesToYouTube) { _, isOn in
+                    // Off means nothing about the watches is kept or sent later, not even what was waiting to be sent.
+                    if !isOn { Task { await env.watchReporter.sharingTurnedOff() } }
+                }
 
             NavigationLink {
                 RecommendationsDiagnosticsView()
@@ -64,6 +70,24 @@ struct RecommendationsSettingsSection: View {
             Text("Uses YouTube's TV sign-in, not an official API, separate from the Google sign-in above. It can be another Google account and it can stop working when YouTube changes something.")
         }
         .recommendationsConnectPresentation(flow)
+        .alert("Disconnected", isPresented: Binding(get: { disconnectNotice != nil }, set: { if !$0 { disconnectNotice = nil } })) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(disconnectNotice ?? "")
+        }
+    }
+
+    /// Nil when Google confirmed the revoke and the sign-in is gone from the device; otherwise what the owner still has
+    /// to do. The grant is named as the README does: YouTube TV.
+    private static func notice(for result: TVDisconnectResult) -> String? {
+        let reach = "Remove YouTube TV under Google Account, Security, third-party connections, to end the access."
+        if !result.clearedLocally {
+            return "The sign-in could not be removed from this device. \(reach)"
+        }
+        if !result.revoked {
+            return "Disconnected on this device. Google could not be reached to end the access. \(reach)"
+        }
+        return nil
     }
 
     private func statusRow(_ account: TVAccount?) -> some View {

@@ -3,7 +3,8 @@
 A personal YouTube client for iPhone and iPad that feels like the real app, with none of the slop: no ads, no
 Shorts, no sponsor reads, no clickbait, no algorithmic rabbit holes. Background playback, Picture in Picture and
 downloads for offline viewing come free. It is installed from Xcode, not from the App Store, and has no server
-component: everything runs on the phone.
+component: everything runs on the phone. It can optionally show your own YouTube Home, see "YouTube recommendations
+(optional)" below.
 
 Design: [`docs/superpowers/specs/2026-11-03-noslop-design.md`](docs/superpowers/specs/2026-11-03-noslop-design.md)
 · Plan: [`docs/superpowers/plans/2026-11-03-noslop-app.md`](docs/superpowers/plans/2026-11-03-noslop-app.md)
@@ -51,11 +52,14 @@ Design: [`docs/superpowers/specs/2026-11-03-noslop-design.md`](docs/superpowers/
   streams, and watched videos in Subscriptions. Members-only and live or upcoming videos are hidden where YouTube
   marks them: in search, on channel pages and in suggestions. The Subscriptions tab and the uploads on Home come from
   the channels' feeds, which carry no such marks.
-- Works completely **anonymously**: search, watch, channels, playlists, subscriptions kept on the device, history,
+- Works completely **anonymously** until you connect something: search, watch, channels, playlists, subscriptions kept on the device, history,
   Watch Later, your own playlists, and a "For you" home feed computed on the device from your history and
   subscriptions. Copy a YouTube link and paste it into the Search field to open it.
 - Optionally signs in with your Google account, to bring your real YouTube subscriptions, playlists and liked
   videos, and to subscribe, like and add to playlists on your account. See "Sign in with Google" below.
+- Optionally connects to YouTube the way YouTube's TV app does, to show your own YouTube Home, to tell YouTube when
+  you hide a video or a channel there, and to tell YouTube what you watched. This is separate from the Google sign-in,
+  off until you connect, and unofficial. See "YouTube recommendations (optional)" below.
 
 **It doesn't**
 
@@ -65,13 +69,15 @@ Design: [`docs/superpowers/specs/2026-11-03-noslop-design.md`](docs/superpowers/
   no Short marker, so there a video of a minute or less counts as a Short.) Your history, Watch Later, your own
   playlists and downloads show everything you put there. A Shorts link opens as an ordinary video.
 - Contain any analytics, crash reporter, tracker or third-party package. Apple frameworks only. The only servers it
-  talks to are YouTube and Google (for the videos, and for your account when you sign in), plus SponsorBlock and
+  talks to are YouTube and Google (for the videos, and for your account when you sign in or connect), plus SponsorBlock and
   DeArrow, which are asked about a short hash of a video ID, never the ID itself.
 - Store or send cookies in its requests to YouTube's and Google's APIs (browsing, stream addresses, suggestions,
-  captions, feeds, your account); thumbnails, avatars and lock-screen artwork, the video stream, downloads and
+  captions, feeds, your account, the YouTube connection); thumbnails, avatars and lock-screen artwork, the video stream, downloads and
   Google's sign-in page are not API requests, and are left to the system's default cookie handling.
 - Do live chat, post comments, upload, YouTube Music, Kids, notifications or Chromecast.
-- Show YouTube's personalised home feed: Google does not offer it to third-party apps.
+- Show YouTube's personalised Home unless you connect to YouTube (see "YouTube recommendations (optional)" below).
+  Without the connection, Home is a "For you" feed computed on the device. Nothing is sent to YouTube about what you
+  watch or hide, unless that connection is on.
 - Play age-restricted or "made for kids" videos: YouTube does not hand those out to this kind of client. The app
   shows YouTube's own reason and an "Open on YouTube" button.
 - Open a second window on iPad: the navigation, the player and Picture in Picture are shared by the whole app, so it
@@ -157,6 +163,67 @@ acting on your real account. The app asks for the scope `https://www.googleapis.
   and keeps your data. It notices the next time it talks to your account, which includes a pull to refresh on Home
   or Subscriptions. Sign in again to bring the account back.
 
+## YouTube recommendations (optional)
+
+Without this, Home is the "For you" feed the app computes on the device. With it, Home shows YouTube's own Home for
+your account, the way the YouTube app on a TV does, still without Shorts, ads, promoted shelves, blocked channels or
+blocked keywords. It is separate from "Sign in with Google": it does not need a Google Cloud project, and it can be
+another Google account than the one you signed in with there (then Home, subscriptions and likes disagree).
+
+**Connect.** In the Library, press **Connect** on the "YouTube recommendations" row (or use **Settings > YouTube
+recommendations > Connect**). The app shows a code. Press **Open Google's page** (or open the page yourself on any
+device), enter the code and approve. Google's page says **YouTube on TV**, not No Slop: that is expected, because this
+is YouTube's TV sign-in. The app asks Google every few seconds and notices the approval by itself, and the row
+then says Connected. A code works for a few minutes; if it expires, Cancel and start again.
+
+**What is sent where.** While you are connected, and only with the switch for it on, these go to YouTube (and
+Google's sign-in servers for the connection itself), signed in as that account:
+
+- Home and its further pages (switch **Show YouTube's Home**, on by default).
+- **Not interested** in the menu of a card on YouTube's Home, and "Don't show this channel" on such a card, which also
+  sends YouTube "Don't recommend channel" (only when the card's menu names the same channel). Both also take the card
+  away on the device (switch **Tell YouTube when I hide a video or a channel from Home**, on by default). Blocking a
+  channel anywhere else only blocks it on the device. What YouTube is told cannot be undone from this app, and it
+  applies to the whole account, also in the official YouTube app.
+- A watch report for a video you played for 30 seconds (a video shorter than that: to its end), with a progress ping
+  every few minutes and when you stop; never for live streams or Shorts (switch **Send what I watch to YouTube**, on
+  by default). It lets YouTube put the video in the account's history and learn from it. It is sent after the video
+  has started and never holds up the player. Reports that could not be sent (no connection) are kept on the device,
+  at most 50 and for at most 7 days, and are sent when the app starts, becomes active, the network is back, or
+  YouTube's Home has loaded. If YouTube refuses three reports in a row, reporting pauses until the next launch, and
+  Diagnostics says so.
+
+Everything else (search, watching, channels, comments, suggestions, SponsorBlock, DeArrow) stays anonymous and does
+not touch the connection. The connection's tokens live in their own Keychain item. If YouTube's Home cannot be loaded,
+or has too few videos left after the filters, Home shows the on-device mix instead, with a notice and Retry.
+
+**Diagnostics.** **Settings > YouTube recommendations > Diagnostics** shows the last Home load (which request was
+used, the status, whether YouTube saw you as signed in, the counts of videos, Shorts and skipped items, and which source
+Home showed), the last card action, the last watch report (the status of each step and which of YouTube's tracking
+values were present, never the values) and how long the access token is valid. **Save diagnostics** writes a short
+JSON file with the same flags and counts, and no token, account name, video or channel, to `Documents/Diagnostics/` in
+the app's folder. It shows in the Files app under On My iPhone > No Slop > Diagnostics, so you can send it over when
+something does not work.
+
+**Disconnect.** **Settings > YouTube recommendations > Disconnect** (it asks first). The app asks Google to revoke the
+grant, deletes the tokens, YouTube's Home, the card handles and the unsent reports from the device, and Home goes
+back to the on-device mix. If you want to be sure the grant is gone, open
+[myaccount.google.com/permissions](https://myaccount.google.com/permissions) (Google Account > Security > Your
+connections to third-party apps and services) and remove **YouTube TV** there. If YouTube ends the connection by
+itself, the app shows it as disconnected and Home falls back.
+
+**The risks, plainly.**
+
+- It is unofficial. The app signs in and asks for Home the way YouTube's TV app does, with the TV app's identity, not
+  through an official API. That is against YouTube's terms, and Google could restrict the account or close this route.
+  No bans are known for it, but that is no promise.
+- It can break any day. YouTube changes this interface from time to time. Home then falls back to the on-device mix
+  and reporting pauses; playback is not affected. See Troubleshooting for the versions to bump.
+- The grant is YouTube TV's grant, which gives the app full access to that YouTube account, until you disconnect or
+  remove it as described above.
+- It can be another account than the Google sign-in, and what you do here shapes that account's recommendations in
+  the official YouTube app too.
+
 ## Tests
 
 The logic lives in the local Swift package `NoSlopKit` and is tested on macOS, without a simulator:
@@ -222,6 +289,17 @@ by building it and by running it with the mock services ("Debug launch arguments
   to the watch page and still needs a connection.) When a download plays with a connection, the live answers win and
   are written back to the extras file: that is how a download that lacks some of this gets it, the first time it plays
   online. A caption track you open then is kept too, up to six in all.
+- **YouTube recommendations** use a second, separate client, `TVClient` in `NoSlopKit/Sources/NoSlopKit/Recommendations/`.
+  It signs in with YouTube's TV device-code flow (the code, then polling until you approve), is the only code that sets
+  an `Authorization` header, uses its own cookie-free session, and may only talk to `www.youtube.com`,
+  `youtubei.googleapis.com` and `oauth2.googleapis.com`. It never uses the anonymous InnerTube client, its visitorData
+  or its caches, and the anonymous requests stay free of credentials and cookies. Home is asked as the TV interface
+  (`TVHomeParser` keeps only video tiles and drops ads, shelves, Shorts and anything unknown) with a short ladder of
+  request forms, and the one that worked is remembered. Home uses YouTube's feed when at least 8 videos are left within
+  up to 3 pages after the filters and the videos already in Continue watching or finished; otherwise it shows the
+  on-device mix. A watch report is a signed player request (as the older TV client) to get YouTube's tracking values,
+  then a playback ping and watch-time pings; it is written to a file on the device first and removed when sent. The
+  tracking commands that come with cards are never fired, and raw replies are never logged.
 - **SponsorBlock and DeArrow** are asked the privacy-preserving way: the app sends only the first 4 hex characters
   of the SHA-256 of the video ID to `sponsor.ajay.app`, the server answers for every video that shares that prefix,
   and the app keeps the entry for its own video. The server never learns what you watch. A DeArrow lookup that fails
@@ -320,6 +398,14 @@ which opens that link in the browser or the YouTube app.
   the `clientVersion` and the user agent, and for visionOS the `osVersion` in `extraClientFields`). When YouTube
   starts refusing an old version, bump those values to current ones (open-source clients such as yt-dlp list them),
   run `./scripts/test.sh` and `NOSLOP_LIVE=1 ./scripts/test.sh --filter 'LiveSmokeTests|LiveDownloadTests'`, and run the app again.
+- **YouTube recommendations stopped working: Home shows the on-device mix with a notice, or watches are not reported.**
+  This interface is unofficial and changes. Look at Settings > YouTube recommendations > Diagnostics first. The
+  versions the app presents itself with live in `NoSlopKit/Sources/NoSlopKit/Recommendations/TVClientConfig.swift`:
+  `tvClientVersion` and `tvUserAgent` (Home, card actions), `legacyClientVersion` and `legacyUserAgent` (the player
+  request of the watch reports), `referer`, and `homeRecipes` (the Home requests tried in turn). When YouTube starts
+  refusing an old version, bump them to the current TV values (open-source TV clients list them), run
+  `./scripts/test.sh`, and disconnect and connect again if Home stays on the mix. A "Signed in on YouTube: no" in Diagnostics means
+  YouTube answered as for a signed-out viewer.
 - **Google sign-in is blocked, or you are signed out every week.** See "Sign in with Google": add yourself as a test
   user, or publish the consent screen to stop the 7-day sign-out.
 - **"The YouTube Data API isn't turned on for your Google project."** Signing in works without it; everything that
@@ -336,7 +422,7 @@ which opens that link in the browser or the YouTube app.
 | `NoSlopKit/` | Swift package: InnerTube client and parsers, Google OAuth and Data API, feeds, library, downloads, SponsorBlock, DeArrow, mocks |
 | `NoSlop/App/` | App entry point, `AppEnvironment` (composition root), `AppLink` (the `noslop://` links), `Router`, `RootView`, `BackgroundPersistence` |
 | `NoSlop/DesignSystem/` | Shared views: thumbnails, video cards and rows, subscribe button, empty/error states |
-| `NoSlop/Features/` | The screens: Home, Subscriptions, Search, Channel, Playlist, Watch, Library, Downloads, Settings, Account |
+| `NoSlop/Features/` | The screens: Home, Subscriptions, Search, Channel, Playlist, Watch, Library, Downloads, Settings, Account, Recommendations |
 | `NoSlop/Player/` | The AVPlayer-based player and its overlay |
 | `project.yml`, `Config/` | XcodeGen spec and build configuration |
 | `scripts/` | `bootstrap.sh`, `build.sh`, `test.sh` |
@@ -351,4 +437,6 @@ No Slop is a personal project, made for the author's own use, and is not affilia
 YouTube or Google. It reaches YouTube through the same web interfaces the website uses, not through an official API,
 and it plays videos without ads. That may go against YouTube's Terms of Service, and YouTube can change or block it
 at any time. If you use it, you do so at your own risk and you are responsible for following the terms that apply to
-you. Only the optional account features use an official API (the YouTube Data API, with your own Google project).
+you. Only the optional Google sign-in uses an official API (the YouTube Data API, with your own Google project). The
+optional YouTube recommendations connection is not official: it presents itself to YouTube as YouTube's TV app, which
+is also against YouTube's terms, and may get the account restricted.

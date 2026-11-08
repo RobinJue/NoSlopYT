@@ -60,4 +60,43 @@ struct PendingWatchReportsTests {
         queue.removeAll()
         #expect(PendingWatchReports(fileURL: url).all().isEmpty)
     }
+
+    @Test func aFileThatCannotBeReadIsNeverOverwrittenWithAnEmptyQueue() throws {
+        let url = tempURL()
+        let now = Date()
+        let first = PendingWatchReports(fileURL: url, now: { now })
+        let waiting = entry("waiting", at: now)
+        first.add(waiting)
+        let original = try Data(contentsOf: url)
+
+        // Protected data before the first unlock: the file is there, but reading it fails.
+        try FileManager.default.setAttributes([.posixPermissions: 0], ofItemAtPath: url.path)
+        let launch = PendingWatchReports(fileURL: url, now: { now })
+        #expect(launch.all().isEmpty)
+        let late = entry("late", at: now)
+        launch.add(late)
+        #expect(launch.reloadIfNeeded() == false)
+
+        try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: url.path)
+        #expect(try Data(contentsOf: url) == original)
+        #expect(launch.reloadIfNeeded())
+        #expect(Set(launch.all().map(\.videoID)) == ["waiting", "late"])
+        #expect(Set(PendingWatchReports(fileURL: url, now: { now }).all().map(\.videoID)) == ["waiting", "late"])
+    }
+
+    @Test func aMissingFileIsAnEmptyQueueAndReadable() {
+        let queue = PendingWatchReports(fileURL: tempURL())
+        #expect(queue.all().isEmpty)
+        #expect(queue.reloadIfNeeded())
+    }
+
+    @Test func olderFilesWithoutTheNewFieldsStillLoad() throws {
+        let url = tempURL()
+        let now = Date()
+        let old = #"[{"id":"\#(UUID().uuidString)","videoID":"old","lengthSeconds":60,"position":40,"finished":false,"createdAt":\#(now.timeIntervalSinceReferenceDate)}]"#
+        try Data(old.utf8).write(to: url)
+        let queue = PendingWatchReports(fileURL: url, now: { now })
+        #expect(queue.all().map(\.videoID) == ["old"])
+        #expect(queue.all().first?.rangeStart == nil)
+    }
 }

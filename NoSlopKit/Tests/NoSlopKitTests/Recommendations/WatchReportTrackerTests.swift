@@ -109,4 +109,48 @@ struct WatchReportTrackerTests {
         tracker.setLength(12)
         #expect(play(&tracker, from: 10, seconds: 2) == [.qualified(11.5)])
     }
+
+    @Test func aFlushReportsWithoutEndingTheViewing() {
+        var tracker = WatchReportTracker(lengthSeconds: 3000, isLive: false, isShort: false)
+        _ = tracker.tick(position: 0, isPlaying: true)
+        #expect(tracker.flush(position: 10) == nil) // not qualified yet
+        _ = play(&tracker, from: 0, seconds: 40)
+        #expect(Seen(tracker.flush(position: 40)!) == .progress(40))
+        // The viewing is still open: the next progress comes 240 s of playing after the flush, the end still ends it.
+        #expect(play(&tracker, from: 40, seconds: 239.5).isEmpty)
+        #expect(play(&tracker, from: 279.5, seconds: 0.5) == [.progress(280)])
+        #expect(Seen(tracker.closing(position: 2900)!) == .ended(2900, true))
+    }
+
+    @Test func theRangeStartsWhereTheStretchBeganAndMovesWithEachReport() {
+        var tracker = WatchReportTracker(lengthSeconds: 3000, isLive: false, isShort: false)
+        _ = tracker.tick(position: 600, isPlaying: true)
+        let seen = play(&tracker, from: 600, seconds: 30)
+        #expect(seen == [.qualified(630)])
+        #expect(tracker.reportedFrom == 600)
+        // Playing on: the next range begins where the last one ended.
+        _ = play(&tracker, from: 630, seconds: 240)
+        #expect(tracker.reportedFrom == 630)
+        #expect(tracker.closingFrom(position: 870) == 870)
+        _ = play(&tracker, from: 870, seconds: 10)
+        #expect(tracker.closingFrom(position: 880) == 870)
+    }
+
+    @Test func aSeekStartsANewRange() {
+        var tracker = WatchReportTracker(lengthSeconds: 3000, isLive: false, isShort: false)
+        _ = tracker.tick(position: 0, isPlaying: true)
+        _ = play(&tracker, from: 0, seconds: 30)
+        _ = play(&tracker, from: 30, seconds: 10)
+        _ = tracker.tick(position: 1000, isPlaying: true) // skip ahead
+        #expect(tracker.flush(position: 1000) == nil) // nothing played since the skip
+        _ = play(&tracker, from: 1000, seconds: 5)
+        #expect(tracker.closingFrom(position: 1005) == 1000)
+        #expect(Seen(tracker.flush(position: 1005)!) == .progress(1005))
+        #expect(tracker.reportedFrom == 1000)
+        // A seek back, paused: the stretch starts where playing goes on.
+        _ = tracker.tick(position: 200, isPlaying: false)
+        _ = tracker.tick(position: 200, isPlaying: true)
+        _ = play(&tracker, from: 200, seconds: 3)
+        #expect(tracker.closingFrom(position: 203) == 200)
+    }
 }

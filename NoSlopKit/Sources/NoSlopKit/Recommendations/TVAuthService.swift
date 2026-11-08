@@ -44,6 +44,7 @@ public actor TVAuthService: RecommendationsAuthProviding {
     private var clientPair: ClientPair?
     private var pending: PendingSignIn?
     private var refreshTask: Task<TVCredentials, any Error>?
+    private var grantEnded: (@Sendable () async -> Void)?
     private lazy var tvClient = TVClient(http: http, tokens: self)
 
     public init(
@@ -185,6 +186,10 @@ public actor TVAuthService: RecommendationsAuthProviding {
         return name
     }
 
+    public func onGrantEnded(_ handler: @escaping @Sendable () async -> Void) async {
+        grantEnded = handler
+    }
+
     // MARK: Tokens
 
     public func accessToken() async throws -> String {
@@ -223,6 +228,8 @@ public actor TVAuthService: RecommendationsAuthProviding {
             if ["invalid_grant", "invalid_client", "unauthorized_client"].contains(error) {
                 try? store.clear()
                 pending = nil
+                // The app learns that the connection is gone (it would go on saying "Connected" until a relaunch).
+                if let grantEnded { Task { await grantEnded() } }
                 throw NoSlopError.recommendationsNotConnected
             }
             throw NoSlopError.oauth("The connection couldn't be renewed. Try again later.")
@@ -248,12 +255,21 @@ public actor TVAuthService: RecommendationsAuthProviding {
 
     // MARK: Disconnect
 
-    public func disconnect() async -> Bool {
+    public func disconnect() async -> TVDisconnectResult {
         pending = nil
         refreshTask?.cancel()
         refreshTask = nil
+        let refreshToken = (try? store.load())?.refreshToken
+        // The credentials go first: while the revoke calls run (up to 30 s each), nothing can use them, and killing the
+        // app in that time leaves nothing in the Keychain.
+        var clearedLocally = true
+        do {
+            try store.clear()
+        } catch {
+            clearedLocally = false
+        }
         var revoked = false
-        if let refreshToken = (try? store.load())?.refreshToken {
+        if let refreshToken {
             let form = "token=" + Self.formEncode(refreshToken)
             let attempts: [(String, [String: String], Data?)] = [
                 (TVAuth.revokeURLs[0], ["Content-Type": "application/x-www-form-urlencoded"], Data(form.utf8)),
@@ -266,8 +282,7 @@ public actor TVAuthService: RecommendationsAuthProviding {
                 }
             }
         }
-        try? store.clear()
-        return revoked
+        return TVDisconnectResult(revoked: revoked, clearedLocally: clearedLocally)
     }
 
     // MARK: Client values

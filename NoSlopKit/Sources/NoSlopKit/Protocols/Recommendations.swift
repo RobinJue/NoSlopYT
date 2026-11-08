@@ -40,9 +40,28 @@ public protocol RecommendationsAuthProviding: TVTokenProviding {
     func completeSignIn(_ prompt: TVSignInPrompt) async throws -> TVAccount
     /// Seconds until the access token expires; nil when not connected.
     func secondsLeft() async -> Int?
-    /// Revokes the grant (best effort) and clears the stored credentials whatever the servers answer.
-    /// - Returns: whether a revoke endpoint answered 200.
-    func disconnect() async -> Bool
+    /// Clears the stored credentials first, then revokes the grant (best effort).
+    func disconnect() async -> TVDisconnectResult
+    /// Tells `handler` when the grant ended on its own (Google refused to renew it: the access was removed, the password
+    /// changed, or the token expired from disuse) and the stored credentials were cleared.
+    func onGrantEnded(_ handler: @escaping @Sendable () async -> Void) async
+}
+
+public extension RecommendationsAuthProviding {
+    func onGrantEnded(_ handler: @escaping @Sendable () async -> Void) async {}
+}
+
+/// What a disconnect achieved.
+public struct TVDisconnectResult: Sendable, Equatable {
+    /// Whether a revoke endpoint answered 200, so Google ended the access too.
+    public var revoked: Bool
+    /// Whether the stored credentials are gone from this device.
+    public var clearedLocally: Bool
+
+    public init(revoked: Bool, clearedLocally: Bool = true) {
+        self.revoked = revoked
+        self.clearedLocally = clearedLocally
+    }
 }
 
 // MARK: - Home and reporting
@@ -84,11 +103,20 @@ public struct WatchViewing: Sendable, Hashable {
     public let id: UUID
     public let videoID: String
     public let lengthSeconds: Double
+    /// Where the media time that the event reports began (a resume at 10:00 starts there, a seek starts a new range);
+    /// nil when the sender does not know, and the reporter goes on from the end of the last report.
+    public let rangeStart: Double?
 
-    public init(id: UUID, videoID: String, lengthSeconds: Double) {
+    public init(id: UUID, videoID: String, lengthSeconds: Double, rangeStart: Double? = nil) {
         self.id = id
         self.videoID = videoID
         self.lengthSeconds = lengthSeconds
+        self.rangeStart = rangeStart
+    }
+
+    /// The same viewing, with the start of the range that the next event reports.
+    public func starting(at rangeStart: Double?) -> WatchViewing {
+        WatchViewing(id: id, videoID: videoID, lengthSeconds: lengthSeconds, rangeStart: rangeStart)
     }
 }
 
@@ -106,6 +134,9 @@ public protocol WatchReporting: Sendable {
     func isPaused() async -> Bool
     /// Drops pending reports and state (on disconnect).
     func clearAccountData() async
+    /// The owner turned sending off: the queued reports and the viewings in progress are dropped, so nothing about them
+    /// is sent when it is turned on again.
+    func sharingTurnedOff() async
 }
 
 /// Part A placeholder for `live()` until the Home service replaces it: nothing is connected.
@@ -131,4 +162,5 @@ public struct NoWatchReporter: WatchReporting {
     public func outcome() async -> WatchReportOutcome? { nil }
     public func isPaused() async -> Bool { false }
     public func clearAccountData() async {}
+    public func sharingTurnedOff() async {}
 }

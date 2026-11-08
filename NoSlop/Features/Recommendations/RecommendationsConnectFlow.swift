@@ -38,7 +38,7 @@ final class RecommendationsConnectFlow {
                 poll = task
                 do {
                     let account = try await task.value
-                    env.recommendationsConnected(account)
+                    await env.recommendationsConnected(account)
                     return
                 } catch {
                     if isCancellation(error), restartRequested, !cancelRequested {

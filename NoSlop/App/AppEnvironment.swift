@@ -49,6 +49,11 @@ final class AppEnvironment {
     /// What the Diagnostics screen lists; `refreshRecommendationsDiagnostics` fills it.
     var recommendationsDiagnostics = RecommendationsDiagnostics()
 
+    /// Whether Home used YouTube's reply or fell back to the mix on this device, for the load whose report was stamped
+    /// `reportAt`. The service only knows whether YouTube answered; Home decides what is shown, so the Diagnostics rows
+    /// take this over `lastHome.usedYouTube` for that load (and not for a later "(more)" page or card action).
+    var homeDecision: (usedYouTube: Bool, reportAt: Date)?
+
     /// Counts the changes of the recommendations connection (connected, disconnected), so Home can load again.
     private(set) var recommendationsRevision = 0
 
@@ -118,6 +123,9 @@ final class AppEnvironment {
         // chapters and the up-next list of the video that plays: they are loaded here instead.
         player.detailsNeeded = { [weak self] video in self?.loadDetailsForPlayer(video) }
         installWatchReportHooks()
+        // A grant that ended on Google's side clears the stored sign-in; the screens must stop saying "Connected".
+        let tvAuth = recommendationsAuth
+        Task { await tvAuth.onGrantEnded { [weak self] in await self?.reconcileRecommendationsAccount() } }
     }
 
     // MARK: Construction
@@ -383,6 +391,8 @@ final class AppEnvironment {
         }
         if recommendationsReadWhileLocked, UIApplication.shared.isProtectedDataAvailable {
             await refreshRecommendationsAccount()
+            // The queue of waiting watch reports could not be read either; the replay reads it again.
+            replayWatchReports()
         }
     }
 
@@ -466,25 +476,51 @@ final class AppEnvironment {
         recommendationsAccount = await recommendationsAuth.currentAccount()
     }
 
-    /// Called by the connect flow after the sign-in finished.
-    func recommendationsConnected(_ account: TVAccount) {
+    /// Makes `recommendationsAccount` say what the auth service says, after a TV call failed with
+    /// `recommendationsNotConnected`. Google ending the grant (the access was removed, the password changed, a token that
+    /// lapsed from disuse) clears the stored sign-in and nothing else would notice, so Settings would go on saying
+    /// "Connected" with no way to connect again. When the account is gone, this does what a disconnect does, minus the
+    /// revoke: the data of the old account goes (including its waiting watch reports), and Home loads again.
+    func reconcileRecommendationsAccount() async {
+        guard recommendationsAccount != nil, await recommendationsAuth.currentAccount() == nil else { return }
+        recommendationsAccount = nil
+        recommendationCardIDs = []
+        homeDecision = nil
+        recommendationsRevision += 1
+        await recommendations.clearAccountData()
+        await watchReporter.clearAccountData()
+        recommendationsDiagnostics = RecommendationsDiagnostics()
+    }
+
+    /// Called by the connect flow after the sign-in finished. Whatever an earlier account left (card handles, waiting
+    /// watch reports) is dropped first, so it is never replayed to the new one.
+    func recommendationsConnected(_ account: TVAccount) async {
+        await recommendations.clearAccountData()
+        await watchReporter.clearAccountData()
+        recommendationCardIDs = []
+        homeDecision = nil
         recommendationsAccount = account
         recommendationsRevision += 1
     }
 
     /// Disconnects: revokes the grant (best effort), clears the stored tokens, the card handles, the cached Home and
     /// the pending reports, and lets Home load again. Never touches the Google account.
-    /// - Returns: whether Google confirmed the revoke (the connection is gone on this device either way).
+    /// The screens and the reporter stop at once; the revoke calls (up to 30 s each) run after the sign-in is gone from
+    /// the Keychain. The saved diagnostics files go too.
+    /// - Returns: whether Google confirmed the revoke, and whether the sign-in is gone from this device.
     @discardableResult
-    func disconnectRecommendations() async -> Bool {
-        let revoked = await recommendationsAuth.disconnect()
+    func disconnectRecommendations() async -> TVDisconnectResult {
+        recommendationsAccount = nil
+        recommendationCardIDs = []
+        homeDecision = nil
+        recommendationsRevision += 1
+        let result = await recommendationsAuth.disconnect()
         await recommendations.clearAccountData()
         await watchReporter.clearAccountData()
-        recommendationCardIDs = []
-        recommendationsAccount = nil
+        try? FileManager.default.removeItem(at: URL.documentsDirectory.appending(path: "Diagnostics", directoryHint: .isDirectory))
         recommendationsDiagnostics = RecommendationsDiagnostics()
         recommendationsRevision += 1
-        return revoked
+        return result
     }
 
     /// Reads the Diagnostics numbers again.
@@ -493,6 +529,9 @@ final class AppEnvironment {
         diagnostics.lastReport = await watchReporter.outcome()
         diagnostics.pausedReporting = await watchReporter.isPaused()
         diagnostics.tokenSecondsLeft = await recommendationsAuth.secondsLeft()
+        if let decision = homeDecision, diagnostics.lastHome?.at == decision.reportAt {
+            diagnostics.lastHome?.usedYouTube = decision.usedYouTube
+        }
         recommendationsDiagnostics = diagnostics
     }
 

@@ -73,6 +73,35 @@ private final class GatedHTTP: HTTPClient, @unchecked Sendable {
     }
 }
 
+private final class Counter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var count = 0
+    var value: Int { lock.withLock { count } }
+    func bump() { lock.withLock { count += 1 } }
+}
+
+/// Answers every call 200 and notes whether the store still held credentials when the call arrived.
+private final class StoreWatcher: HTTPClient, @unchecked Sendable {
+    private let store: InMemoryTVTokenStore
+    private let lock = NSLock()
+    private var seen: [Bool] = []
+    init(store: InMemoryTVTokenStore) { self.store = store }
+    var storedAtRequest: [Bool] { lock.withLock { seen } }
+
+    func send(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
+        let has = ((try? store.load()) ?? nil) != nil
+        lock.withLock { seen.append(has) }
+        return (Data(), HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: [:])!)
+    }
+}
+
+private struct UnclearableStore: TVTokenStoring {
+    let inner: InMemoryTVTokenStore
+    func load() throws -> TVCredentials? { try inner.load() }
+    func save(_ credentials: TVCredentials) throws { try inner.save(credentials) }
+    func clear() throws { throw NoSlopError.oauth("Keychain error") }
+}
+
 private struct Rig {
     let http = MockHTTPClient()
     let store = InMemoryTVTokenStore()
@@ -422,18 +451,67 @@ private func stored(expiresIn: Double, clock: Date = Date(timeIntervalSince1970:
         let rig = Rig(credentials: stored(expiresIn: 3000))
         rig.http.enqueue("oauth2.googleapis.com/revoke", status: 400, body: Data("{}".utf8))
         rig.http.enqueueError("youtube.com/o/oauth2/revoke", NoSlopError.network("offline"))
-        let revoked = await rig.service.disconnect()
-        #expect(revoked == false)
+        let result = await rig.service.disconnect()
+        #expect(result.revoked == false)
+        #expect(result.clearedLocally)
         #expect(try rig.store.load() == nil)
         #expect(await rig.service.currentAccount() == nil)
         #expect(rig.http.requests.count == 2)
+    }
+
+    @Test func disconnectClearsTheCredentialsBeforeTheRevokeCalls() async throws {
+        let store = InMemoryTVTokenStore()
+        try store.save(stored(expiresIn: 3000))
+        let seen = StoreWatcher(store: store)
+        let service = TVAuthService(
+            http: seen, store: store, defaults: UserDefaults(suiteName: "tvsynthetic.\(UUID().uuidString)")!,
+            now: { Date(timeIntervalSince1970: 1_800_000_000) }, sleep: { _ in }
+        )
+        let result = await service.disconnect()
+        #expect(result.revoked)
+        #expect(seen.storedAtRequest == [false])
+        #expect(try store.load() == nil)
+    }
+
+    @Test func aStoreThatCannotClearIsReportedNotSwallowed() async throws {
+        let inner = InMemoryTVTokenStore()
+        try inner.save(stored(expiresIn: 3000))
+        let http = MockHTTPClient()
+        http.enqueue("oauth2.googleapis.com/revoke", body: Data())
+        let service = TVAuthService(
+            http: http, store: UnclearableStore(inner: inner), defaults: UserDefaults(suiteName: "tvsynthetic.\(UUID().uuidString)")!,
+            now: { Date(timeIntervalSince1970: 1_800_000_000) }, sleep: { _ in }
+        )
+        let result = await service.disconnect()
+        // The grant is still revoked at Google; the owner is told the device kept the sign-in.
+        #expect(result.revoked)
+        #expect(result.clearedLocally == false)
+    }
+
+    @Test func anEndedGrantTellsTheAppOnce() async throws {
+        let rig = Rig(credentials: stored(expiresIn: 10))
+        let calls = Counter()
+        await rig.service.onGrantEnded { calls.bump() }
+        rig.queueToken(#"{"error":"invalid_grant"}"#, status: 400)
+        await #expect(throws: NoSlopError.recommendationsNotConnected) { _ = try await rig.service.accessToken() }
+        for _ in 0..<50 where calls.value == 0 { try await Task.sleep(for: .milliseconds(20)) }
+        #expect(calls.value == 1)
+
+        // A failure that is not an ended grant says nothing.
+        let other = Rig(credentials: stored(expiresIn: 10))
+        let quiet = Counter()
+        await other.service.onGrantEnded { quiet.bump() }
+        other.queueToken(#"{"error":"temporarily_unavailable"}"#, status: 503)
+        await #expect(throws: (any Error).self) { _ = try await other.service.accessToken() }
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(quiet.value == 0)
     }
 
     @Test func disconnectTriesTheFormThenTheJSONRevokeAndStopsAtTheFirst200() async throws {
         let rig = Rig(credentials: stored(expiresIn: 3000))
         rig.http.enqueue("oauth2.googleapis.com/revoke", status: 400, body: Data())
         rig.http.enqueue("youtube.com/o/oauth2/revoke", body: Data())
-        #expect(await rig.service.disconnect() == true)
+        #expect(await rig.service.disconnect().revoked == true)
         let form = rig.http.requests[0]
         #expect(form.url?.absoluteString == "https://oauth2.googleapis.com/revoke")
         #expect(form.value(forHTTPHeaderField: "Content-Type") == "application/x-www-form-urlencoded")
@@ -445,13 +523,13 @@ private func stored(expiresIn: Double, clock: Date = Date(timeIntervalSince1970:
 
         let first = Rig(credentials: stored(expiresIn: 3000))
         first.http.enqueue("oauth2.googleapis.com/revoke", body: Data())
-        #expect(await first.service.disconnect() == true)
+        #expect(await first.service.disconnect().revoked == true)
         #expect(first.http.requests.count == 1)
     }
 
     @Test func disconnectWithNothingStoredIsQuietAndFalse() async {
         let rig = Rig()
-        #expect(await rig.service.disconnect() == false)
+        #expect(await rig.service.disconnect().revoked == false)
         #expect(rig.http.requests.isEmpty)
     }
 

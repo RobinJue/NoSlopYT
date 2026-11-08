@@ -14,19 +14,20 @@ A personal YouTube client for iPhone/iPad that feels like the real YouTube app �
 4. Optional Google sign-in (official OAuth) that imports the owner's YouTube subscriptions, playlists and liked videos, and lets them subscribe/unsubscribe, like and add to playlists on their real account.
 5. Works fully without sign-in: search, watch, channels, playlists, local subscriptions, history, Watch Later, local playlists.
 6. "No slop" by default: Shorts hidden everywhere, ads/AI-summary blocks never shown, SponsorBlock auto-skips sponsor/self-promo/interaction segments, DeArrow replaces clickbait titles, user block lists for channels and keywords.
+7. Optional YouTube recommendations connection (added 8 Nov 2026): signs in with YouTube's TV device-code flow to show YouTube's own Home (through the same filters), send "Not interested" and "Don't recommend channel" from Home cards, and report what is watched (after 30 s). Separate from the Google sign-in, off until connected, three switches, Diagnostics in Settings. Details: `2026-11-04-youtube-recommendations-design.md`.
 
 ## Non-goals
 
 - Shorts (of any kind), live chat, posting comments, uploads, YouTube Music, Kids, notifications, Chromecast.
-- YouTube's personalized algorithmic home feed (not exposed to third-party apps by Google's API); we build our own on-device "For you" instead.
+- YouTube's personalized algorithmic home feed as a default: the app builds its own on-device "For you" instead. (Amended 8 Nov 2026: it is a goal of the optional YouTube recommendations connection, see goal 7 and `2026-11-04-youtube-recommendations-design.md`. Without the connection the on-device mix stays.)
 - App Store distribution. This is a personal app, installed from Xcode.
 - Any server component. Everything runs on the phone.
 
 ## Anti-goals (would make it a failure even if it "works")
 
 - Showing any ad, promoted item, Short, or AI-summary block.
-- Sending the user's watch history or searches anywhere except YouTube itself (needed for search/playback) — no analytics, no third-party trackers. SponsorBlock/DeArrow lookups use their privacy-preserving hash-prefix APIs.
-- Risking the owner's Google account: we never scrape with their cookies or impersonate the official app with their credentials; account features use only the official YouTube Data API with OAuth.
+- Sending the user's watch history or searches anywhere except YouTube itself (needed for search/playback) — no analytics, no third-party trackers. Still true with the recommendations connection: watch reports go only to YouTube, only while connected and only with "Send what I watch to YouTube" on; searches and everything else stay anonymous. SponsorBlock/DeArrow lookups use their privacy-preserving hash-prefix APIs.
+- Risking the owner's Google account: we never scrape with their cookies; account features use only the official YouTube Data API with OAuth. One scoped exception (*owner*'s decision, 4 Nov 2026): the optional YouTube recommendations connection signs in as YouTube's TV app and is used only for Home, card feedback (Not interested, Don't recommend channel) and watch reports. It is unofficial, against YouTube's terms and can break at any time; every part fails soft and has its own switch.
 - Losing user data (subscriptions, history, downloads) on upgrade, corrupted files, or sign-out.
 
 ## Platform & stack (builder's call)
@@ -59,7 +60,7 @@ Findings that shape the design:
 - **Downloads must use HTTP Range chunks.** A plain GET of a stream is throttled (~30 KB/s); 8–10 MiB `Range` requests run at full line speed (1.6 MB/s measured).
 - **Muxing works on-device**: `AVMutableComposition` (video track + audio track) → `AVAssetExportSession(preset: Passthrough)` → `.mp4`. **Pitfall:** AVFoundation reports twice the real duration for YouTube's fragmented MP4 streams (37.9 s for an 18.9 s video). Always insert time ranges clamped to the true duration (`approxDurationMs` of the format; fall back to `lengthSeconds`), for audio-only downloads too — verified this yields correct 18.93 s video+audio.
 - Search results contain ad slots (`adSlotRenderer`), Shorts (`shortsLockupViewModel` in shelves), and AI summaries (`videoSummaryContentViewModel`) — parsers drop ads/AI blocks and flag Shorts. Channel/playlist/related items use the new `lockupViewModel`; search uses `videoRenderer`, `channelRenderer`, and `lockupViewModel` for playlists. In `channelRenderer`, `subscriberCountText` holds the **@handle** and `videoCountText` holds the **subscriber count** (YouTube quirk).
-- Anonymous home (`FEwhat_to_watch`) is empty and `FEtrending` returns 400 — there is no anonymous recommendation feed to reuse.
+- Anonymous home (`FEwhat_to_watch`) is empty and `FEtrending` returns 400 — there is no anonymous recommendation feed to reuse. (Signed in through the optional TV connection, Home is personal; that is the only use of it.)
 - Search suggestions: `GET https://suggestqueries.google.com/complete/search?client=firefox&ds=yt&hl=<hl>&q=<q>` → `["q",["s1","s2",…],…]`.
 - Channel uploads without quota: RSS `https://www.youtube.com/feeds/videos.xml?channel_id=<UC…>` (latest 15; Shorts recognizable by `/shorts/` links; views in `media:statistics`; no durations).
 
@@ -78,7 +79,7 @@ Real responses for all of the above are committed as test fixtures in `NoSlopKit
 
 Tab bar: **Home · Subscriptions · Library · Search** (search uses the iOS 18 search tab role).
 
-- **Home — "For you"**: computed on-device. "Continue watching" row (unfinished history), then a vertical feed interleaving (a) related videos of the last few watched videos (deduped, unwatched, filtered) and (b) fresh uploads from subscriptions (every third slot). With no history: latest from subscriptions. With nothing at all: a welcome card (search, sign in, or subscribe) plus topic chips that run searches.
+- **Home — "For you"**: computed on-device. "Continue watching" row (unfinished history), then a vertical feed interleaving (a) related videos of the last few watched videos (deduped, unwatched, filtered) and (b) fresh uploads from subscriptions (every third slot). With no history: latest from subscriptions. With nothing at all: a welcome card (search, sign in, or subscribe) plus topic chips that run searches. When the optional YouTube recommendations connection is on, Home shows Continue watching and then YouTube's own Home (through the same filters) instead, and falls back to this mix with a notice when YouTube's Home does not load.
 - **Subscriptions**: horizontal strip of subscribed channel avatars, then a chronological feed of uploads from all subscriptions (Google + local), Shorts removed, pull to refresh. Last feed cached to disk for instant start.
 - **Search**: suggestions while typing, recent searches, results (videos, channels, playlists) with infinite scroll, filters (type, sort, duration, upload date). Pasting a YouTube link opens it directly.
 - **Watch** (slides up over the tabs; drag down to minimize into a mini player above the tab bar): 16:9 player on top; below: title, views · date, channel row with Subscribe, action row (Like (signed in), Save to Watch Later, Add to playlist, Download, Share), expandable description with clickable links/timestamps/hashtags, chapters, comments teaser → comments sheet with infinite scroll and replies, related videos ("Up next").

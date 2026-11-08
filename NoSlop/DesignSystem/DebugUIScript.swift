@@ -13,6 +13,9 @@ import UIKit
 /// - `tap=<label>`: a tap on the element that VoiceOver reads as `<label>`. Needs the accessibility machinery of the
 ///   simulator to be on, once (see `AccessibilityDump`).
 /// - `pull`: pull to refresh on the biggest scroll view on screen that has a refresh control
+/// - `scroll=<points>|end`: the biggest scroll view on screen scrolls down by that many points from its top, or to its
+///   very end (what `-scrollToEnd` does, without needing the mini player), for lists that start below the screen, such as
+///   Settings
 /// - `tab=<home|subscriptions|library|search>`: a tap on a tab of the tab bar
 /// - `offline=on|off`: the mock connection (`-mockOffline`) goes away or comes back
 /// - `deArrowServer=on|off`: the mock DeArrow service (`-offlineDeArrow`) comes back or goes away
@@ -62,6 +65,12 @@ enum DebugUIScript {
                 log.info("[ui] tap \"\(value, privacy: .public)\" handled=\(handled)")
             case "pull":
                 log.info("[ui] pull handled=\(DebugLaunchHooks.pullToRefresh())")
+            case "scroll":
+                if value == "end" {
+                    DebugLaunchHooks.scrollBiggestScrollViewToEnd()
+                } else if let points = Double(value) {
+                    DebugLaunchHooks.scrollBiggestScrollView(by: points)
+                }
             case "tab":
                 if let tab = tabs[value] { env.router.selectedTab = tab }
             case "offline":
