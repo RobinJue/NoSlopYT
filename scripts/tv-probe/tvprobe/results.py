@@ -8,16 +8,31 @@ HOME_TRIES_NEEDED = 2
 REPORTS_NEEDED = 3
 
 
+HOME_DEFAULTS = (("browse_id", "FEwhat_to_watch"), ("host", "www"), ("context", "full"), ("policy", "none"))
+
+
+def _variant_flags(e: dict) -> List[str]:
+    """The non-default request options of a home try; events without the fields count as default."""
+    return ["%s %s" % ({"policy": "visitor"}.get(k, k.replace("_", " ")), e[k]) for k, d in HOME_DEFAULTS if e.get(k) not in (None, d)]
+
+
 def _home(log: List[dict]) -> List[str]:
     tries = [e for e in log if e.get("event") == "home_try"]
     if not tries:
         return ["Home: not run"]
-    passed = sum(1 for e in tries if e.get("try_passes") is True)
-    ok = passed >= HOME_TRIES_NEEDED and passed * 3 >= len(tries) * 2
-    lines = ["Home: %s (%d of %d tries)" % ("pass" if ok else "fail", passed, len(tries))]
-    best = max((e.get("visible_unique") or 0) for e in tries)
+    default = [e for e in tries if not _variant_flags(e)]
+    variants = [e for e in tries if _variant_flags(e)]
+    extra = ["- informational variant (%s): %s" % (", ".join(_variant_flags(e)),
+                                                  "pass" if e.get("try_passes") is True else "fail")
+             for e in variants]
+    if not default:
+        return ["Home: not run (no default tries)"] + extra
+    passed = sum(1 for e in default if e.get("try_passes") is True)
+    ok = passed >= HOME_TRIES_NEEDED and passed * 3 >= len(default) * 2
+    lines = ["Home: %s (%d of %d tries)" % ("pass" if ok else "fail", passed, len(default))]
+    best = max((e.get("visible_unique") or 0) for e in default)
     lines.append("- most visible videos in one try: %d (needs 8 within 3 pages)" % best)
-    return lines
+    return lines + extra
 
 
 def _credited(report: dict, histories: List[dict]) -> bool:
@@ -42,7 +57,8 @@ def _reporting(log: List[dict]) -> List[str]:
 
     verdict, extra, seen = [], [], set()
     for r in reports:
-        if len(verdict) < REPORTS_NEEDED and r.get("video") not in seen:
+        # a failed ping attempt neither joins the verdict nor blocks a retry of the same video
+        if sent(r) and len(verdict) < REPORTS_NEEDED and r.get("video") not in seen:
             seen.add(r.get("video"))
             verdict.append(r)
         else:

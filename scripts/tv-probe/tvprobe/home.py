@@ -360,5 +360,6 @@ def run_home(args, state, send, out=print) -> int:
         next_token = page.section_continuation
     passed, count = home_try_passes(pages)
     out(json.dumps({"try_passes": passed, "visible_unique": count}))
-    state.log("home_try", try_passes=passed, visible_unique=count)
+    state.log("home_try", try_passes=passed, visible_unique=count, browse_id=args.browse_id, host=args.host,
+              context=args.context, policy=args.visitor)  # "visitor" itself is a forbidden log field name
     return 0

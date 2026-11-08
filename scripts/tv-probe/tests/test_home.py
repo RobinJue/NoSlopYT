@@ -315,6 +315,9 @@ class HomeCommandTests(unittest.TestCase):
         for secret in ("FAKEACCESS", "SECTIONCONT", "FAKEPARAMS"):
             self.assertNotIn(secret, text)
         self.assertIn("home_try", text)
+        row = [json.loads(l) for l in text.splitlines() if '"home_try"' in l][0]
+        self.assertEqual((row["browse_id"], row["host"], row["context"], row["policy"]),
+                         ("FEwhat_to_watch", "www", "full", "none"))
 
 
 class ScrubbedFlagTests(unittest.TestCase):
