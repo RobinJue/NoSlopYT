@@ -1,6 +1,6 @@
 # YouTube recommendations — Design
 
-Date: 2026-11-04, updated 2026-11-08 · Status: waiting for the owner's approval. Decisions the owner made are marked *owner*; everything else is the designer's call unless it says *builder*.
+Date: 2026-11-04, updated 2026-11-08 · Status: approved by the owner on 2026-11-08. Next: the Phase 0 plan, docs/superpowers/plans/2026-11-08-youtube-recommendations-phase0.md. Decisions the owner made are marked *owner*; everything else is the designer's call unless it says *builder*.
 
 Companion: [research notes](2026-11-04-youtube-recommendations-research.md) (what the open-source apps do today, with dates and sources). App spec: [2026-11-03-noslop-design.md](2026-11-03-noslop-design.md).
 
