@@ -116,6 +116,14 @@ final class PlayerController {
 
     var isFullscreen = false
 
+    /// The picture fills the player and is cropped where it does not fit (zoomed in), instead of fitting inside it with
+    /// black bars around it. Off for every video: the choice in the settings of a video is for that video only.
+    var fillsScreen = false
+
+    /// Which way the viewer is scanning right now, holding the left (back) or the right (forward) half of the video; nil
+    /// when they are not.
+    private(set) var scanDirection: PlaybackScan.Direction?
+
     /// Playback speed. Setting it applies it at once.
     var rate: Float {
         didSet { rateDidChange() }
@@ -161,6 +169,11 @@ final class PlayerController {
     @ObservationIgnored private var isSeeking = false
     @ObservationIgnored private var seekToken = 0
     @ObservationIgnored private var resumeAfterSeek = false
+    /// The steps of a backward scan, and what a scan has to put back when it ends.
+    @ObservationIgnored private var scanTask: Task<Void, Never>?
+    @ObservationIgnored private var scanWasPlaying = false
+    @ObservationIgnored private var scanStart = 0.0
+    @ObservationIgnored private var scanTarget = 0.0
 
     @ObservationIgnored private var recoveryAttempts = 0
     @ObservationIgnored private var recoveryBaseline: Double = 0
@@ -508,6 +521,8 @@ final class PlayerController {
         saveProgress(force: true)
         closeWatchViewing(position: currentTime)
         beginWatchViewing(of: video)
+        abandonScan()
+        fillsScreen = false
         tearDownItem()
         cancelWork()
         startedThisRun.insert(video.id)
@@ -792,6 +807,7 @@ final class PlayerController {
     /// item, so Picture in Picture and AirPlay do not see an empty player in between. The video area stays black until
     /// the new item has its first frame (seen in the simulator).
     private func tearDownItem(replacingRightAway: Bool = false) {
+        abandonScan()
         itemObservations.removeAll()
         let center = NotificationCenter.default
         for token in itemNotifications {
@@ -892,6 +908,7 @@ final class PlayerController {
     private func itemDidPlayToEnd() {
         guard let video = currentVideo else { return }
         stallTask?.cancel()
+        abandonScan()
         state = .ended
         if duration > 0, !isLive {
             currentTime = duration
@@ -1536,6 +1553,8 @@ final class PlayerController {
     /// alone: `audioInterruptionBegan` and the background handling rely on it. So does the controller's own `pause()` of
     /// an item that is going away, which arrives while nothing is ready (`PlaybackIntent` has the rule).
     private func playerRateDidChange(reasonNamed name: String?) {
+        // A scan changes the rate itself; that is not the viewer pausing or resuming.
+        guard scanDirection == nil else { return }
         let isSettled: Bool
         switch state {
         case .loading, .playing, .paused, .buffering: isSettled = true
@@ -1568,6 +1587,8 @@ final class PlayerController {
 
     private func timeControlStatusChanged() {
         guard currentVideo != nil, avPlayer.currentItem != nil, isItemReady, !isRecovering else { return }
+        // A scan pauses and plays the player on its own: the screen keeps saying what the viewer chose.
+        guard scanDirection == nil else { return }
         if case .failed = state { return }
         switch avPlayer.timeControlStatus {
         case .playing:
@@ -1595,6 +1616,91 @@ final class PlayerController {
             break
         }
         updateNowPlaying()
+    }
+
+    // MARK: Scanning (hold the video)
+
+    /// Whether holding the video can scan it: the video has loaded and is not a live stream, and nothing is being
+    /// recovered or has failed.
+    var canScan: Bool {
+        guard currentVideo != nil, avPlayer.currentItem != nil, isItemReady, !isLive, !isRecovering, failureMessage == nil else {
+            return false
+        }
+        switch state {
+        case .playing, .paused, .buffering: return true
+        case .idle, .loading, .ended, .failed: return false
+        }
+    }
+
+    /// Starts scanning at `PlaybackScan.speed` for as long as `endScan` is not called: forwards by playing faster, backwards
+    /// by stepping the playhead back (a stream cannot be counted on to play in reverse: YouTube's HLS streams carry no
+    /// frames for it). The screen keeps showing what the viewer had chosen (playing or paused); `endScan` puts it back.
+    func beginScan(_ direction: PlaybackScan.Direction) {
+        guard scanDirection == nil, canScan else { return }
+        let position = avPlayer.currentTime()
+        scanStart = position.isValid && position.isNumeric && position.seconds.isFinite ? max(0, position.seconds) : currentTime
+        scanTarget = scanStart
+        scanWasPlaying = isPlaybackActive
+        scanDirection = direction
+        // A seek that was still settling belongs to what the viewer did before.
+        seekToken += 1
+        Self.log.info("scan \(String(describing: direction), privacy: .public) begins at \(self.scanStart)")
+        switch direction {
+        case .forward:
+            avPlayer.rate = Float(PlaybackScan.speed)
+        case .backward:
+            avPlayer.pause()
+            isSeeking = true
+            let start = scanStart
+            let began = ContinuousClock.now
+            scanTask = Task { [weak self] in
+                let tolerance = CMTime(seconds: PlaybackScan.seekTolerance, preferredTimescale: 600)
+                while !Task.isCancelled {
+                    guard let self else { return }
+                    let elapsed = began.duration(to: .now)
+                    let seconds = Double(elapsed.components.seconds) + Double(elapsed.components.attoseconds) / 1e18
+                    let target = PlaybackScan.reverseTarget(from: start, elapsed: seconds)
+                    self.scanTarget = target
+                    self.currentTime = target
+                    // One step at a time: a slow seek makes the next step bigger, so the speed stays what it should be.
+                    _ = await self.avPlayer.seek(
+                        to: CMTime(seconds: target, preferredTimescale: 600), toleranceBefore: tolerance, toleranceAfter: tolerance
+                    )
+                    try? await Task.sleep(for: .milliseconds(30))
+                }
+            }
+        }
+    }
+
+    /// Ends a scan: playing goes on (at the speed the viewer chose) from where the scan got to, and a paused video stays
+    /// paused there.
+    func endScan() {
+        guard let direction = scanDirection else { return }
+        scanTask?.cancel()
+        scanTask = nil
+        scanDirection = nil
+        Self.log.info("scan \(String(describing: direction), privacy: .public) ends, from \(self.scanStart) to \(self.scanTarget)")
+        guard avPlayer.currentItem != nil, isItemReady, state != .ended else { return }
+        switch direction {
+        case .forward:
+            if scanWasPlaying {
+                avPlayer.rate = rate
+            } else {
+                avPlayer.pause()
+            }
+            syncTimeFromPlayer()
+        case .backward:
+            // The exact spot, then playing again if it was playing.
+            resumeAfterSeek = scanWasPlaying
+            seekPlayer(to: clampedToDuration(scanTarget))
+        }
+    }
+
+    /// Forgets a scan without putting anything back: the item it belonged to is going away, or the video is over.
+    private func abandonScan() {
+        scanTask?.cancel()
+        scanTask = nil
+        scanDirection = nil
     }
 
     // MARK: Time observer
@@ -2099,6 +2205,7 @@ final class PlayerController {
     }
 
     private func appDidEnterBackground() {
+        endScan()
         saveProgress(force: true)
         flushWatchViewing(position: currentTime)
         Task { await library.flush() }

@@ -3,8 +3,8 @@ import NoSlopKit
 import OSLog
 import SwiftUI
 
-/// Everything drawn over the video: tap to show or hide the controls, double-tap a half to jump 10 s, and the
-/// controls themselves.
+/// Everything drawn over the video: tap to show or hide the controls, double-tap a half to jump 10 s, hold a half to
+/// scan back or forward at 2×, and the controls themselves.
 ///
 /// - Top: chevron (minimize, or leave full screen), title, AirPlay, captions on/off, settings menu.
 /// - Centre: back 10 s, play/pause (a spinner while buffering), forward 10 s, and Next (the next queued video, or the first
@@ -28,6 +28,12 @@ struct PlayerControlsView: View {
     @State private var isSettingsOpen = false
     @State private var ripple: Ripple?
     @State private var rippleTask: Task<Void, Never>?
+    /// A finger is down on the video (reset by SwiftUI when the touch ends or is cancelled), and the wait before it counts
+    /// as a hold.
+    @GestureState private var isFingerDown = false
+    @State private var holdTask: Task<Void, Never>?
+    @State private var holdHasStarted = false
+    @State private var holdHasMoved = false
 
     private enum Side {
         case leading, trailing
@@ -85,6 +91,11 @@ struct PlayerControlsView: View {
                 rippleView(ripple)
             }
 
+            if let direction = player.scanDirection {
+                scanBadge(direction, at: player.currentTime)
+                    .transition(.opacity)
+            }
+
             // Captions and "Skipped sponsor · Undo" sit above the controls and their dimming. While the controls show
             // they go in the empty strips between them, so neither ever sits on a button.
             PlayerOverlayTexts(
@@ -96,6 +107,7 @@ struct PlayerControlsView: View {
             )
         }
         .animation(.easeInOut(duration: 0.2), value: showsChrome)
+        .animation(.easeInOut(duration: 0.15), value: player.scanDirection)
         .animation(.spring(duration: 0.3), value: player.skipNotice)
         .onChange(of: player.state) { _, newState in
             switch newState {
@@ -121,9 +133,20 @@ struct PlayerControlsView: View {
         .task {
             scheduleHide()
         }
+        .onChange(of: isFingerDown) { _, down in
+            // The finger is up (or the touch was cancelled): no hold is waiting and no scan goes on.
+            guard !down else { return }
+            holdTask?.cancel()
+            holdTask = nil
+            holdHasStarted = false
+            holdHasMoved = false
+            player.endScan()
+        }
         .onDisappear {
             hideTask?.cancel()
             rippleTask?.cancel()
+            holdTask?.cancel()
+            player.endScan()
         }
     }
 
@@ -139,6 +162,7 @@ struct PlayerControlsView: View {
                 .onTapGesture {
                     toggleChrome()
                 }
+                .simultaneousGesture(holdGesture(width: proxy.size.width, player: player))
         }
         .accessibilityElement()
         .accessibilityLabel("Video")
@@ -152,6 +176,57 @@ struct PlayerControlsView: View {
                 Button("Undo skip") { player.undoSkip() }
             }
         }
+    }
+
+    /// Holding a half of the video scans: the left half back, the right half forward, at twice the speed, until the finger
+    /// lifts. It runs next to the taps (they end before the hold counts) and tells a drag from a hold by how far the
+    /// finger moved before `PlaybackScan.holdDelay` was up.
+    private func holdGesture(width: CGFloat, player: PlayerController) -> some Gesture {
+        DragGesture(minimumDistance: 0)
+            .updating($isFingerDown) { _, state, _ in state = true }
+            .onChanged { value in
+                if !holdHasStarted {
+                    holdHasStarted = true
+                    let direction = PlaybackScan.direction(forTouchAt: value.startLocation.x, width: width)
+                    holdTask = Task {
+                        try? await Task.sleep(for: .seconds(PlaybackScan.holdDelay))
+                        guard !Task.isCancelled else { return }
+                        player.beginScan(direction)
+                    }
+                }
+                let moved = hypot(value.translation.width, value.translation.height)
+                if !holdHasMoved, moved > PlaybackScan.holdSlop, player.scanDirection == nil {
+                    // A drag, not a hold (the swipe that minimizes the player, for one).
+                    holdHasMoved = true
+                    holdTask?.cancel()
+                }
+            }
+    }
+
+    /// "2×" and where the video is, on the video while it scans: the controls with the position are usually hidden then.
+    private func scanBadge(_ direction: PlaybackScan.Direction, at time: Double) -> some View {
+        let backward = direction == .backward
+        return VStack {
+            HStack(spacing: 8) {
+                Image(systemName: backward ? "backward.fill" : "forward.fill")
+                Text("\(Int(PlaybackScan.speed))×")
+                    .fontWeight(.bold)
+                Text(Self.clock(time))
+                    .monospacedDigit()
+                    .foregroundStyle(.white.opacity(0.8))
+            }
+            .font(.subheadline)
+            .foregroundStyle(.white)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 8)
+            .background(.black.opacity(0.65), in: Capsule())
+            .padding(.top, 14)
+            Spacer(minLength: 0)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .allowsHitTesting(false)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(backward ? "Scanning back at 2 times speed" : "Scanning forward at 2 times speed")
     }
 
     /// VoiceOver does not see the toast come and go: it hears that a segment was skipped, and that it can be undone.

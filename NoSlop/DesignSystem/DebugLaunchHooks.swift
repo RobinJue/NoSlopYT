@@ -51,6 +51,8 @@ import SwiftUI
 /// - `-seedHistory '<video id>,...'`: a minute of each of these sample videos in the history at launch, the first one
 ///   the most recent.
 /// - `-seedDownload <video id>`: the mock run starts with a finished (audio only, silent) download of that sample video.
+/// - `-seedDownloadVideo <file path>` (with `-seedDownload`): the download is that video file (copied in, shown as 720p)
+///   instead of the silent audio one, so that a video plays and scans without a connection.
 /// - `-seedDownloadExtras YES` (with `-seedDownload`): that download also has what a download made online keeps for
 ///   offline playback (`DownloadExtras`): a sponsor segment at 3-6 s and an intro at 10-12 s, three chapters and two
 ///   caption tracks with their text, all called "kept" so that they can be told from what the mock services answer.
@@ -277,6 +279,16 @@ enum DebugLaunchHooks {
         let fileName = "Seeded download.m4a"
         do {
             try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+            if let path = UserDefaults.standard.string(forKey: "seedDownloadVideo") {
+                let source = URL(fileURLWithPath: path)
+                try FileManager.default.copyItem(at: source, to: root.appendingPathComponent(source.lastPathComponent))
+                let item = DownloadItem(
+                    id: "\(video.id)-720", video: video, quality: .video(maxHeight: 720), state: .completed,
+                    progress: 1, bytesDownloaded: 1, bytesTotal: 1, relativeFilePath: source.lastPathComponent
+                )
+                try JSONEncoder().encode([item]).write(to: root.appendingPathComponent("downloads.json"), options: .atomic)
+                return
+            }
             let settings: [String: Any] = [
                 AVFormatIDKey: kAudioFormatMPEG4AAC, AVSampleRateKey: 44_100, AVNumberOfChannelsKey: 1,
             ]

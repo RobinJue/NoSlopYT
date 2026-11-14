@@ -20,6 +20,9 @@ import UIKit
 ///   queue the first unwatched Up next video), `jump=<n>` a tap on the n-th row of "Playing from ..." on the watch page (1
 ///   is the next video of the queue), `watched=<video id>[,<video id>...]` records a minute of each sample video in the
 ///   history, so that autoplay passes it over, `scrollPage=<points>` scrolls the watch page
+/// - `scan=<back|forward>:<seconds>` holds the left (back) or right (forward) half of the video for that long, as a finger
+///   would: a scan at 2×, then the playback goes on (`PlayerController.beginScan` and `endScan`). `fill=<on|off>` is the
+///   switch "Zoom to fill" of the settings of the video
 /// - `quality=<auto|1080|720|480|360>` (a pick), `capQuality=<...>` (only the cap, as the connection sets it),
 ///   `rate=<speed>`, `pause`, `play`
 /// - `systemPause`, `systemPlay` reach the `AVPlayer` directly, as the Picture in Picture window or an AirPlay remote
@@ -112,6 +115,15 @@ enum PlayerDebugScript {
                 if let quality = options[value] { player.debugApplyCapOnly(quality) }
             case "rate":
                 if let rate = Float(value) { player.rate = rate }
+            case "scan":
+                let parts = value.split(separator: ":").map(String.init)
+                if parts.count == 2, let seconds = Double(parts[1]) {
+                    player.beginScan(parts[0] == "back" ? .backward : .forward)
+                    try? await Task.sleep(for: .seconds(seconds))
+                    player.endScan()
+                }
+            case "fill":
+                player.fillsScreen = value != "off"
             case "pause":
                 player.pause()
             case "play":

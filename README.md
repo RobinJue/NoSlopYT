@@ -39,6 +39,12 @@ Design: [`docs/superpowers/specs/2026-11-03-noslop-design.md`](docs/superpowers/
   in a row, never for a video you opened yourself, and never for a failure that Retry could fix (no connection, a
   busy server): that stays on its error screen. With Autoplay next video off, a failure where only a suggestion would
   follow also stays; its Next video button starts it.
+- Scans a video at 2× while you hold it: hold the left half to go back, the right half to go forward, and let go to carry
+  on from there (a double-tap on a half still jumps 10 seconds). Going forward is playback at twice the speed; going back
+  steps the playhead, because YouTube's streams do not reliably play in reverse, so it can look choppier. A live stream
+  cannot be scanned.
+- Shows the whole picture: a video that does not match the shape of the screen gets black bars and is never zoomed in or
+  cropped. The gear menu of a video has "Zoom to fill" to crop it to the player instead, for that video only.
 - Downloads videos (pick a quality, or audio only) for offline viewing. Downloads continue while the app is in the
   background, and the files show up in the Files app. A download also keeps its video's SponsorBlock segments,
   chapters and captions, so offline it still skips sponsors, shows segments and chapter marks in the seek bar, and has

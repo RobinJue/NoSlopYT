@@ -49,7 +49,13 @@ struct PlayerHostView: View {
                     .allowsHitTesting(false)
             }
 
-            VideoSurfaceView(player: player.avPlayer, pictureInPicture: player.pictureInPicture)
+            // The whole picture, with black bars where it does not fit, unless the viewer chose to fill the player for
+            // this video (which crops the picture).
+            VideoSurfaceView(
+                player: player.avPlayer,
+                pictureInPicture: player.pictureInPicture,
+                videoGravity: player.fillsScreen ? .resizeAspectFill : .resizeAspect
+            )
                 .ignoresSafeArea(edges: bleed)
                 .opacity(player.isAudioOnlyPlayback ? 0 : 1)
 

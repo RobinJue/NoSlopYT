@@ -2,7 +2,8 @@ import NoSlopKit
 import SwiftUI
 
 /// The gear in the player's top bar. It opens a small popover with quality (Auto/1080p/720p/480p/360p), playback speed
-/// (0.5x-2x) and the caption track, each a menu with the current choice ticked.
+/// (0.5x-2x) and the caption track, each a menu with the current choice ticked, and the switch that zooms the picture in
+/// to fill the player (off: the whole picture, with black bars where it does not fit). All of it is for this video only.
 ///
 /// A popover rather than a `Menu`, because the controls must not fade out while the viewer is choosing, and only a
 /// popover says when it is open (`onPresentationChange`).
@@ -48,6 +49,18 @@ struct PlayerSettingsMenu: View {
                         }
                     }
                 }
+
+                Divider()
+
+                Toggle(isOn: $player.fillsScreen) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Zoom to fill")
+                        Text("Off shows the whole picture, with black bars where it does not fit.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .frame(minHeight: 48)
 
                 if !player.captionTracks.isEmpty {
                     Divider()
