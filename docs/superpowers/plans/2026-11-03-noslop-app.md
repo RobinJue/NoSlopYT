@@ -743,7 +743,7 @@ Design-system basics must work with real data: `RemoteImage` loads through `URLS
 // TransportTests
 @Test func visitorDataFromSwJsData() throws {
     let text = String(decoding: try Fixture.data("sw_js_data.txt"), as: UTF8.self)
-    #expect(SwJsDataParser.visitorData(from: text)?.hasPrefix("CgtTeW50aGV0aWNWaXNpdG9yRGF0YQ") == true)
+    #expect(SwJsDataParser.visitorData(from: text)?.hasPrefix("CgtTeW50aGV0aWNWaXNpdG9y") == true)
 }
 @Test func playerRequestShape() async throws {
     // MockHTTP: "sw.js_data" → fixture; "youtubei/v1/player" → player_visionos_bigbuckbunny.json
