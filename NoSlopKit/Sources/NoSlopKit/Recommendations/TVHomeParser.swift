@@ -65,6 +65,31 @@ public enum TVHomeParser {
         walker.walk(reply)
         return walker.result
     }
+
+    /// Badges that sit in the statistics line of a tile next to the views and the age. They are neither.
+    private static let badges: Set<String> = ["4K", "8K", "HD", "HDR", "CC", "NEW"]
+
+    /// The views and the age out of the items of a tile's second line.
+    ///
+    /// YouTube sends them as separate items with the bullet between as an item of its own: "188K views", "•",
+    /// "3 days ago", and sometimes a badge ("4K") after. So the age is not the second item (that is the bullet), and
+    /// the items are read by what they say ("views", "ago"). Bullets, blank items and badges are dropped first. When
+    /// the words are in a language this parser has no words for, the first item is the views and the next one the age,
+    /// which is how YouTube orders them.
+    static func statistics(from items: [String]) -> (views: String?, published: String?) {
+        var parts: [String] = []
+        for item in items {
+            for piece in item.split(whereSeparator: { $0 == "•" || $0 == "·" }) {
+                let text = piece.trimmingCharacters(in: .whitespacesAndNewlines)
+                let isBullet = !text.contains { $0.isLetter || $0.isNumber }
+                if !text.isEmpty, !isBullet, !badges.contains(text.uppercased()) { parts.append(text) }
+            }
+        }
+        let found = ItemParser.details(from: parts.map { ItemParser.MetadataPart(text: $0) })
+        let views = found.viewsText ?? (found.publishedText == nil ? parts.first : nil)
+        let published = found.publishedText ?? parts.first { $0 != views }
+        return (views, published)
+    }
 }
 
 private struct Walker {
@@ -222,7 +247,8 @@ private struct Walker {
             let browseID = metadata?.findAll("browseId").compactMap(\.string).first { $0.hasPrefix("UC") }
             channel = ChannelRef(id: browseID ?? "", name: channelName)
         }
-        let viewText = itemText(lineItems(1), 0)
+        let statistics = TVHomeParser.statistics(from: lineItems(1).indices.compactMap { itemText(lineItems(1), $0) })
+        let viewText = statistics.views
 
         result.videos.append(VideoSummary(
             id: videoID,
@@ -232,7 +258,7 @@ private struct Walker {
             durationSeconds: InnerTubeText.parseDuration(durationText),
             viewCount: InnerTubeText.parseCount(viewText),
             viewCountText: viewText,
-            publishedText: itemText(lineItems(1), 1),
+            publishedText: statistics.published,
             isLive: live,
             isUpcoming: upcoming,
             isShort: false,

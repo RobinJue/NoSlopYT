@@ -117,6 +117,64 @@ import Testing
         #expect(parsed.shorts == 0)
     }
 
+    /// A tile whose lines are the channel and then the given items of the statistics line, one `lineItemRenderer` each.
+    private func tile(id: String, statistics items: [String]) -> String {
+        func line(_ texts: [String]) -> String {
+            let renderers = texts.map { "{\"lineItemRenderer\":{\"text\":{\"simpleText\":\"\($0)\"}}}" }
+            return "{\"lineRenderer\":{\"items\":[\(renderers.joined(separator: ","))]}}"
+        }
+        let lines = "\"lines\":[\(line(["Some Channel"])),\(line(items))]"
+        return tile(id: id).replacingOccurrences(of: "\"title\":{\"simpleText\":\"T\"}", with: "\"title\":{\"simpleText\":\"T\"},\(lines)")
+    }
+
+    @Test func theAgeIsTheItemAfterTheBulletNotTheBullet() throws {
+        let parsed = try page(items: tile(id: "vidAGE00001", statistics: ["188K views", "•", "3 days ago"]))
+        let video = try #require(parsed.videos.first)
+        #expect(video.viewCountText == "188K views")
+        #expect(video.viewCount == 188_000)
+        #expect(video.publishedText == "3 days ago")
+    }
+
+    @Test func aBadgeAfterTheAgeIsNeitherTheViewsNorTheAge() throws {
+        let parsed = try page(items: tile(id: "vidAGE00002", statistics: ["188K views", "•", "3 days ago", "•", "4K"]))
+        let video = try #require(parsed.videos.first)
+        #expect(video.viewCountText == "188K views")
+        #expect(video.publishedText == "3 days ago")
+    }
+
+    @Test func aBulletInsideOneItemSplitsIntoViewsAndAge() throws {
+        let parsed = try page(items: tile(id: "vidAGE00003", statistics: ["188K views • 3 days ago"]))
+        let video = try #require(parsed.videos.first)
+        #expect(video.viewCountText == "188K views")
+        #expect(video.publishedText == "3 days ago")
+    }
+
+    @Test func aLiveTileHasNoAgeAndAnUpcomingOneHasItsDate() throws {
+        let live = try #require(try page(items: tile(id: "vidAGE00004", statistics: ["1.2K watching"])).videos.first)
+        #expect(live.viewCountText == "1.2K watching")
+        #expect(live.publishedText == nil)
+        let upcoming = try #require(try page(items: tile(id: "vidAGE00005", statistics: ["Scheduled for 12/5/26"])).videos.first)
+        #expect(upcoming.publishedText == "Scheduled for 12/5/26")
+    }
+
+    @Test func statisticsAreTakenByPositionWhenTheWordsAreInAnotherLanguage() {
+        let german = TVHomeParser.statistics(from: ["188.000 Aufrufe", "•", "vor 3 Tagen", "•", "4K"])
+        #expect(german.views == "188.000 Aufrufe")
+        #expect(german.published == "vor 3 Tagen")
+        let mixed = TVHomeParser.statistics(from: ["188K views", "•", "vor 3 Tagen"])
+        #expect(mixed.views == "188K views")
+        #expect(mixed.published == "vor 3 Tagen")
+    }
+
+    @Test func statisticsWithNothingOrOnlyBulletsAreEmpty() {
+        for items in [[], ["•"], ["  ", "·", "|"]] as [[String]] {
+            let result = TVHomeParser.statistics(from: items)
+            #expect(result.views == nil && result.published == nil)
+        }
+        let only = TVHomeParser.statistics(from: ["188K views", "•"])
+        #expect(only.views == "188K views" && only.published == nil)
+    }
+
     @Test func aTileWithAYPCBadgeIsSkippedAsPaid() throws {
         let paid = tile(id: "vidPAID0001").replacingOccurrences(
             of: "\"metadata\":{", with: "\"metadata\":{\"badges\":[{\"metadataBadgeRenderer\":{\"style\":\"BADGE_STYLE_TYPE_YPC\"}}],")

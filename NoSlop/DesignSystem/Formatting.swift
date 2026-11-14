@@ -40,9 +40,15 @@ enum Formatting {
         if let count = video.viewCount {
             return compactViewCount(count)
         }
-        guard let text = video.viewCountText?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty else {
-            return nil
-        }
+        return meaningful(video.viewCountText)
+    }
+
+    /// `text` trimmed, or nil when it says nothing: blank, or only a bullet. A bullet kept from an older copy of a
+    /// Home page (the age used to be read from the item next to the views, which is the bullet) must not show up as
+    /// an age, and must not hide the real one that `publishedAt` gives.
+    private static func meaningful(_ text: String?) -> String? {
+        guard let text = text?.trimmingCharacters(in: .whitespacesAndNewlines),
+              text.contains(where: { $0.isLetter || $0.isNumber }) else { return nil }
         return text
     }
 
@@ -57,10 +63,7 @@ enum Formatting {
 
     /// "11 years ago": YouTube's text when present, else a relative date from `publishedAt`.
     static func ageText(for video: VideoSummary) -> String? {
-        if let text = video.publishedText?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty {
-            return text
-        }
-        return video.publishedAt.map(relativeDate)
+        meaningful(video.publishedText) ?? video.publishedAt.map(relativeDate)
     }
 
     /// What is left of a video, rounded up to whole minutes: "Less than a minute left", "12 min left",
