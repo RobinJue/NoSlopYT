@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="332" viewBox="0 0 720 332" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" role="img" aria-labelledby="t d">
+<title id="t">Hold to scan</title>
+<desc id="d">Hold the left half of a video to go back at 2 times speed, the right half to go forward at 2 times speed. Let go to carry on from there.</desc>
+<rect x="180.5" y="20.5" width="359" height="202" rx="14" fill="#151B23" stroke="#3D444D" stroke-width="1.5"/>
+<path d="M194,20 H360.0 V223 H194 A14,14 0 0 1 180,209 V34 A14,14 0 0 1 194,20 Z" fill="#FF6B66" fill-opacity="0.12"/>
+<path d="M360.0,20 H526 A14,14 0 0 1 540,34 V209 A14,14 0 0 1 526,223 H360.0 Z" fill="#FF6B66" fill-opacity="0.12"/>
+<line x1="360" y1="36" x2="360" y2="179" stroke="#6E7781" stroke-width="2" stroke-dasharray="5 5"/>
+<line x1="202" y1="201" x2="518" y2="201" stroke="#3D444D" stroke-width="5" stroke-linecap="round"/>
+<line x1="202" y1="201" x2="375.8" y2="201" stroke="#FF6B66" stroke-width="5" stroke-linecap="round"/>
+<circle cx="375.8" cy="201" r="7.5" fill="#0D1117" stroke="#FF6B66" stroke-width="3"/>
+<path d="M272,66 L256,82 L272,98" fill="none" stroke="#FF6B66" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M292,66 L276,82 L292,98" fill="none" stroke="#FF6B66" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="270" y="132" font-size="24" font-weight="700" fill="#FF6B66" text-anchor="middle">2×</text>
+<circle cx="270" cy="166" r="20" fill="none" stroke="#FF6B66" stroke-opacity="0.4" stroke-width="2"/>
+<circle cx="270" cy="166" r="10" fill="#FF6B66"/>
+<path d="M448,66 L464,82 L448,98" fill="none" stroke="#FF6B66" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M428,66 L444,82 L428,98" fill="none" stroke="#FF6B66" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="450" y="132" font-size="24" font-weight="700" fill="#FF6B66" text-anchor="middle">2×</text>
+<circle cx="450" cy="166" r="20" fill="none" stroke="#FF6B66" stroke-opacity="0.4" stroke-width="2"/>
+<circle cx="450" cy="166" r="10" fill="#FF6B66"/>
+<text x="270" y="259" font-size="16" font-weight="600" fill="#F0F6FC" text-anchor="middle">Hold the left half</text>
+<text x="270" y="280" font-size="14.5" font-weight="400" fill="#9DA7B3" text-anchor="middle">to go back at 2×</text>
+<text x="450" y="259" font-size="16" font-weight="600" fill="#F0F6FC" text-anchor="middle">Hold the right half</text>
+<text x="450" y="280" font-size="14.5" font-weight="400" fill="#9DA7B3" text-anchor="middle">to go forward at 2×</text>
+<text x="360" y="323" font-size="14.5" font-weight="400" fill="#9DA7B3" text-anchor="middle">Let go to carry on from there.</text>
+</svg>

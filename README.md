@@ -30,13 +30,15 @@
 No Slop is a YouTube app for iPhone and iPad that lets you do what you came for: watch videos. No ads, no Shorts,
 no sponsor reads, no clickbait titles. Everything runs on your phone. There is no server, and you do not need an account.
 
-**What you get**
+## What you get
 
-- Videos without ads, up to 1080p. They keep playing with the screen locked, in Picture in Picture and on AirPlay.
-- Downloads, to watch offline.
-- Sponsor segments are skipped, and clickbait titles are swapped for plain ones.
-- Hold the left or right side of a video to go back or forward at 2× speed.
-- Watch Later, history and playlists, all kept on your device.
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/readme/feature-grid-dark.svg">
+    <img alt="What you get: no ads, up to 1080p. Keeps playing with the screen locked, in Picture in Picture and on AirPlay. Offline downloads, in a quality you pick or audio only. Sponsor segments skipped. Clickbait titles swapped for plain ones. Hold the left half to go back, the right half to go forward, at 2×. Fit with black bars, or zoom to fill. Watch Later, history and playlists kept on your device." src="docs/readme/feature-grid-light.svg" width="800">
+  </picture>
+</p>
+
 - Optional: sign in with Google for your own subscriptions and likes, or connect YouTube to see your own Home.
 - No analytics, no tracking, and no third-party code.
 
@@ -45,10 +47,29 @@ no sponsor reads, no clickbait titles. Everything runs on your phone. There is n
 > Terms of Service, and YouTube can break or block it at any time. Use it at your own risk.
 > [More on this](#credits-and-disclaimer).
 
+## Where your data goes
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/readme/how-it-works-dark.svg">
+    <img alt="The app on your phone talks directly to YouTube, SponsorBlock and DeArrow. Google sign-in and the YouTube connection are optional. There is no No Slop server, no analytics, no tracking and no third-party code." src="docs/readme/how-it-works-light.svg" width="800">
+  </picture>
+</p>
+
+The app talks straight to YouTube, SponsorBlock and DeArrow, and to Google only if you sign in. SponsorBlock and DeArrow
+are asked about a short hash of the video ID, never the ID itself. The details are under [How it works](#how-it-works).
+
 ## Install
 
 You build No Slop once in Xcode and put it on your own iPhone or iPad. It is not on the App Store.
 The first time takes about 15 minutes, and you do not need a paid account.
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/readme/install-steps-dark.svg">
+    <img alt="Install in five steps: 1 a Mac with Xcode 26.2 or newer; 2 your Apple ID and Team ID; 3 a bundle ID of your own; 4 Developer Mode on your iPhone; 5 Run, then Trust. With a free Apple ID the app keeps working for 7 days, then press Run in Xcode again." src="docs/readme/install-steps-light.svg" width="800">
+  </picture>
+</p>
 
 **What you need**
 
@@ -145,6 +166,18 @@ Design: [`docs/superpowers/specs/2026-11-03-noslop-design.md`](docs/superpowers/
 · Plan: [`docs/superpowers/plans/2026-11-03-noslop-app.md`](docs/superpowers/plans/2026-11-03-noslop-app.md)
 
 ## Features
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/readme/hold-to-scan-dark.svg">
+    <img alt="Hold the left half of a video to go back at 2× speed, the right half to go forward at 2× speed. Let go to carry on from there." src="docs/readme/hold-to-scan-light.svg" width="720">
+  </picture>
+</p>
+
+<p align="center">
+  Hold the left half of a video to go back, the right half to go forward, and let go to carry on from there.<br>
+  A double-tap on a half still jumps 10 seconds.
+</p>
 
 ### What it does
 

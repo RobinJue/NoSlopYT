@@ -1,0 +1,52 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="800" height="496" viewBox="0 0 800 496" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" role="img" aria-labelledby="t d">
+<title id="t">What you get</title>
+<desc id="d">Eight things No Slop does: no ads, keeps playing, offline downloads, sponsors skipped, plain titles, hold to scan, fit or fill, and a library kept on your device.</desc>
+<rect x="0.5" y="0.5" width="387" height="111" rx="14" fill="#151B23" stroke="#3D444D" stroke-width="1"/>
+<rect x="18" y="28" width="56" height="56" rx="14" fill="#3A1A1C"/>
+<g transform="translate(28 38) scale(1.5)" fill="none" stroke="#FF6B66" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="6" width="18" height="12" rx="3"/><path d="M6 20L18 4"/></g>
+<text x="88" y="40" font-size="19" font-weight="600" fill="#F0F6FC" text-anchor="start">No ads</text>
+<text x="88" y="64" font-size="14.5" font-weight="400" fill="#9DA7B3" text-anchor="start">Videos play ad-free,</text>
+<text x="88" y="84" font-size="14.5" font-weight="400" fill="#9DA7B3" text-anchor="start">up to 1080p.</text>
+<rect x="412.5" y="0.5" width="387" height="111" rx="14" fill="#151B23" stroke="#3D444D" stroke-width="1"/>
+<rect x="430" y="28" width="56" height="56" rx="14" fill="#3A1A1C"/>
+<g transform="translate(440 38) scale(1.5)" fill="none" stroke="#FF6B66" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2.5"/><rect x="12" y="11.5" width="6.5" height="4.5" rx="1.2" fill="#FF6B66" stroke="none"/></g>
+<text x="500" y="40" font-size="19" font-weight="600" fill="#F0F6FC" text-anchor="start">Keeps playing</text>
+<text x="500" y="64" font-size="14.5" font-weight="400" fill="#9DA7B3" text-anchor="start">With the screen locked,</text>
+<text x="500" y="84" font-size="14.5" font-weight="400" fill="#9DA7B3" text-anchor="start">in Picture in Picture, on AirPlay.</text>
+<rect x="0.5" y="128.5" width="387" height="111" rx="14" fill="#151B23" stroke="#3D444D" stroke-width="1"/>
+<rect x="18" y="156" width="56" height="56" rx="14" fill="#3A1A1C"/>
+<g transform="translate(28 166) scale(1.5)" fill="none" stroke="#FF6B66" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v10"/><path d="M8 10.5l4 4 4-4"/><path d="M5 15v2.5A1.5 1.5 0 0 0 6.5 19h11a1.5 1.5 0 0 0 1.5-1.5V15"/></g>
+<text x="88" y="168" font-size="19" font-weight="600" fill="#F0F6FC" text-anchor="start">Offline downloads</text>
+<text x="88" y="192" font-size="14.5" font-weight="400" fill="#9DA7B3" text-anchor="start">Save videos to watch offline.</text>
+<text x="88" y="212" font-size="14.5" font-weight="400" fill="#9DA7B3" text-anchor="start">Pick a quality, or audio only.</text>
+<rect x="412.5" y="128.5" width="387" height="111" rx="14" fill="#151B23" stroke="#3D444D" stroke-width="1"/>
+<rect x="430" y="156" width="56" height="56" rx="14" fill="#3A1A1C"/>
+<g transform="translate(440 166) scale(1.5)" fill="none" stroke="#FF6B66" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M6.5 5.5l9 6.5-9 6.5z"/><path d="M19 5.5v13"/></g>
+<text x="500" y="168" font-size="19" font-weight="600" fill="#F0F6FC" text-anchor="start">Sponsors skipped</text>
+<text x="500" y="192" font-size="14.5" font-weight="400" fill="#9DA7B3" text-anchor="start">Sponsor segments are skipped</text>
+<text x="500" y="212" font-size="14.5" font-weight="400" fill="#9DA7B3" text-anchor="start">with SponsorBlock.</text>
+<rect x="0.5" y="256.5" width="387" height="111" rx="14" fill="#151B23" stroke="#3D444D" stroke-width="1"/>
+<rect x="18" y="284" width="56" height="56" rx="14" fill="#3A1A1C"/>
+<g transform="translate(28 294) scale(1.5)" fill="none" stroke="#FF6B66" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 7V5h14v2"/><path d="M12 5v14"/><path d="M9 19h6"/></g>
+<text x="88" y="296" font-size="19" font-weight="600" fill="#F0F6FC" text-anchor="start">Plain titles</text>
+<text x="88" y="320" font-size="14.5" font-weight="400" fill="#9DA7B3" text-anchor="start">Clickbait titles are swapped</text>
+<text x="88" y="340" font-size="14.5" font-weight="400" fill="#9DA7B3" text-anchor="start">for plain ones, with DeArrow.</text>
+<rect x="412.5" y="256.5" width="387" height="111" rx="14" fill="#151B23" stroke="#3D444D" stroke-width="1"/>
+<rect x="430" y="284" width="56" height="56" rx="14" fill="#3A1A1C"/>
+<g transform="translate(440 294) scale(1.5)" fill="none" stroke="#FF6B66" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="5.5" width="19" height="13" rx="2.5"/><path d="M12 5.5v13" stroke-dasharray="2 2.2"/><path d="M9.8 9.5L7.3 12l2.5 2.5"/><path d="M14.2 9.5l2.5 2.5-2.5 2.5"/></g>
+<text x="500" y="296" font-size="19" font-weight="600" fill="#F0F6FC" text-anchor="start">Hold to scan</text>
+<text x="500" y="320" font-size="14.5" font-weight="400" fill="#9DA7B3" text-anchor="start">Hold the left half to go back,</text>
+<text x="500" y="340" font-size="14.5" font-weight="400" fill="#9DA7B3" text-anchor="start">the right half to go forward, at 2×.</text>
+<rect x="0.5" y="384.5" width="387" height="111" rx="14" fill="#151B23" stroke="#3D444D" stroke-width="1"/>
+<rect x="18" y="412" width="56" height="56" rx="14" fill="#3A1A1C"/>
+<g transform="translate(28 422) scale(1.5)" fill="none" stroke="#FF6B66" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9V5h4"/><path d="M16 5h4v4"/><path d="M20 15v4h-4"/><path d="M8 19H4v-4"/><rect x="8" y="9" width="8" height="6" rx="1.2"/></g>
+<text x="88" y="424" font-size="19" font-weight="600" fill="#F0F6FC" text-anchor="start">Fit or fill</text>
+<text x="88" y="448" font-size="14.5" font-weight="400" fill="#9DA7B3" text-anchor="start">Fit shows it all, with black bars.</text>
+<text x="88" y="468" font-size="14.5" font-weight="400" fill="#9DA7B3" text-anchor="start">Zoom to fill crops it, per video.</text>
+<rect x="412.5" y="384.5" width="387" height="111" rx="14" fill="#151B23" stroke="#3D444D" stroke-width="1"/>
+<rect x="430" y="412" width="56" height="56" rx="14" fill="#3A1A1C"/>
+<g transform="translate(440 422) scale(1.5)" fill="none" stroke="#FF6B66" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="6.5" y="2.5" width="11" height="19" rx="2.5"/><path d="M10 8h4M10 11.5h4M10 15h2.5"/></g>
+<text x="500" y="424" font-size="19" font-weight="600" fill="#F0F6FC" text-anchor="start">Library on your device</text>
+<text x="500" y="448" font-size="14.5" font-weight="400" fill="#9DA7B3" text-anchor="start">Watch Later, history and playlists</text>
+<text x="500" y="468" font-size="14.5" font-weight="400" fill="#9DA7B3" text-anchor="start">are kept on your device.</text>
+</svg>

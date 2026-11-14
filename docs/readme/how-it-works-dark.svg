@@ -1,0 +1,79 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="800" height="536" viewBox="0 0 800 536" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" role="img" aria-labelledby="t d">
+<title id="t">How No Slop works</title>
+<desc id="d">No Slop runs on your phone and talks directly to YouTube, SponsorBlock and DeArrow. Google sign-in and the YouTube connection are optional. There is no No Slop server, no analytics, no tracking and no third-party code.</desc>
+<text x="0" y="22" font-size="12" font-weight="700" fill="#9DA7B3" text-anchor="start" letter-spacing="1.2">ON YOUR PHONE</text>
+<text x="350" y="22" font-size="12" font-weight="700" fill="#9DA7B3" text-anchor="middle" letter-spacing="1.2">DIRECT</text>
+<text x="430" y="22" font-size="12" font-weight="700" fill="#9DA7B3" text-anchor="start" letter-spacing="1.2">THE ONLY PLACES IT TALKS TO</text>
+<path d="M270,246 C350,246 350,74 421,74" fill="none" stroke="#FF6B66" stroke-width="2.5" stroke-linecap="round"/>
+<polygon points="430,74 420,68 420,80" fill="#FF6B66"/>
+<path d="M270,246 C350,246 350,160 421,160" fill="none" stroke="#FF6B66" stroke-width="2.5" stroke-linecap="round"/>
+<polygon points="430,160 420,154 420,166" fill="#FF6B66"/>
+<path d="M270,246 C350,246 350,246 421,246" fill="none" stroke="#FF6B66" stroke-width="2.5" stroke-linecap="round"/>
+<polygon points="430,246 420,240 420,252" fill="#FF6B66"/>
+<path d="M270,246 C350,246 350,332 421,332" fill="none" stroke="#6E7781" stroke-width="2.5" stroke-linecap="round" stroke-dasharray="6 5"/>
+<polygon points="430,332 420,326 420,338" fill="#6E7781"/>
+<path d="M270,246 C350,246 350,418 421,418" fill="none" stroke="#6E7781" stroke-width="2.5" stroke-linecap="round" stroke-dasharray="6 5"/>
+<polygon points="430,418 420,412 420,424" fill="#6E7781"/>
+<circle cx="270" cy="246" r="5" fill="#FF6B66"/>
+<rect x="0.5" y="96.5" width="269" height="299" rx="18" fill="#151B23" stroke="#3D444D" stroke-width="1"/>
+<rect x="24" y="120" width="56" height="56" rx="14" fill="#E0393B"/>
+<polygon points="46,136 46,160 65,148" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round"/>
+<path d="M69 128Q69 134 75 134Q69 134 69 140Q69 134 63 134Q69 134 69 128Z" fill="#FFFFFF"/>
+<text x="96" y="146" font-size="22" font-weight="700" fill="#F0F6FC" text-anchor="start">No Slop</text>
+<text x="96" y="168" font-size="14" font-weight="400" fill="#9DA7B3" text-anchor="start">on your iPhone or iPad</text>
+<line x1="24" y1="196" x2="246" y2="196" stroke="#3D444D" stroke-width="1"/>
+<text x="24" y="221" font-size="11.5" font-weight="700" fill="#9DA7B3" text-anchor="start" letter-spacing="1.1">KEPT ON THE DEVICE</text>
+<text x="24" y="246" font-size="14.5" font-weight="400" fill="#F0F6FC" text-anchor="start">Subscriptions, history,</text>
+<text x="24" y="266" font-size="14.5" font-weight="400" fill="#F0F6FC" text-anchor="start">Watch Later, playlists</text>
+<text x="24" y="286" font-size="14.5" font-weight="400" fill="#F0F6FC" text-anchor="start">and downloads.</text>
+<line x1="24" y1="312" x2="246" y2="312" stroke="#3D444D" stroke-width="1"/>
+<g transform="translate(24 326) scale(0.833333)" fill="none" stroke="#FF6B66" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></g>
+<text x="54" y="341" font-size="14.5" font-weight="600" fill="#F0F6FC" text-anchor="start">Everything runs here</text>
+<g transform="translate(24 356) scale(0.833333)" fill="none" stroke="#FF6B66" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></g>
+<text x="54" y="371" font-size="14.5" font-weight="600" fill="#F0F6FC" text-anchor="start">No account needed</text>
+<rect x="430.5" y="36.5" width="369" height="75" rx="14" fill="#151B23" stroke="#3D444D" stroke-width="1"/>
+<rect x="446" y="54" width="40" height="40" rx="11" fill="#3A1A1C"/>
+<g transform="translate(454 62) scale(1)" fill="none" stroke="#FF6B66" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3c2.6 2.6 3.9 5.6 3.9 9s-1.3 6.4-3.9 9c-2.6-2.6-3.9-5.6-3.9-9S9.4 5.6 12 3z"/></g>
+<text x="504" y="69" font-size="17" font-weight="600" fill="#F0F6FC" text-anchor="start">YouTube</text>
+<text x="504" y="88" font-size="13.5" font-weight="400" fill="#9DA7B3" text-anchor="start">Videos, search, channels, comments.</text>
+<rect x="430.5" y="122.5" width="369" height="75" rx="14" fill="#151B23" stroke="#3D444D" stroke-width="1"/>
+<rect x="446" y="140" width="40" height="40" rx="11" fill="#3A1A1C"/>
+<g transform="translate(454 148) scale(1)" fill="none" stroke="#FF6B66" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M6.5 5.5l9 6.5-9 6.5z"/><path d="M19 5.5v13"/></g>
+<text x="504" y="145.5" font-size="17" font-weight="600" fill="#F0F6FC" text-anchor="start">SponsorBlock</text>
+<text x="504" y="164.5" font-size="13.5" font-weight="400" fill="#9DA7B3" text-anchor="start">Sponsor segments to skip.</text>
+<text x="504" y="183.5" font-size="13.5" font-weight="400" fill="#9DA7B3" text-anchor="start">Only a short hash of the video ID is sent.</text>
+<rect x="430.5" y="208.5" width="369" height="75" rx="14" fill="#151B23" stroke="#3D444D" stroke-width="1"/>
+<rect x="446" y="226" width="40" height="40" rx="11" fill="#3A1A1C"/>
+<g transform="translate(454 234) scale(1)" fill="none" stroke="#FF6B66" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M5 7V5h14v2"/><path d="M12 5v14"/><path d="M9 19h6"/></g>
+<text x="504" y="231.5" font-size="17" font-weight="600" fill="#F0F6FC" text-anchor="start">DeArrow</text>
+<text x="504" y="250.5" font-size="13.5" font-weight="400" fill="#9DA7B3" text-anchor="start">Plain titles for videos.</text>
+<text x="504" y="269.5" font-size="13.5" font-weight="400" fill="#9DA7B3" text-anchor="start">Only a short hash of the video ID is sent.</text>
+<rect x="430.5" y="294.5" width="369" height="75" rx="14" fill="#151B23" stroke="#6E7781" stroke-width="1.5" stroke-dasharray="6 5"/>
+<rect x="446" y="312" width="40" height="40" rx="11" fill="#3A1A1C"/>
+<g transform="translate(454 320) scale(1)" fill="none" stroke="#FF6B66" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8.5" r="3.5"/><path d="M5 20c.8-3.6 3.6-5.5 7-5.5s6.2 1.9 7 5.5"/></g>
+<text x="504" y="327" font-size="17" font-weight="600" fill="#F0F6FC" text-anchor="start">Google sign-in</text>
+<text x="504" y="346" font-size="13.5" font-weight="400" fill="#9DA7B3" text-anchor="start">Your subscriptions, playlists and likes.</text>
+<rect x="709.75" y="304.5" width="77.75" height="19" rx="10" fill="#0D1117" stroke="#6E7781" stroke-width="1"/>
+<text x="748.625" y="318" font-size="11" font-weight="700" fill="#9DA7B3" text-anchor="middle" letter-spacing="0.8">OPTIONAL</text>
+<rect x="430.5" y="380.5" width="369" height="75" rx="14" fill="#151B23" stroke="#6E7781" stroke-width="1.5" stroke-dasharray="6 5"/>
+<rect x="446" y="398" width="40" height="40" rx="11" fill="#3A1A1C"/>
+<g transform="translate(454 406) scale(1)" fill="none" stroke="#FF6B66" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="7" width="18" height="12" rx="2"/><path d="M8.5 3.5L12 7l3.5-3.5"/></g>
+<text x="504" y="413" font-size="17" font-weight="600" fill="#F0F6FC" text-anchor="start">YouTube connection</text>
+<text x="504" y="432" font-size="13.5" font-weight="400" fill="#9DA7B3" text-anchor="start">YouTube's own Home for your account.</text>
+<rect x="709.75" y="390.5" width="77.75" height="19" rx="10" fill="#0D1117" stroke="#6E7781" stroke-width="1"/>
+<text x="748.625" y="404" font-size="11" font-weight="700" fill="#9DA7B3" text-anchor="middle" letter-spacing="0.8">OPTIONAL</text>
+<rect x="0.5" y="480.5" width="799" height="55" rx="14" fill="#2A1618" stroke="#5A2A2C" stroke-width="1"/>
+<text x="20" y="513" font-size="14.5" font-weight="700" fill="#F0F6FC" text-anchor="start">Not in the picture</text>
+<rect x="166.663" y="492.5" width="162.038" height="31" rx="16" fill="#0D1117" stroke="#5A2A2C" stroke-width="1"/>
+<g transform="translate(176.163 500) scale(0.666667)" fill="none" stroke="#FF6B66" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M8.5 8.5l7 7M15.5 8.5l-7 7"/></g>
+<text x="200.163" y="513" font-size="14" font-weight="500" fill="#F0F6FC" text-anchor="start">A No Slop server</text>
+<rect x="339.7" y="492.5" width="109.537" height="31" rx="16" fill="#0D1117" stroke="#5A2A2C" stroke-width="1"/>
+<g transform="translate(349.2 500) scale(0.666667)" fill="none" stroke="#FF6B66" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M8.5 8.5l7 7M15.5 8.5l-7 7"/></g>
+<text x="373.2" y="513" font-size="14" font-weight="500" fill="#F0F6FC" text-anchor="start">Analytics</text>
+<rect x="460.238" y="492.5" width="107.175" height="31" rx="16" fill="#0D1117" stroke="#5A2A2C" stroke-width="1"/>
+<g transform="translate(469.738 500) scale(0.666667)" fill="none" stroke="#FF6B66" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M8.5 8.5l7 7M15.5 8.5l-7 7"/></g>
+<text x="493.738" y="513" font-size="14" font-weight="500" fill="#F0F6FC" text-anchor="start">Tracking</text>
+<rect x="578.413" y="492.5" width="158.1" height="31" rx="16" fill="#0D1117" stroke="#5A2A2C" stroke-width="1"/>
+<g transform="translate(587.913 500) scale(0.666667)" fill="none" stroke="#FF6B66" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M8.5 8.5l7 7M15.5 8.5l-7 7"/></g>
+<text x="611.913" y="513" font-size="14" font-weight="500" fill="#F0F6FC" text-anchor="start">Third-party code</text>
+</svg>
