@@ -1,17 +1,152 @@
-# No Slop
+<p align="center">
+  <img src="docs/branding/noslop-logo-rounded-512.png" width="144" alt="No Slop logo">
+</p>
 
-A personal YouTube client for iPhone and iPad that feels like the real app, with none of the slop: no ads, no
-Shorts, no sponsor reads, no clickbait, no algorithmic rabbit holes. Background playback, Picture in Picture and
-downloads for offline viewing come free. It is installed from Xcode, not from the App Store, and has no server
-component: everything runs on the phone. It can optionally show your own YouTube Home, see "YouTube recommendations
-(optional)" below.
+<h1 align="center">No Slop</h1>
+
+<p align="center">
+  <b>YouTube for iPhone and iPad, without the slop.</b><br>
+  No ads · no Shorts · no sponsor reads · no clickbait
+</p>
+
+<p align="center">
+  <img alt="iOS 18 and later" src="https://img.shields.io/badge/iOS-18%2B-0A84FF?logo=apple&logoColor=white">
+  <img alt="iPhone and iPad" src="https://img.shields.io/badge/iPhone%20%7C%20iPad-supported-555555">
+  <img alt="No third-party code" src="https://img.shields.io/badge/third--party%20code-none-2EA44F">
+  <img alt="No analytics" src="https://img.shields.io/badge/analytics-none-2EA44F">
+  <a href="LICENSE"><img alt="MIT license" src="https://img.shields.io/badge/license-MIT-lightgrey"></a>
+</p>
+
+<p align="center">
+  <a href="#install"><b>Install</b></a> ·
+  <a href="#features">Features</a> ·
+  <a href="#troubleshooting">Troubleshooting</a> ·
+  <a href="#credits-and-disclaimer">Disclaimer</a> ·
+  <a href="#support">Support</a>
+</p>
+
+---
+
+No Slop is a YouTube app for iPhone and iPad that lets you do what you came for: watch videos. No ads, no Shorts,
+no sponsor reads, no clickbait titles. Everything runs on your phone. There is no server, and you do not need an account.
+
+**What you get**
+
+- Videos without ads, up to 1080p. They keep playing with the screen locked, in Picture in Picture and on AirPlay.
+- Downloads, to watch offline.
+- Sponsor segments are skipped, and clickbait titles are swapped for plain ones.
+- Hold the left or right side of a video to go back or forward at 2× speed.
+- Watch Later, history and playlists, all kept on your device.
+- Optional: sign in with Google for your own subscriptions and likes, or connect YouTube to see your own Home.
+- No analytics, no tracking, and no third-party code.
+
+> [!IMPORTANT]
+> No Slop is an unofficial hobby project. It is not affiliated with YouTube or Google. It may go against YouTube's
+> Terms of Service, and YouTube can break or block it at any time. Use it at your own risk.
+> [More on this](#credits-and-disclaimer).
+
+## Install
+
+You build No Slop once in Xcode and put it on your own iPhone or iPad. It is not on the App Store.
+The first time takes about 15 minutes, and you do not need a paid account.
+
+**What you need**
+
+- A Mac with **Xcode 26.2 or newer** (free in the Mac App Store).
+- An iPhone or iPad on **iOS 18 or newer**, and a cable.
+- An **Apple ID**. A free one is enough.
+
+There is nothing else to install. The Xcode project is included, and the app uses no third-party packages.
+
+### 1. Get the code
+
+```sh
+git clone https://github.com/RobinJue/NoSlopYT.git
+cd NoSlopYT
+open NoSlop.xcodeproj
+```
+
+Just want to look around? Pick an iPhone or iPad **simulator** at the top of Xcode and press **Run** (⌘R). That needs no
+setup. Steps 2 to 5 are for a real device.
+
+### 2. Tell the project who you are
+
+1. In Xcode, open **Settings > Accounts**, click **+** and add your Apple ID. A free one gets a "Personal Team".
+2. Find your **Team ID**. It has ten characters, like `A1B2C3D4E5`. You find it under Settings > Accounts > your team,
+   or on [developer.apple.com](https://developer.apple.com/account) under Membership details.
+3. Copy the settings template. The copy is ignored by git, so it never ends up in a commit:
+
+   ```sh
+   cp Config/Local.xcconfig.example Config/Local.xcconfig
+   ```
+
+4. Open `Config/Local.xcconfig` and replace `YOURTEAMID` with your Team ID:
+
+   ```
+   DEVELOPMENT_TEAM = A1B2C3D4E5
+   ```
+
+### 3. Give the app a bundle ID of your own
+
+Apple allows each bundle ID to belong to one team only, and `com.robinjungerich.noslopyt` is the author's. So pick your own:
+
+1. In Xcode, click **NoSlop** (the blue project icon) in the left column, select the **NoSlop** target, and open the
+   **Signing & Capabilities** tab.
+2. Change **Bundle Identifier** to something that is yours, for example `com.yourname.noslop`.
+
+> [!NOTE]
+> The built-in Google sign-in is tied to the author's bundle ID, so it may not work with yours. If it fails, use
+> **Settings > Account > Use my own Google project** ([how](#sign-in-with-google-optional)). Everything else works either way.
+
+### 4. Connect your device
+
+1. Plug the iPhone or iPad into the Mac and unlock it. If it asks, tap **Trust This Computer**.
+2. On the device, go to **Settings > Privacy & Security > Developer Mode**, turn it on, and let the device restart.
+   (The switch only shows up after the device has been connected to Xcode once.)
+
+### 5. Run it
+
+1. At the top of Xcode, choose your device and press **Run** (⌘R). The first build takes a few minutes.
+2. The first time, the device will not open the app yet. Go to **Settings > General > VPN & Device Management**, tap your
+   Apple ID, and tap **Trust**. Then open No Slop.
+
+### Keeping it installed
+
+| Your account | The app keeps opening for |
+|---|---|
+| Free Apple ID | **7 days.** Then press Run in Xcode again. Your data stays. |
+| Paid Apple Developer Program | **A year.** |
+
+To **update** No Slop, run `git pull` in the project folder and press Run again.
+
+> [!TIP]
+> Changing the bundle ID in Xcode (step 3) edits `NoSlop.xcodeproj` on your Mac. If `git pull` ever complains about that
+> file, undo your change with `git checkout NoSlop.xcodeproj`, pull, and repeat step 3.
+
+### Something went wrong?
+
+| What you see | What to do |
+|---|---|
+| "Signing requires a development team" | Step 2: put your Team ID in `Config/Local.xcconfig`. |
+| "Failed to register bundle identifier" | Step 3: choose a bundle ID of your own. |
+| "Developer Mode disabled" | Step 4: turn on Developer Mode. |
+| The icon is there, but "Untrusted Developer" | Step 5: trust your profile under VPN & Device Management. |
+| Xcode does not list your device | Unlock it and check the cable. Then look under Window > Devices and Simulators. |
+| The app stopped opening after a week | A free Apple ID signs the app for 7 days. Press Run again. |
+
+### After installing
+
+Two things are off until you set them up, and the app works fine without them:
+
+- [Sign in with Google](#sign-in-with-google-optional): your subscriptions, playlists and likes.
+- [YouTube recommendations](#youtube-recommendations-optional): your own YouTube Home.
 
 Design: [`docs/superpowers/specs/2026-11-03-noslop-design.md`](docs/superpowers/specs/2026-11-03-noslop-design.md)
 · Plan: [`docs/superpowers/plans/2026-11-03-noslop-app.md`](docs/superpowers/plans/2026-11-03-noslop-app.md)
 
-## What it does, and what it doesn't
+## Features
 
-**It does**
+### What it does
 
 - Plays any public YouTube video ad-free, up to 1080p60, on a watch page like YouTube's: channel and Subscribe,
   description with clickable links, timestamps and chapters, comments with replies, related videos, captions.
@@ -67,7 +202,7 @@ Design: [`docs/superpowers/specs/2026-11-03-noslop-design.md`](docs/superpowers/
   you hide a video or a channel there, and to tell YouTube what you watched. This is separate from the Google sign-in,
   off until you connect, and unofficial. See "YouTube recommendations (optional)" below.
 
-**It doesn't**
+### What it doesn't
 
 - Show ads, promoted items or AI summary blocks, anywhere. There is no Shorts tab, and, with Settings > Feed filters >
   Hide Shorts on (the default), Shorts are filtered out of Home, Subscriptions, search, channels, playlists,
@@ -89,51 +224,6 @@ Design: [`docs/superpowers/specs/2026-11-03-noslop-design.md`](docs/superpowers/
 - Open a second window on iPad: the navigation, the player and Picture in Picture are shared by the whole app, so it
   has one window. (Split View and Slide Over with other apps work.)
 - Need a server or an App Store build: it is installed from Xcode onto your own devices.
-
-## Requirements
-
-- A Mac with Xcode 26.2 or newer (Swift 6.2). The app targets iOS 18.0 and later, iPhone and iPad.
-- [XcodeGen](https://github.com/yonaskolb/XcodeGen) 2.46 or newer to generate the Xcode project:
-  `brew install xcodegen`.
-- No third-party packages: Apple frameworks only.
-- To run on a real iPhone: an Apple ID (a free one is enough).
-
-## Build and run
-
-```sh
-./scripts/bootstrap.sh        # generates NoSlop.xcodeproj from project.yml
-open NoSlop.xcodeproj
-```
-
-The generated project is committed, so you only need `./scripts/bootstrap.sh` when `NoSlop.xcodeproj` is missing or
-after you change `project.yml`. The Xcode project uses synced folders: adding or removing files under `NoSlop/`
-needs no regeneration.
-
-**On the simulator:** pick an iPhone or iPad simulator in Xcode and press Run. No signing setup is needed.
-
-**On your iPhone:**
-
-1. Copy `Config/Local.xcconfig.example` to `Config/Local.xcconfig` (it is git-ignored) and replace `YOURTEAMID`
-   with your Apple Developer Team ID (ten characters), for example `DEVELOPMENT_TEAM = A1B2C3D4E5`. You find it in
-   Xcode > Settings > Accounts > select your team; a free Apple ID has a team too.
-2. Connect the phone, turn on Developer Mode on it (Settings > Privacy & Security > Developer Mode), choose it as
-   the run destination in Xcode and press Run.
-3. The first launch is blocked until you trust your developer profile on the phone (Settings > General > VPN &
-   Device Management).
-
-With a **free Apple ID** the app's signature lasts 7 days: after that it no longer opens, and you run it from Xcode
-again to re-sign it (your data stays). With a **paid** Apple Developer Program account it lasts a year.
-
-If Xcode says it cannot register the bundle ID `com.robinjungerich.noslopyt` for your team, choose a bundle ID of
-your own in `project.yml` (`PRODUCT_BUNDLE_IDENTIFIER`), run `./scripts/bootstrap.sh` again, and use that same ID
-when you create the Google OAuth client below.
-
-From the command line, without code signing, for the simulator:
-
-```sh
-./scripts/build.sh                                                     # builds into .build/DerivedData
-DESTINATION='platform=iOS Simulator,id=<udid>' ./scripts/build.sh      # for one specific simulator
-```
 
 ## Sign in with Google (optional)
 
@@ -162,7 +252,7 @@ Google sign-in". An account set up before this setting existed, with its own cli
    - Publishing avoids that. Verification is not needed for personal use; Google only shows an "unverified app"
      notice when you sign in.
 4. Under **Credentials**, choose **Create credentials > OAuth client ID**, set the application type to **iOS** and
-   enter the bundle ID `com.robinjungerich.noslopyt` (or your own, see above).
+   enter the bundle ID `com.robinjungerich.noslopyt` (or the one you chose in [Install, step 3](#3-give-the-app-a-bundle-id-of-your-own)).
 5. Copy the client ID (it ends in `.apps.googleusercontent.com`) and paste it into **Settings > Account** in the
    app, then tap **Sign in with Google**. (Library > Settings reaches that screen. The redirect address is derived
    from the client ID by the app, so there is nothing else to configure.)
@@ -230,17 +320,39 @@ back to the on-device mix. If you want to be sure the grant is gone, open
 connections to third-party apps and services) and remove **YouTube TV** there. If YouTube ends the connection by
 itself, the app shows it as disconnected and Home falls back.
 
-**The risks, plainly.**
+> [!WARNING]
+> **The risks, plainly.**
+>
+> - It is unofficial. The app signs in and asks for Home the way YouTube's TV app does, with the TV app's identity, not
+>   through an official API. That is against YouTube's terms, and Google could restrict the account or close this route.
+>   No bans are known for it, but that is no promise.
+> - It can break any day. YouTube changes this interface from time to time. Home then falls back to the on-device mix
+>   and reporting pauses; playback is not affected. See Troubleshooting for the versions to bump.
+> - The grant is YouTube TV's grant, which gives the app full access to that YouTube account, until you disconnect or
+>   remove it as described above.
+> - It can be another account than the Google sign-in, and what you do here shapes that account's recommendations in
+>   the official YouTube app too.
 
-- It is unofficial. The app signs in and asks for Home the way YouTube's TV app does, with the TV app's identity, not
-  through an official API. That is against YouTube's terms, and Google could restrict the account or close this route.
-  No bans are known for it, but that is no promise.
-- It can break any day. YouTube changes this interface from time to time. Home then falls back to the on-device mix
-  and reporting pauses; playback is not affected. See Troubleshooting for the versions to bump.
-- The grant is YouTube TV's grant, which gives the app full access to that YouTube account, until you disconnect or
-  remove it as described above.
-- It can be another account than the Google sign-in, and what you do here shapes that account's recommendations in
-  the official YouTube app too.
+## Build from the command line
+
+For developers. The Xcode project is generated from `project.yml` with [XcodeGen](https://github.com/yonaskolb/XcodeGen)
+2.46 or newer (`brew install xcodegen`). It is committed, so you only need XcodeGen after you change `project.yml`:
+
+```sh
+./scripts/bootstrap.sh        # generates NoSlop.xcodeproj from project.yml
+```
+
+The project uses synced folders: adding or removing files under `NoSlop/` needs no regeneration.
+
+To build for the simulator without code signing:
+
+```sh
+./scripts/build.sh                                                     # builds into .build/DerivedData
+DESTINATION='platform=iOS Simulator,id=<udid>' ./scripts/build.sh      # for one specific simulator
+```
+
+The signing team and the bundle ID for your own device are explained under [Install](#install). To change the bundle ID in
+the project itself, set `PRODUCT_BUNDLE_IDENTIFIER` in `project.yml` and run `./scripts/bootstrap.sh` again.
 
 ## Tests
 
